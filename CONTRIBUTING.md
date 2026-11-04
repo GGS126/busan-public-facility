@@ -53,7 +53,7 @@ git switch -c feature/GYU/collaboration-setup
 - 커밋은 하나의 목적을 담고, 메시지로 변경 내용을 설명합니다.
 - 메시지 예: `docs: 협업 규칙 작성`, `feat: 시설 검색 추가`, `fix: 감면 계산 오류 수정`.
 - push 전 변경 목록을 확인하고 작업에 필요한 파일만 커밋합니다.
-- PR의 대상(base)은 `develop`인지 확인합니다.
+- PR의 대상이 `develop`인지 확인합니다.
 - PR에 변경 내용, 관련 Issue, 검증 방법과 결과, 남은 문제를 적습니다.
 - Issue를 완료하는 PR이라면 `Closes #번호`로 연결합니다.
 - 미완료 작업을 먼저 공유할 때는 Draft PR을 사용합니다.
