@@ -20,7 +20,7 @@
 - `develop`: 기본 개발 통합 브랜치. 개인 작업은 PR로 반영합니다.
 - `feature/이름/기능명`: 한 작업을 진행하는 브랜치입니다.
 - 이름은 팀원이 알아볼 수 있는 영문 표기를 사용하고, 기능명은 짧은 영문과 하이픈으로 작성합니다.
-- 예: `feature/gyuseong/ai-condition-parser`, `feature/seungil/comparison-view`.
+- 예: `feature/GYU/ai-condition-parser`, `feature/seungil/comparison-view`.
 - 서로 다른 작업은 브랜치를 나누고, 다른 팀원의 브랜치를 임의로 수정하지 않습니다.
 
 ## 작업 시작
