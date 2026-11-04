@@ -216,5 +216,15 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# React / Node.js
+node_modules/
+*.tsbuildinfo
+.vite/
+
+# Environment variables
+.env.*
+!.env.example
+!.env.*.example
+
 # Streamlit
 .streamlit/secrets.toml
