@@ -42,7 +42,7 @@ cd busan-public-facility
 ```bash
 git switch develop
 git pull --ff-only origin develop
-git switch -c feature/gyuseong/collaboration-setup
+git switch -c feature/GYU/collaboration-setup
 ```
 
 마지막 명령의 이름과 기능명은 본인 작업에 맞게 바꿉니다.
