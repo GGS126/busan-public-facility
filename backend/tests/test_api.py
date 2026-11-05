@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
-from app.models import KST
+from app.models import KST, Option
 
 client = TestClient(main.app)
 
@@ -104,7 +104,21 @@ def test_headcount_is_optional_and_accepted():
     assert client.post("/api/compare", json=payload(headcount=10)).status_code == 200
 
 
-def test_unknown_sport_returns_review_instead_of_amount():
+def test_value_outside_options_is_rejected():
+    response = client.post("/api/compare", json=payload(sport="nope", discount_types=["multi_child", "nope"]))
+
+    assert fields_of(response) == {
+        "conditions.sport": "invalid_option",
+        "conditions.discount_types": "invalid_option",
+    }
+    assert "nope" not in response.text
+
+
+def test_sport_offered_elsewhere_returns_review_for_this_facility(monkeypatch):
+    options = main.available_options.model_copy(
+        update={"sports": [*main.available_options.sports, Option(code="tennis", label="테니스")]}
+    )
+    monkeypatch.setattr(main, "available_options", options)
     response = client.post("/api/compare", json=payload(sport="tennis", discount_types=[]))
 
     fee = response.json()["results"][0]["fee"]

@@ -136,12 +136,18 @@ class Terms(BaseModel):
 class FacilityRules(BaseModel):
     facility_id: str
     name: str
+    district: str | None = None
     source_id: str
     holidays: list[date] = []
     fee_rules: list[FeeRule] = []
     discount_rules: list[DiscountRule] = []
     terms: Terms = Terms()
     sources: list[Source]
+
+    @property
+    def sports(self) -> set[str]:
+        """요금을 계산할 수 있는 종목. 규정과 어긋나지 않도록 따로 저장하지 않는다."""
+        return {rule.sport for rule in self.fee_rules if rule.type == "base"}
 
     @model_validator(mode="after")
     def check_sources(self) -> "FacilityRules":
@@ -153,6 +159,43 @@ class FacilityRules(BaseModel):
         if used - known:
             raise ValueError(f"등록되지 않은 출처: {sorted(used - known)}")
         return self
+
+
+class Labels(BaseModel):
+    """화면에 표시할 이름. 요금 계산에는 코드만 사용한다."""
+
+    sports: dict[str, str]
+    discount_types: dict[str, str]
+
+
+class RuleData(BaseModel):
+    labels: Labels
+    facilities: list[FacilityRules]
+
+    @model_validator(mode="after")
+    def check_labels(self) -> "RuleData":
+        sports = {sport for facility in self.facilities for sport in facility.sports}
+        discounts = {
+            rule.discount_type for facility in self.facilities for rule in facility.discount_rules
+        }
+        missing = (sports - self.labels.sports.keys()) | (discounts - self.labels.discount_types.keys())
+        if missing:
+            raise ValueError(f"표시 이름이 없는 코드: {sorted(missing)}")
+        return self
+
+
+# 입력 선택지
+
+
+class Option(BaseModel):
+    code: str
+    label: str
+
+
+class OptionsResponse(BaseModel):
+    sports: list[Option]
+    districts: list[str]
+    discount_types: list[Option]
 
 
 # 계산 결과
