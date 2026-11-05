@@ -6,7 +6,8 @@
 첫 통합 목표인 **시설 1곳의 ‘직접 조건 입력 → 예상요금과 계산 근거 표시’** 에 필요한 형식을 정리합니다.
 김승일과 요청·응답 형식을, 왕연호와 규정 데이터 항목을, 김규성과 AI 조건 형식을 맞추기 위한 문서이며 확정된 명세는 아닙니다.
 
-SDD v0.1의 API-06(3.3절), 핵심 데이터 형식(3.4절), 규칙 엔진 처리 규칙(3.5절)을 기준으로 하며, SDD에 없어 추가하거나 구체화한 내용은 [SDD 대비 추가 제안](#sdd-대비-추가-제안)에 모았습니다.
+SDD v0.1의 API-06(3.3절), 핵심 데이터 형식(3.4절), 규칙 엔진 처리 규칙(3.5절)을 기준으로 SRS v0.2와 대조했으며, SDD와 달라지거나 SDD에 없어 추가한 내용은 [SDD 대비 추가 제안](#sdd-대비-추가-제안)에 모았습니다.
+SRS에 항목별 필수 여부가 정의되어 있지 않으므로 아래의 필수 여부도 제안입니다.
 **모든 시설·금액·규정·출처는 형식을 보여 주기 위한 가상 값입니다.** 실제 검증 데이터로 사용하지 않습니다.
 
 ## 요금 계산·비교 API (API-06)
@@ -31,7 +32,6 @@ POST /api/compare
     "date": "2026-11-07",
     "start_time": "18:00",
     "end_time": "20:00",
-    "headcount": 10,
     "discount_types": ["multi_child"],
     "source": "direct"
   }
@@ -46,7 +46,7 @@ POST /api/compare
 | `conditions.date` | 예 | 올바른 날짜, 지난 날짜 불가 |
 | `conditions.start_time` | 예 | 올바른 시간 |
 | `conditions.end_time` | 예 | `start_time`보다 늦은 시간 |
-| `conditions.headcount` | 예 | 1 이상의 정수 |
+| `conditions.headcount` | 아니요 | 1 이상의 정수. SRS의 입력 항목에 없어 인원당 요금 시설이 확인되면 화면에 추가 |
 | `conditions.discount_types` | 아니요 | `GET /api/options`의 감면 유형, 없으면 빈 배열 |
 | `conditions.source` | 예 | `direct` 또는 `llm` |
 
@@ -72,6 +72,7 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
   "results": [
     {
       "facility_id": "F001",
+      "facility_name": "예시 체육관",
       "fee": {
         "status": "calculated",
         "items": [
@@ -88,12 +89,14 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
       "terms": {
         "booking_open": "이용일 30일 전 09:00부터",
         "cancel_deadline": "이용일 3일 전까지",
-        "refund": "기한 내 취소 시 전액 환불"
+        "refund": "기한 내 취소 시 전액 환불",
+        "source_id": "S-03"
       },
       "checklist": ["다자녀 가정 확인 서류"],
       "sources": [
         { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05" },
-        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05" }
+        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05" },
+        { "source_id": "S-03", "url": "https://example.com/booking-rules", "checked_at": "2026-11-05" }
       ]
     }
   ]
@@ -110,17 +113,20 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
 | `total` | `net_cost_after_refund`와 같은 값 | 30,000 |
 
 납부 시 바로 깎는 현장 감면은 `method: "onsite"`로 표시하며, 음수 금액이 최초 납부액에 반영됩니다.
+조명료나 감면이 해당되지 않으면 `items`에서 제외합니다(UC-004). 적용 여부나 금액을 알 수 없는 항목만 `review_items`에 넣습니다.
 
 ### 응답 예시 2: 확인 필요
 
 두 감면의 중복 적용 여부가 공식 자료에서 확인되지 않은 경우입니다.
 SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항목을 나눠 반환하고, 사유와 공식 출처 링크를 표시할 수 있게 합니다.
+감면이 미확인이면 부분 합계가 실제보다 높게 보일 수 있으므로 화면에도 부분 합계를 표시하지 않습니다.
 
 ```json
 {
   "results": [
     {
       "facility_id": "F001",
+      "facility_name": "예시 체육관",
       "fee": {
         "status": "needs_review",
         "items": [
@@ -143,12 +149,14 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
       "terms": {
         "booking_open": "이용일 30일 전 09:00부터",
         "cancel_deadline": "이용일 3일 전까지",
-        "refund": "기한 내 취소 시 전액 환불"
+        "refund": "기한 내 취소 시 전액 환불",
+        "source_id": "S-03"
       },
       "checklist": ["다자녀 가정 확인 서류", "장애인 증명 서류"],
       "sources": [
         { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05" },
-        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05" }
+        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05" },
+        { "source_id": "S-03", "url": "https://example.com/booking-rules", "checked_at": "2026-11-05" }
       ]
     }
   ]
@@ -161,7 +169,10 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | `rule_conflict` | 같은 조건에 적용되는 규정이 서로 충돌 |
 | `rule_not_in_effect` | 이용일에 적용되는 규정이 없음 |
 
-`terms`의 값을 확인하지 못했으면 해당 값을 `null`로 반환합니다.
+`review_items[].target`은 표의 행과 연결되도록 `base`, `lighting`, `discount` 중 하나로 표시합니다.
+규정이 아예 없어 근거 출처가 없으면 `review_items[].source_id`에 시설의 `source_id`를 넣어 공식 출처 링크를 표시할 수 있게 합니다(AC-007).
+
+`terms`의 값을 확인하지 못했으면 해당 값을 `null`로 반환하고, `terms.source_id`로 출처와 확인일을 표시합니다(FR-011).
 첫 통합에서는 `fee`와 `sources`를 먼저 구현하고, `terms`와 `checklist`는 형식만 유지합니다.
 
 ### 오류 응답
@@ -207,6 +218,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 |---|---|---|
 | `facility_id`, `name` | 시설 식별자와 이름 | 첫 통합 |
 | `sports` | 제공 종목 | 첫 통합 |
+| `source_id` | 시설 정보의 공식 출처 | 첫 통합 |
 | `address`, `district` | 주소와 지역 | 검색 |
 | `operating_hours`, `phone` | 운영시간과 연락처 | 검색 |
 | `reservation_url` | 공식 예약 링크 | 준비사항 |
@@ -218,7 +230,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | `source_id` | 출처 식별자 | `S-01` |
 | `url` | 공식 출처 URL | `https://example.com/fee-rules` |
 | `checked_at` | 확인일, 필수 | `2026-11-05` |
-| `license` | 데이터 이용조건, 필수 | 공공누리 제1유형 |
+| `license` | 이용허락범위와 출처표시 조건, 필수 | 값 형식은 함께 정할 내용 참고 |
 
 ### 요금 규정
 
@@ -286,6 +298,9 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 | 항목 | 제안 | 이유 |
 |---|---|---|
 | 요청 형식 | `facility_ids`와 `conditions`로 구분 | SDD는 ‘검색 조건 + 시설 ID 목록’만 정의 |
+| `headcount` | 선택 항목으로 변경 | SDD 예시에는 있지만 SRS 입력 항목과 UI-01에 없음 |
+| `facility_name` | 응답에 추가 | UI-05 비교표에 시설명 필요 |
+| `terms.source_id` | 응답에 추가 | FR-011, AC-008은 규정 결과마다 출처와 확인일을 요구 |
 | 응답 묶음 | 시설별 결과를 `results` 배열로 반환 | SDD 예시는 시설 1곳의 결과만 표시 |
 | 확인 필요 상태 | `needs_review`와 `review_items` 추가 | SDD는 `calculated`만 예시로 제시 |
 | `source` 값 | `direct` 추가 | SDD 예시는 `llm`만 제시 |
@@ -298,9 +313,9 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 ### 김승일
 
 1. 응답의 `fee`, `terms`, `checklist`, `sources`로 결과 화면을 그릴 수 있는지
-2. 시설명 표시를 위해 응답에 `name`을 넣을지, 시설 검색·상세 결과를 사용할지
+2. 비교표의 시설명을 응답의 `facility_name`으로 표시해도 되는지
 3. 금액 항목 표시에 `type` 외의 이름이나 계산식 문구가 필요한지
-4. `needs_review`일 때 합계 대신 ‘확인 필요’와 사유를 표시하는 방식이 괜찮은지
+4. `needs_review`일 때 합계 대신 ‘확인 필요’와 사유를 표시하도록 UI-05 와이어프레임의 `00,000원 + 확인 필요`를 바꿔도 되는지
 5. 입력 오류를 `fields`의 항목별로 표시할 수 있는지
 
 ### 왕연호
@@ -310,6 +325,7 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 3. 감면 유형 코드 목록과 시설 간 공통 사용 가능 여부
 4. 시간 단위 외의 요금(인원당, 회당)이나 장비 대여처럼 사용자가 선택하는 요금이 있는지. 있으면 항목과 요청 형식을 추가해야 합니다.
 5. 운영시간 밖이나 휴관일 이용, 인원 제한 초과처럼 규정상 이용할 수 없는 경우가 어떻게 안내되어 있는지
+6. ‘공공누리 유형 미표기’인 DATA-04, DATA-05의 이용조건을 어떻게 확인하고 기록할지
 
 ### 김규성
 
@@ -325,5 +341,7 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 | `total`과 `net_cost_after_refund` | 항상 같은 값이므로 하나로 합칠지 결정. SDD와 맞추기 위해 합의 전까지 둘 다 유지 |
 | 이용할 수 없는 조건 | 운영시간 밖 등이 API-06에 직접 들어온 경우 `fee.status`에 `not_eligible`을 추가하고 사유를 반환 |
 | 자정을 넘기는 이용 시간 | SDD의 시작 ≥ 종료 검증에 따라 첫 통합에서는 입력 오류로 처리 |
+| 이용조건 미표기 데이터 | SRS 2.4는 이용조건을 확인하지 못한 데이터의 사용을 금지하고 SDD는 빈 값의 적재를 거부하므로, 확인 결과를 `license`에 기록하는 형식을 결정 |
+| `checklist` 위치 | UI-06은 API-07을 호출하므로 API-06 응답에도 둘지 준비사항 단계에서 결정. 합의 전까지 SDD대로 유지 |
 
 시설 검색·상세·선택지·체크리스트 API(API-02, 03, 05, 07)는 첫 통합 후 SDD를 바탕으로 이 문서의 형식에 맞춰 구체화합니다.
