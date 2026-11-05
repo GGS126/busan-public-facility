@@ -94,9 +94,9 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
       },
       "checklist": ["다자녀 가정 확인 서류"],
       "sources": [
-        { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05" },
-        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05" },
-        { "source_id": "S-03", "url": "https://example.com/booking-rules", "checked_at": "2026-11-05" }
+        { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
+        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
+        { "source_id": "S-03", "url": "https://example.com/booking-rules", "checked_at": "2026-11-05", "license": "가상 데이터" }
       ]
     }
   ]
@@ -154,9 +154,9 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
       },
       "checklist": ["다자녀 가정 확인 서류", "장애인 증명 서류"],
       "sources": [
-        { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05" },
-        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05" },
-        { "source_id": "S-03", "url": "https://example.com/booking-rules", "checked_at": "2026-11-05" }
+        { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
+        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
+        { "source_id": "S-03", "url": "https://example.com/booking-rules", "checked_at": "2026-11-05", "license": "가상 데이터" }
       ]
     }
   ]
@@ -219,6 +219,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | `facility_id`, `name` | 시설 식별자와 이름 | 첫 통합 |
 | `sports` | 제공 종목 | 첫 통합 |
 | `source_id` | 시설 정보의 공식 출처 | 첫 통합 |
+| `holidays` | 공휴일 날짜 목록. 없는 평일 공휴일은 평일 요금으로 계산되므로 필요 | 첫 통합 |
 | `address`, `district` | 주소와 지역 | 검색 |
 | `operating_hours`, `phone` | 운영시간과 연락처 | 검색 |
 | `reservation_url` | 공식 예약 링크 | 준비사항 |
@@ -244,7 +245,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | `partial_unit` | 단위 미만 처리 방식 | `round_up` |
 | `day_types` | 적용 요일 구분 | `["weekend"]` |
 | `time_from`, `time_to` | 적용 시간대, 조명 시간대 | `18:00`, `22:00` |
-| `seasons` | 적용 계절, 전체면 `null` | `["winter"]` |
+| `months` | 적용 월, 계절 기준이 시설마다 다를 수 있어 월로 표시. 전체면 `null` | `[11, 12, 1, 2]` |
 | `effective_from`, `effective_to` | 규정 적용 기간, 시행일을 시작일로 사용 | `2026-01-01`, `null` |
 | `source_id` | 근거 출처 | `S-01` |
 
@@ -306,7 +307,8 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 | `source` 값 | `direct` 추가 | SDD 예시는 `llm`만 제시 |
 | 현장 감면 | `method`에 `onsite` 추가 | SDD 예시는 `prepay_refund`만 제시 |
 | 오류 응답 | 위의 오류 형식과 코드 | SDD는 오류 형식 통일만 명시 |
-| 규정 항목 | `partial_unit`, `rounding`, `seasons` 등 구체화 | SDD 3.5절의 처리 규칙을 데이터로 표현 |
+| 규정 항목 | `partial_unit`, `rounding`, `months`, `holidays` 등 구체화 | SDD 3.5절의 처리 규칙을 데이터로 표현 |
+| `sources[].license` | 응답에 추가 | 데이터별 이용조건과 출처표시 조건 전달(NFR-006) |
 
 ## 담당자별 확인할 내용
 
