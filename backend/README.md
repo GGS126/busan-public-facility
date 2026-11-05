@@ -29,5 +29,6 @@ API 문서는 서버 실행 후 `http://127.0.0.1:8000/docs`에서 확인합니�
 | `app/models.py` | 규정 데이터와 요청·응답 형식, 입력 검증 |
 | `app/engine.py` | 규칙 엔진. FastAPI·DB·LLM에 의존하지 않는 순수 함수 |
 | `app/compare.py` | 요금 결과에 예약·취소 조건, 증빙서류, 출처를 묶음 |
+| `app/options.py` | 직접 입력 화면의 종목·지역·감면 유형 선택지 |
 | `app/repository.py` | 규정 파일 읽기. DB가 정해지면 교체 |
 | `app/main.py` | API 경로와 공통 오류 응답 |

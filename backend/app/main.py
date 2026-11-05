@@ -5,13 +5,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse
-from app.repository import load_facilities
+from app.models import CompareRequest, CompareResponse, OptionsResponse
+from app.options import build_options
+from app.repository import load_rule_data
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
-facilities = load_facilities()
+rule_data = load_rule_data()
+facilities = {facility.facility_id: facility for facility in rule_data.facilities}
 
 
 class FacilityNotFound(Exception):
@@ -49,6 +51,11 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     # 감면 유형 같은 입력값이 남지 않도록 요청 내용은 기록하지 않는다.
     logger.error("unexpected error: %s %s (%s)", request.method, request.url.path, type(exc).__name__)
     return error_response(500, "internal_error", "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
+
+
+@app.get("/api/options", response_model=OptionsResponse)
+def options() -> OptionsResponse:
+    return build_options(rule_data)
 
 
 @app.post("/api/compare", response_model=CompareResponse)
