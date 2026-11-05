@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse, OptionsResponse
+from app.models import CompareRequest, CompareResponse, Conditions, OptionsResponse
 from app.options import build_options
 from app.repository import load_rule_data
 
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
 rule_data = load_rule_data()
 facilities = {facility.facility_id: facility for facility in rule_data.facilities}
+available_options = build_options(rule_data)
 
 HTTP_ERRORS = {
     404: ("not_found", "요청한 경로를 찾을 수 없습니다."),
@@ -36,7 +37,7 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
     fields = []
     for error in exc.errors():
         code = error["type"]
-        custom = code in ("invalid_time_range", "past_date")
+        custom = code in ("invalid_time_range", "past_date", "invalid_option")
         # JSON 형식 오류의 위치는 항목이 아니라 문자 위치이므로 요청 본문 전체의 오류로 표시한다.
         location = [] if code == "json_invalid" else error["loc"][1:]
         fields.append(
@@ -72,11 +73,31 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
 
 @app.get("/api/options", response_model=OptionsResponse)
 def options() -> OptionsResponse:
-    return build_options(rule_data)
+    return available_options
+
+
+def check_against_options(conditions: Conditions) -> None:
+    """선택지에 없는 값은 입력 오류로 돌려보낸다. 시설에만 없는 값은 규칙 엔진이 확인 필요로 처리한다."""
+    errors = []
+    if conditions.sport not in {option.code for option in available_options.sports}:
+        errors.append(
+            {"type": "invalid_option", "loc": ("body", "conditions", "sport"), "msg": "선택할 수 없는 종목입니다."}
+        )
+    if not set(conditions.discount_types) <= {option.code for option in available_options.discount_types}:
+        errors.append(
+            {
+                "type": "invalid_option",
+                "loc": ("body", "conditions", "discount_types"),
+                "msg": "선택할 수 없는 감면 유형입니다.",
+            }
+        )
+    if errors:
+        raise RequestValidationError(errors)
 
 
 @app.post("/api/compare", response_model=CompareResponse)
 def compare(request: CompareRequest) -> CompareResponse:
+    check_against_options(request.conditions)
     selected = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)

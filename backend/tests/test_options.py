@@ -18,8 +18,11 @@ def facility(facility_id="F1", district="해운대구", sports=("futsal",), disc
         "facility_id": facility_id,
         "name": "가상 시설",
         "district": district,
-        "sports": list(sports),
         "source_id": "S",
+        "fee_rules": [
+            {"rule_id": f"{facility_id}-{sport}", "sport": sport, "type": "base", "effective_from": "2026-01-01", "source_id": "S"}
+            for sport in sports
+        ],
         "discount_rules": [
             {"rule_id": f"{facility_id}-{code}", "discount_type": code, "effective_from": "2026-01-01", "source_id": "S"}
             for code in discounts
@@ -89,6 +92,16 @@ def test_no_facilities_gives_empty_options():
 def test_code_without_label_is_rejected_on_load(kwargs):
     with pytest.raises(ValidationError, match="unknown"):
         RuleData(labels=LABELS, facilities=[facility(**kwargs)])
+
+
+def test_sport_with_only_lighting_rule_is_not_offered():
+    data = facility(sports=())
+    data["fee_rules"] = [
+        {"rule_id": "L", "sport": "tennis", "type": "lighting", "effective_from": "2026-01-01", "source_id": "S"}
+    ]
+    options = build_options(RuleData(labels=LABELS, facilities=[data]))
+
+    assert options.sports == []
 
 
 def test_every_offered_option_can_be_used_in_compare():

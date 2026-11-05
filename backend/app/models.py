@@ -137,13 +137,17 @@ class FacilityRules(BaseModel):
     facility_id: str
     name: str
     district: str | None = None
-    sports: list[str] = []
     source_id: str
     holidays: list[date] = []
     fee_rules: list[FeeRule] = []
     discount_rules: list[DiscountRule] = []
     terms: Terms = Terms()
     sources: list[Source]
+
+    @property
+    def sports(self) -> set[str]:
+        """요금을 계산할 수 있는 종목. 규정과 어긋나지 않도록 따로 저장하지 않는다."""
+        return {rule.sport for rule in self.fee_rules if rule.type == "base"}
 
     @model_validator(mode="after")
     def check_sources(self) -> "FacilityRules":
