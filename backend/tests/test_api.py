@@ -71,6 +71,7 @@ def test_calculated_response_matches_api_draft():
                 },
                 "terms": TERMS,
                 "checklist": ["다자녀 가정 확인 서류"],
+                "checklist_review_items": [],
                 "sources": SOURCES,
             }
         ]
@@ -90,6 +91,13 @@ def test_needs_review_response_has_null_totals():
     assert fee["review_items"][0]["target"] == "discount"
     assert fee["review_items"][0]["source_id"] == "S-02"
     assert result["checklist"] == ["다자녀 가정 확인 서류", "장애인 증명 서류"]
+
+
+def test_booking_can_end_at_midnight():
+    response = client.post("/api/compare", json=payload(start_time="22:00", end_time="24:00", discount_types=[]))
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["fee"]["total"] == 40000
 
 
 def test_headcount_is_optional_and_accepted():
@@ -163,7 +171,8 @@ def test_missing_required_fields_reported_together():
     [
         ({"date": "2026-13-40"}, "conditions.date"),
         ({"start_time": "25:00"}, "conditions.start_time"),
-        ({"end_time": "24:00"}, "conditions.end_time"),
+        ({"end_time": "24:01"}, "conditions.end_time"),
+        ({"start_time": "24:00"}, "conditions.start_time"),
         ({"start_time": "18:00:00"}, "conditions.start_time"),
         ({"headcount": 0}, "conditions.headcount"),
         ({"source": "unknown"}, "conditions.source"),
@@ -178,6 +187,35 @@ def test_empty_facility_list_rejected():
     body["facility_ids"] = []
 
     assert fields_of(client.post("/api/compare", json=body)) == {"facility_ids": "invalid_value"}
+
+
+def test_unknown_path_uses_common_error_format():
+    response = client.get("/api/unknown")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {"code": "not_found", "message": "요청한 경로를 찾을 수 없습니다."}
+    }
+
+
+def test_unsupported_method_uses_common_error_format_and_keeps_allow_header():
+    response = client.get("/api/compare")
+
+    assert response.status_code == 405
+    assert response.json() == {
+        "error": {"code": "method_not_allowed", "message": "지원하지 않는 요청 방식입니다."}
+    }
+    assert response.headers["allow"] == "POST"
+
+
+def test_broken_json_reports_body():
+    response = client.post("/api/compare", content="{broken", headers={"content-type": "application/json"})
+
+    assert fields_of(response) == {"body": "invalid_value"}
+
+
+def test_missing_body_reports_body():
+    assert fields_of(client.post("/api/compare")) == {"body": "required"}
 
 
 def test_validation_error_does_not_echo_input():
