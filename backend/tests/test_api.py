@@ -71,6 +71,7 @@ def test_calculated_response_matches_api_draft():
                 },
                 "terms": TERMS,
                 "checklist": ["다자녀 가정 확인 서류"],
+                "checklist_review_items": [],
                 "sources": SOURCES,
             }
         ]
@@ -90,6 +91,13 @@ def test_needs_review_response_has_null_totals():
     assert fee["review_items"][0]["target"] == "discount"
     assert fee["review_items"][0]["source_id"] == "S-02"
     assert result["checklist"] == ["다자녀 가정 확인 서류", "장애인 증명 서류"]
+
+
+def test_booking_can_end_at_midnight():
+    response = client.post("/api/compare", json=payload(start_time="22:00", end_time="24:00", discount_types=[]))
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["fee"]["total"] == 40000
 
 
 def test_headcount_is_optional_and_accepted():
@@ -163,7 +171,8 @@ def test_missing_required_fields_reported_together():
     [
         ({"date": "2026-13-40"}, "conditions.date"),
         ({"start_time": "25:00"}, "conditions.start_time"),
-        ({"end_time": "24:00"}, "conditions.end_time"),
+        ({"end_time": "24:01"}, "conditions.end_time"),
+        ({"start_time": "24:00"}, "conditions.start_time"),
         ({"start_time": "18:00:00"}, "conditions.start_time"),
         ({"headcount": 0}, "conditions.headcount"),
         ({"source": "unknown"}, "conditions.source"),

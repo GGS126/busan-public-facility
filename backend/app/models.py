@@ -37,7 +37,7 @@ class Conditions(BaseModel):
     districts: list[str] = []
     date: date
     start_time: ClockTime
-    end_time: ClockTime
+    end_time: BandTime
     headcount: int | None = Field(default=None, ge=1)
     discount_types: list[str] = []
     source: Literal["direct", "llm"]
@@ -175,7 +175,7 @@ class FeeItem(BaseModel):
 
 class ReviewItem(BaseModel):
     code: Literal["rule_missing", "rule_conflict", "rule_not_in_effect"]
-    target: Literal["base", "lighting", "discount"]
+    target: Literal["base", "lighting", "discount", "checklist"]
     reason: str
     source_id: str
 
@@ -196,6 +196,7 @@ class CompareResult(BaseModel):
     fee: FeeResult
     terms: Terms
     checklist: list[str]
+    checklist_review_items: list[ReviewItem]
     sources: list[Source]
 
 

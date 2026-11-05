@@ -85,20 +85,41 @@ def _day_types(day: date, holidays: list[date]) -> set[str]:
 
 
 def _active_fee_rules(rules: FacilityRules, conditions: Conditions, fee_type: str) -> list[FeeRule]:
-    """이용일에 유효하고 요일·월이 맞는 규정을 고른다."""
-    candidates = [r for r in rules.fee_rules if r.type == fee_type and r.sport == conditions.sport]
-    in_effect = [r for r in candidates if r.in_effect(conditions.date)]
-    if candidates and not in_effect:
-        raise NeedsReview(
-            "rule_not_in_effect", "이용일에 적용되는 요금 규정이 없습니다.", candidates[0].source_id
-        )
+    """이 이용에 적용되는 유효한 규정을 고른다.
+
+    요일이나 시간대가 None인 규정은 적용 여부를 알 수 없으므로 확인 필요로 보낸다.
+    이용일에 유효하지 않은 규정은 유효한 규정이 그 시간을 대신하지 못할 때만 확인 필요로 보낸다.
+    """
+    start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
     day_types = _day_types(conditions.date, rules.holidays)
-    return [
+    relevant = [
         r
-        for r in in_effect
-        if (r.day_types is None or day_types & set(r.day_types))
+        for r in rules.fee_rules
+        if r.type == fee_type
+        and r.sport == conditions.sport
         and (r.months is None or conditions.date.month in r.months)
+        and (r.day_types is None or day_types & set(r.day_types))
+        and (r.time_from is None or (to_minutes(r.time_from) < end and start < to_minutes(r.time_to)))
     ]
+
+    active = [r for r in relevant if r.in_effect(conditions.date)]
+    for rule in active:
+        if rule.day_types is None:
+            raise NeedsReview("rule_missing", "요금 규정의 적용 요일을 확인할 수 없습니다.", rule.source_id)
+        if rule.time_from is None:
+            raise NeedsReview("rule_missing", "요금 규정의 적용 시간대를 확인할 수 없습니다.", rule.source_id)
+
+    covered = {
+        minute for r in active for minute in range(to_minutes(r.time_from), to_minutes(r.time_to))
+    }
+    for rule in relevant:
+        if rule in active:
+            continue
+        rule_start = start if rule.time_from is None else max(start, to_minutes(rule.time_from))
+        rule_end = end if rule.time_to is None else min(end, to_minutes(rule.time_to))
+        if any(minute not in covered for minute in range(rule_start, rule_end)):
+            raise NeedsReview("rule_not_in_effect", "이용일에 적용되는 요금 규정이 없습니다.", rule.source_id)
+    return active
 
 
 def _unit_charge(rule: FeeRule, minutes: int) -> int:
@@ -129,11 +150,7 @@ def _base_items(rules: FacilityRules, conditions: Conditions) -> list[FeeItem]:
 
     cursor = start
     while cursor < end:
-        hits = [
-            r
-            for r in active
-            if r.time_from is None or to_minutes(r.time_from) <= cursor < to_minutes(r.time_to)
-        ]
+        hits = [r for r in active if to_minutes(r.time_from) <= cursor < to_minutes(r.time_to)]
         if not hits:
             raise NeedsReview("rule_missing", "이용 시간에 적용되는 기본요금 규정이 없습니다.")
         if len(hits) > 1:
@@ -142,7 +159,7 @@ def _base_items(rules: FacilityRules, conditions: Conditions) -> list[FeeItem]:
         unit = _require_unit(rule)
         unit_end = min(cursor + unit, end)
         # 단위가 시간대 경계를 넘을 때 어느 요금을 적용할지는 규정에 따라 다르므로 추정하지 않는다.
-        if rule.time_to is not None and unit_end > to_minutes(rule.time_to):
+        if unit_end > to_minutes(rule.time_to):
             raise NeedsReview("rule_missing", "요금 단위가 시간대 경계를 넘을 때의 처리 방식을 확인할 수 없습니다.", rule.source_id)
         totals[rule.rule_id] = totals.get(rule.rule_id, 0) + _unit_charge(rule, unit_end - cursor)
         cursor += unit
@@ -154,29 +171,32 @@ def _base_items(rules: FacilityRules, conditions: Conditions) -> list[FeeItem]:
 
 
 def _lighting_items(rules: FacilityRules, conditions: Conditions) -> list[FeeItem]:
-    """단위가 조명 시간대와 겹치면 가산한다. 시간대가 없는 조명 규정은 적용 여부를 알 수 없다."""
+    """단위가 조명 시간대와 겹치면 가산한다."""
     active = _active_fee_rules(rules, conditions, "lighting")
     start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
 
-    for rule in active:
-        if rule.time_from is None:
-            raise NeedsReview("rule_missing", "조명 적용 시간대를 확인할 수 없습니다.", rule.source_id)
-
-    used = [r for r in active if to_minutes(r.time_from) < end and start < to_minutes(r.time_to)]
-    for index, rule in enumerate(used):
-        for other in used[index + 1 :]:
+    for index, rule in enumerate(active):
+        for other in active[index + 1 :]:
             overlap_start = max(to_minutes(rule.time_from), to_minutes(other.time_from), start)
             overlap_end = min(to_minutes(rule.time_to), to_minutes(other.time_to), end)
             if overlap_start < overlap_end:
                 raise NeedsReview("rule_conflict", "이용 시간에 적용되는 조명료 규정이 충돌합니다.", rule.source_id)
 
     items = []
-    for rule in used:
+    charged_units: list[tuple[str, int, int]] = []
+    for rule in active:
         unit = _require_unit(rule)
         amount = 0
         for unit_start in range(start, end, unit):
             unit_end = min(unit_start + unit, end)
             if unit_start < to_minutes(rule.time_to) and to_minutes(rule.time_from) < unit_end:
+                # 한 단위가 두 조명 시간대에 걸치면 어느 요금을 적용할지 추정하지 않는다.
+                if any(
+                    rule_id != rule.rule_id and unit_start < other_end and other_start < unit_end
+                    for rule_id, other_start, other_end in charged_units
+                ):
+                    raise NeedsReview("rule_missing", "요금 단위가 조명 시간대 경계를 넘을 때의 처리 방식을 확인할 수 없습니다.", rule.source_id)
+                charged_units.append((rule.rule_id, unit_start, unit_end))
                 amount += _unit_charge(rule, unit_end - unit_start)
         items.append(FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id))
     return items
@@ -232,9 +252,14 @@ def _discount_rule(rules: FacilityRules, day: date, discount_type: str) -> Disco
 
 
 def _discount_amount(rule: DiscountRule, target: int) -> int:
+    amount = _uncapped_discount_amount(rule, target)
+    if amount > target:
+        raise NeedsReview("rule_conflict", "감면액이 감면 대상 요금보다 큽니다.", rule.source_id)
+    return amount
+
+
+def _uncapped_discount_amount(rule: DiscountRule, target: int) -> int:
     if rule.fixed_amount is not None:
-        if rule.fixed_amount > target:
-            raise NeedsReview("rule_conflict", "감면액이 감면 대상 요금보다 큽니다.", rule.source_id)
         return rule.fixed_amount
     if rule.rate is None:
         raise NeedsReview("rule_missing", "감면율이나 감면액을 확인할 수 없습니다.", rule.source_id)

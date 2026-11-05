@@ -14,6 +14,9 @@
           "amount": 20000,
           "unit_minutes": 60,
           "partial_unit": "round_up",
+          "day_types": ["weekday", "weekend", "holiday"],
+          "time_from": "00:00",
+          "time_to": "24:00",
           "effective_from": "2026-01-01",
           "source_id": "S-01"
         },
@@ -24,6 +27,7 @@
           "amount": 5000,
           "unit_minutes": 60,
           "partial_unit": "round_up",
+          "day_types": ["weekday", "weekend", "holiday"],
           "time_from": "18:00",
           "time_to": "22:00",
           "effective_from": "2026-01-01",

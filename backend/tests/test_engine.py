@@ -17,6 +17,9 @@ def base_rule(**overrides) -> FeeRule:
         amount=20000,
         unit_minutes=60,
         partial_unit="round_up",
+        day_types=["weekday", "weekend", "holiday"],
+        time_from="00:00",
+        time_to="24:00",
         effective_from="2026-01-01",
         source_id="S-01",
     )
@@ -382,6 +385,128 @@ def test_base_discount_still_calculated_when_lighting_unknown():
 
     assert_review(result, "lighting", "rule_missing")
     assert amounts(result) == {"base": 40000, "discount": -20000}
+
+
+def test_unit_straddling_two_lighting_bands_needs_review():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="EARLY", time_to="20:00"),
+        lighting_rule(rule_id="LATE", amount=7000, time_from="20:00"),
+    ]
+    result = calculate(facility(rules), conditions(start="19:30", end="20:30"))
+
+    assert_review(result, "lighting", "rule_missing")
+    assert amounts(result) == {"base": 20000}
+
+
+def test_units_inside_adjacent_lighting_bands_are_charged_separately():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="EARLY", time_to="20:00"),
+        lighting_rule(rule_id="LATE", amount=7000, time_from="20:00"),
+    ]
+    result = calculate(facility(rules), conditions(start="19:00", end="21:00"))
+
+    assert [(item.rule_id, item.amount) for item in result.items if item.type == "lighting"] == [
+        ("EARLY", 5000),
+        ("LATE", 7000),
+    ]
+    assert result.total == 52000
+
+
+@pytest.mark.parametrize(
+    ("amount", "rate", "rounding", "method"),
+    [(500, "0.5", "ceil_1000", "onsite"), (800, "1", "ceil_1000", "prepay_refund")],
+)
+def test_rounded_discount_larger_than_target_conflicts(amount, rate, rounding, method):
+    rules = facility(
+        [base_rule(amount=amount, unit_minutes=120)],
+        [discount_rule(rate=rate, rounding=rounding, method=method)],
+    )
+    result = calculate(rules, conditions(discounts=["multi_child"]))
+
+    assert_review(result, "discount", "rule_conflict")
+
+
+def test_full_discount_is_allowed():
+    rules = facility(discount_rules=[discount_rule(rate="1")])
+    result = calculate(rules, conditions(discounts=["multi_child"]))
+
+    assert (result.status, result.total) == ("calculated", 0)
+
+
+def test_expired_rule_for_this_day_is_not_replaced_by_other_day_rule():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="WEEKEND", day_types=["weekend"], effective_to="2026-06-30"),
+        lighting_rule(rule_id="WEEKDAY", day_types=["weekday"]),
+    ]
+    result = calculate(facility(rules), conditions(day=SATURDAY, start="18:00", end="20:00"))
+
+    assert_review(result, "lighting", "rule_not_in_effect")
+
+
+def test_expired_rule_partly_covered_by_live_rule_needs_review():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="OLD", time_to="20:00", effective_to="2026-06-30"),
+        lighting_rule(rule_id="NEW", time_from="20:00"),
+    ]
+    result = calculate(facility(rules), conditions(start="19:00", end="21:00"))
+
+    assert_review(result, "lighting", "rule_not_in_effect")
+
+
+def test_expired_rule_fully_replaced_by_live_rule_is_ignored():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="OLD", effective_to="2026-06-30"),
+        lighting_rule(rule_id="NEW", amount=6000, effective_from="2026-07-01"),
+    ]
+    result = calculate(facility(rules), conditions(start="18:00", end="20:00"))
+
+    assert result.status == "calculated"
+    assert [item.rule_id for item in result.items if item.type == "lighting"] == ["NEW"]
+
+
+def test_expired_rule_outside_booking_time_is_ignored():
+    rules = [base_rule(), lighting_rule(effective_to="2026-06-30")]
+    result = calculate(facility(rules), conditions(start="10:00", end="12:00"))
+
+    assert result.status == "calculated"
+    assert amounts(result) == {"base": 40000}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"day_types": None}, {"time_from": None, "time_to": None}],
+)
+def test_unknown_day_or_band_on_base_rule_needs_review(overrides):
+    result = calculate(facility([base_rule(**overrides)]), conditions())
+
+    assert_review(result, "base", "rule_missing")
+    assert result.items == []
+
+
+def test_unknown_day_on_lighting_rule_needs_review():
+    rules = [base_rule(), lighting_rule(day_types=None)]
+    result = calculate(facility(rules), conditions(start="18:00", end="20:00"))
+
+    assert_review(result, "lighting", "rule_missing")
+
+
+def test_unknown_day_on_rule_outside_booking_time_is_ignored():
+    rules = [base_rule(), lighting_rule(day_types=None)]
+    result = calculate(facility(rules), conditions(start="10:00", end="12:00"))
+
+    assert result.status == "calculated"
+
+
+def test_booking_can_end_at_midnight():
+    rules = [base_rule(), lighting_rule(time_to="24:00")]
+    result = calculate(facility(rules), conditions(start="22:00", end="24:00"))
+
+    assert amounts(result) == {"base": 40000, "lighting": 10000}
 
 
 def test_every_item_keeps_rule_and_source():
