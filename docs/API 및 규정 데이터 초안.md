@@ -45,7 +45,7 @@ POST /api/compare
 | `conditions.districts` | 아니요 | 시설 검색(API-02)에서 필수, 이 API의 계산에는 사용하지 않음 |
 | `conditions.date` | 예 | 올바른 날짜, 지난 날짜 불가 |
 | `conditions.start_time` | 예 | 올바른 시간 |
-| `conditions.end_time` | 예 | `start_time`보다 늦은 시간 |
+| `conditions.end_time` | 예 | `start_time`보다 늦은 시간, 자정까지 이용은 `24:00` |
 | `conditions.headcount` | 아니요 | 1 이상의 정수. SRS의 입력 항목에 없어 인원당 요금 시설이 확인되면 화면에 추가 |
 | `conditions.discount_types` | 아니요 | `GET /api/options`의 감면 유형, 없으면 빈 배열 |
 | `conditions.source` | 예 | `direct` 또는 `llm` |
@@ -93,6 +93,7 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
         "source_id": "S-03"
       },
       "checklist": ["다자녀 가정 확인 서류"],
+      "checklist_review_items": [],
       "sources": [
         { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
         { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
@@ -153,6 +154,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
         "source_id": "S-03"
       },
       "checklist": ["다자녀 가정 확인 서류", "장애인 증명 서류"],
+      "checklist_review_items": [],
       "sources": [
         { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
         { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
@@ -170,6 +172,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | `rule_not_in_effect` | 이용일에 적용되는 규정이 없음 |
 
 `review_items[].target`은 표의 행과 연결되도록 `base`, `lighting`, `discount` 중 하나로 표시합니다.
+선택한 감면의 증빙서류를 확인하지 못하면 `checklist_review_items`에 `target: "checklist"`로 반환합니다. 빈 `checklist`는 필요한 서류가 없다는 뜻이며, 이 경우 요금 상태는 바뀌지 않습니다.
 규정이 아예 없어 근거 출처가 없으면 `review_items[].source_id`에 시설의 `source_id`를 넣어 공식 출처 링크를 표시할 수 있게 합니다(AC-007).
 
 `terms`의 값을 확인하지 못했으면 해당 값을 `null`로 반환하고, `terms.source_id`로 출처와 확인일을 표시합니다(FR-011).
@@ -217,7 +220,6 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | 항목 | 설명 | 시기 |
 |---|---|---|
 | `facility_id`, `name` | 시설 식별자와 이름 | 첫 통합 |
-| `sports` | 제공 종목 | 첫 통합 |
 | `source_id` | 시설 정보의 공식 출처 | 첫 통합 |
 | `holidays` | 공휴일 날짜 목록. 없는 평일 공휴일은 평일 요금으로 계산되므로 필요 | 첫 통합 |
 | `address`, `district` | 주소와 지역 | 검색 |
@@ -243,8 +245,8 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | `amount` | 단위당 금액 | `5000` |
 | `unit_minutes` | 요금 단위 시간 | `60` |
 | `partial_unit` | 단위 미만 처리 방식 | `round_up` |
-| `day_types` | 적용 요일 구분 | `["weekend"]` |
-| `time_from`, `time_to` | 적용 시간대, 조명 시간대 | `18:00`, `22:00` |
+| `day_types` | 적용 요일 구분. 모르면 `null`, 모든 요일이면 세 값을 모두 입력 | `["weekday", "weekend", "holiday"]` |
+| `time_from`, `time_to` | 적용 시간대, 조명 시간대. 모르면 `null`, 종일이면 `00:00`, `24:00` | `18:00`, `22:00` |
 | `months` | 적용 월, 계절 기준이 시설마다 다를 수 있어 월로 표시. 전체면 `null` | `[11, 12, 1, 2]` |
 | `effective_from`, `effective_to` | 규정 적용 기간, 시행일을 시작일로 사용 | `2026-01-01`, `null` |
 | `source_id` | 근거 출처 | `S-01` |
@@ -302,6 +304,7 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 | `headcount` | 선택 항목으로 변경 | SDD 예시에는 있지만 SRS 입력 항목과 UI-01에 없음 |
 | `facility_name` | 응답에 추가 | UI-05 비교표에 시설명 필요 |
 | `terms.source_id` | 응답에 추가 | FR-011, AC-008은 규정 결과마다 출처와 확인일을 요구 |
+| `checklist_review_items` | 응답에 추가 | 증빙서류 미확인과 서류 불필요를 구분(SDD 3.6) |
 | 응답 묶음 | 시설별 결과를 `results` 배열로 반환 | SDD 예시는 시설 1곳의 결과만 표시 |
 | 확인 필요 상태 | `needs_review`와 `review_items` 추가 | SDD는 `calculated`만 예시로 제시 |
 | `source` 값 | `direct` 추가 | SDD 예시는 `llm`만 제시 |
