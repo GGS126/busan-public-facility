@@ -1,0 +1,42 @@
+name: 작업
+description: 기능 개발, 오류 수정, 문서 및 데이터 작업을 등록합니다.
+title: "[작업] "
+body:
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 작업 목적
+      description: 무엇을 왜 해야 하는지 작성합니다.
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: 담당자
+      description: 담당자를 적고, 등록 후 GitHub Assignees도 지정합니다.
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: 할 일
+      placeholder: "- [ ] 작업 항목"
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 완료 기준 및 확인 방법
+      description: 어떤 결과를 확인하면 완료인지 작성합니다.
+    validations:
+      required: true
+  - type: textarea
+    id: references
+    attributes:
+      label: 관련 요구사항 및 참고 자료
+      description: SRS ID, 관련 Issue, 공식 출처, 의존 작업을 적습니다.
+  - type: textarea
+    id: discussion
+    attributes:
+      label: 협의할 사항
+      description: 다른 팀원과 합의가 필요한 API·데이터·기술 선택 등을 적습니다.
