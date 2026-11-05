@@ -180,6 +180,35 @@ def test_empty_facility_list_rejected():
     assert fields_of(client.post("/api/compare", json=body)) == {"facility_ids": "invalid_value"}
 
 
+def test_unknown_path_uses_common_error_format():
+    response = client.get("/api/unknown")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": {"code": "not_found", "message": "요청한 경로를 찾을 수 없습니다."}
+    }
+
+
+def test_unsupported_method_uses_common_error_format_and_keeps_allow_header():
+    response = client.get("/api/compare")
+
+    assert response.status_code == 405
+    assert response.json() == {
+        "error": {"code": "method_not_allowed", "message": "지원하지 않는 요청 방식입니다."}
+    }
+    assert response.headers["allow"] == "POST"
+
+
+def test_broken_json_reports_body():
+    response = client.post("/api/compare", content="{broken", headers={"content-type": "application/json"})
+
+    assert fields_of(response) == {"body": "invalid_value"}
+
+
+def test_missing_body_reports_body():
+    assert fields_of(client.post("/api/compare")) == {"body": "required"}
+
+
 def test_validation_error_does_not_echo_input():
     response = client.post("/api/compare", json=payload(start_time="주민번호 900101-1234567"))
 
