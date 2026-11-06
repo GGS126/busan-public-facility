@@ -1,0 +1,249 @@
+{
+  "facility": {
+    "id": "busan_haeundae_arboretum_tennis",
+    "name": "해운대수목원 테니스장",
+    "facility_type": "tennis",
+    "address": "부산 해운대구 석대동 26",
+    "phone": "051-888-7156",
+    "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=531&progrmSn=619",
+    "open_time": "07:00",
+    "close_time": "22:00",
+    "holiday_note": "1월 1일, 설날 당일, 추석 당일 휴원"
+  },
+  "source": {
+    "id": "busan_reserve_619_2026h2",
+    "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=531&progrmSn=619",
+    "title": "부산광역시 통합예약 - 2026년 하반기 해운대수목원 테니스장",
+    "checked_on": "2026-11-06",
+    "verification_level": "user_transcribed_official",
+    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 규정(2026-11-06)."
+  },
+  "rule_set": {
+    "id": "haeundae_tennis_2026h2",
+    "effective_from": "2026-07-01",
+    "effective_to": "2026-12-31",
+    "status": "confirmed"
+  },
+  "slots": [
+    {
+      "no": 1,
+      "from": "07:00",
+      "to": "09:00",
+      "minutes": 120,
+      "weekday": 8000,
+      "weekend": 12000,
+      "light": 0
+    },
+    {
+      "no": 2,
+      "from": "09:00",
+      "to": "11:00",
+      "minutes": 120,
+      "weekday": 8000,
+      "weekend": 12000,
+      "light": 0
+    },
+    {
+      "no": 3,
+      "from": "11:00",
+      "to": "13:00",
+      "minutes": 120,
+      "weekday": 8000,
+      "weekend": 12000,
+      "light": 0
+    },
+    {
+      "no": 4,
+      "from": "13:00",
+      "to": "14:00",
+      "minutes": 60,
+      "weekday": 4000,
+      "weekend": 6000,
+      "light": 0
+    },
+    {
+      "no": 5,
+      "from": "14:00",
+      "to": "16:00",
+      "minutes": 120,
+      "weekday": 8000,
+      "weekend": 12000,
+      "light": 0
+    },
+    {
+      "no": 6,
+      "from": "16:00",
+      "to": "18:00",
+      "minutes": 120,
+      "weekday": 8000,
+      "weekend": 12000,
+      "light": 0
+    },
+    {
+      "no": 7,
+      "from": "18:00",
+      "to": "20:00",
+      "minutes": 120,
+      "weekday": 8000,
+      "weekend": 12000,
+      "light": 0
+    },
+    {
+      "no": 8,
+      "from": "20:00",
+      "to": "22:00",
+      "minutes": 120,
+      "weekday": 8000,
+      "weekend": 12000,
+      "light": 20000
+    }
+  ],
+  "discounts": [
+    {
+      "id": "low_income",
+      "category": "「국민기초생활 보장법」의 적용을 받는 수급자",
+      "percent": 50
+    },
+    {
+      "id": "disabled",
+      "category": "「장애인복지법」에 따라 등록된 장애인(장애의 정도가 심한 장애인의 경우 보호자 1명을 포함한다)",
+      "percent": 50
+    },
+    {
+      "id": "independence_merit",
+      "category": "「독립유공자예우에 관한 법률」의 적용을 받는 독립유공자와 그 유족 또는 가족",
+      "percent": 60
+    },
+    {
+      "id": "national_merit",
+      "category": "「국가유공자 등 예우 및 지원에 관한 법률」의 적용을 받는 국가유공자와 그 유족 또는 가족",
+      "percent": 50
+    },
+    {
+      "id": "may18_merit",
+      "category": "「5·18민주유공자예우 및 단체설립에 관한 법률」의 적용을 받는 5·18민주유공자와 그 유족 또는 가족",
+      "percent": 50
+    },
+    {
+      "id": "special_mission_merit",
+      "category": "「특수임무유공자 예우 및 단체설립에 관한 법률」의 적용을 받는 특수임무유공자와 그 유족 또는 가족",
+      "percent": 50
+    },
+    {
+      "id": "war_veteran",
+      "category": "「참전유공자예우 및 단체설립에 관한 법률」의 적용을 받는 참전유공자",
+      "percent": 50
+    },
+    {
+      "id": "agent_orange",
+      "category": "「고엽제후유의증 등 환자지원 및 단체설립에 관한 법률」의 적용을 받는 고엽제후유증환자·고엽제후유의증환자 또는 고엽제후유증 2세환자",
+      "percent": 50
+    },
+    {
+      "id": "righteous_injury",
+      "category": "「의사상자 등 예우 및 지원에 관한 법률」의 적용을 받는 의상자·의사자유족 및 의상자가족",
+      "percent": 50
+    },
+    {
+      "id": "pows",
+      "category": "「국군포로의 송환 및 대우 등에 관한 법률」의 등록포로 및 억류지 출신 포로가족",
+      "percent": 50
+    },
+    {
+      "id": "multi_child",
+      "category": "「부산광역시 다자녀가정 우대 및 지원에 관한 조례」의 적용을 받는 다자녀가정에 속하는 사람",
+      "percent": 50
+    }
+  ],
+  "discount_common": {
+    "percent": 50,
+    "basis": "per_eligible_person_equal_split",
+    "applies_to": "base_court_fee_only",
+    "excluded_from": "lighting_fee",
+    "processing": "pay_full_then_refund",
+    "documents": "반환신청서에 감면대상 이용자별 이름, 증빙서류 제출. 다자녀 가족사랑카드(모바일 포함), 없으면 등본 또는 가족관계증명서. 다자녀 가족의 경우 증빙 1부 인정 가능.",
+    "deadline": "경기장 이용시간 전 이메일 제출",
+    "note": "코트 전체 일괄 감면 아님. 이용 인원수로 기본요금을 균등분할한 뒤 해당 대상자의 감면율(독립유공자 60%, 기타 표기 대상 50%)을 적용하여 반환. 중증 장애인 보호자 1명 포함. 조명료 제외. 이메일 winnst70@korea.kr; 팩스 불가. 반환금은 월 단위 처리."
+  },
+  "refunds": [
+    {
+      "id": "user_3plus",
+      "reason": "user_cancel",
+      "min": 3,
+      "max": null,
+      "rate": 100,
+      "channel": "my_page",
+      "condition": "이용일 3일 전까지 온라인 취소"
+    },
+    {
+      "id": "user_2",
+      "reason": "user_cancel",
+      "min": 2,
+      "max": 2,
+      "rate": 90,
+      "channel": "email_refund_form",
+      "condition": "반환신청서 제출; 다음 달 환급"
+    },
+    {
+      "id": "user_1",
+      "reason": "user_cancel",
+      "min": 1,
+      "max": 1,
+      "rate": 80,
+      "channel": "email_refund_form",
+      "condition": "반환신청서 제출; 다음 달 환급"
+    },
+    {
+      "id": "user_0",
+      "reason": "user_cancel",
+      "min": 0,
+      "max": 0,
+      "rate": 0,
+      "channel": "not_allowed",
+      "condition": "일반 당일 취소 환급 불가"
+    },
+    {
+      "id": "force_majeure",
+      "reason": "force_majeure_or_city_event",
+      "min": null,
+      "max": null,
+      "rate": 100,
+      "channel": "email_refund_form",
+      "condition": "천재지변 등 불가항력 또는 부산시 행사·시설 관리 운영상 사용 불가; 이용 전 반환신청서, 사용 중 우천은 안내소 방문"
+    }
+  ],
+  "reservation": {
+    "online_open_days_before": 14,
+    "online_close_days_before": 1,
+    "normal_cancel_online_min_days_before": 3,
+    "closure_note": "1월 1일·설 당일·추석 당일, 축제 행사·우선 선정 등 추가 제한 가능"
+  },
+  "options": [
+    {
+      "id": "lighting",
+      "calculation_type": "hour_blocks_plus_steps",
+      "application_type": "optional",
+      "rounding_policy": "exact_units",
+      "applies_from": "07:00",
+      "applies_to": "20:00",
+      "note": "07:00~20:00 회차에서 조명 선택 가능. 60분 10,000원, 남은 10분당 1,600원. 선택 조명료는 안내사무소에서 현장 결제.",
+      "name": "조명시설",
+      "hour_price": 10000,
+      "extra_unit_minutes": 10,
+      "extra_unit_price": 1600
+    },
+    {
+      "id": "lighting",
+      "name": "조명시설",
+      "calculation_type": "rounded_units",
+      "application_type": "included_in_base_price",
+      "rounding_policy": "exact_units",
+      "applies_from": "20:00",
+      "applies_to": "22:00",
+      "note": "20:00~22:00 회차는 조명 사용 필수. 조명료 20,000원이 회차 총요금에 이미 포함되어 추가 부과하지 않음.",
+      "hour_price": 10000,
+      "extra_unit_minutes": null,
+      "extra_unit_price": null
+    }
+  ]
+}

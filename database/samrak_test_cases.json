@@ -1,0 +1,111 @@
+{
+  "description": "삼락생태공원 동절기 요금·감면·환불 계산 사례.",
+  "cases": [
+    {
+      "id": "S01",
+      "description": "삼락 평일 08-10 일반",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "slot": 1,
+        "is_weekend": false,
+        "party_size": 4,
+        "eligible_count": 0
+      },
+      "expected": {
+        "initial_payment_won": 6000,
+        "discount_refund_won": 0,
+        "final_expected_cost_won": 6000
+      }
+    },
+    {
+      "id": "S02",
+      "description": "삼락 주말 10-12 일반",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "slot": 2,
+        "is_weekend": true,
+        "party_size": 4,
+        "eligible_count": 0
+      },
+      "expected": {
+        "initial_payment_won": 9000,
+        "discount_refund_won": 0,
+        "final_expected_cost_won": 9000
+      }
+    },
+    {
+      "id": "S03",
+      "description": "삼락 평일 4명 중 2명 감면",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "slot": 3,
+        "is_weekend": false,
+        "party_size": 4,
+        "eligible_count": 2
+      },
+      "expected": {
+        "initial_payment_won": 6000,
+        "discount_refund_won": 1500,
+        "final_expected_cost_won": 4500
+      }
+    },
+    {
+      "id": "S04",
+      "description": "삼락 주말 3명 중 1명 감면",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "slot": 4,
+        "is_weekend": true,
+        "party_size": 3,
+        "eligible_count": 1
+      },
+      "expected": {
+        "initial_payment_won": 9000,
+        "discount_refund_won": 1500,
+        "final_expected_cost_won": 7500
+      }
+    },
+    {
+      "id": "S05",
+      "description": "삼락 평일 사용 2일 전 취소",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "initial_paid_won": 6000,
+        "days_before": 2
+      },
+      "expected": {
+        "refund_percent": 90,
+        "refund_won": 5400,
+        "final_cost_won": 600
+      }
+    },
+    {
+      "id": "S06",
+      "description": "삼락 평일 사용 1일 전 취소",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "initial_paid_won": 6000,
+        "days_before": 1
+      },
+      "expected": {
+        "refund_percent": 80,
+        "refund_won": 4800,
+        "final_cost_won": 1200
+      }
+    },
+    {
+      "id": "S07",
+      "description": "삼락 우천 미사용 조건 인정시",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "initial_paid_won": 6000,
+        "reason": "rain_unused"
+      },
+      "expected": {
+        "refund_percent": 100,
+        "refund_won": 6000,
+        "final_cost_won": 0
+      }
+    }
+  ]
+}

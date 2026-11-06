@@ -1,0 +1,136 @@
+{
+  "facility": {
+    "id": "busan_gudeok_stadium_tennis",
+    "name": "구덕운동장 테니스장",
+    "facility_type": "tennis",
+    "address": "부산 서구 망양로 57 (서대신동3가, 구덕운동장)",
+    "phone": "051-602-2215 / 051-602-2201",
+    "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
+    "open_time": "08:00",
+    "close_time": "22:00",
+    "holiday_note": "연중무휴(정기 휴무일 없음)"
+  },
+  "source": {
+    "id": "busan_reserve_472_2026winter",
+    "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
+    "title": "부산광역시 통합예약 - 구덕운동장 테니스장",
+    "checked_on": "2026-11-06",
+    "verification_level": "user_transcribed_official",
+    "note": "부산광역시 통합예약 구덕운동장 테니스장 예약·요금·감면·환불 안내 및 시설 규정. 2026-11-06 확인."
+  },
+  "rule_set": {
+    "id": "gudeok_tennis_winter_2026_2027",
+    "effective_from": "2026-10-01",
+    "effective_to": "2027-03-31",
+    "status": "confirmed"
+  },
+  "pricing": {
+    "reference_minutes": 120,
+    "weekday_fee_won": 8000,
+    "weekend_holiday_fee_won": 8000,
+    "shorter_use_policy": "proportional",
+    "extra_use_policy": "not_allowed",
+    "basis": "one_court_2hours",
+    "note": "1면 1시간 4,000원, 2시간 8,000원(평일·주말·공휴일 동일). 1인 하루 최대 2시간.",
+    "hourly_fee_won": 4000
+  },
+  "time_policy": {
+    "selection_type": "flexible_interval",
+    "available_start_time": "08:00",
+    "available_end_time": "22:00",
+    "min_minutes": null,
+    "max_minutes": 120,
+    "step_minutes": null,
+    "daily_limit_minutes": 120,
+    "status": "confirmed",
+    "note": "고정 회차 없이 08:00~22:00 내에서 시작시간을 선택하며, 1시간 또는 2시간 예약 가능. 1인 1일 최대 2시간."
+  },
+  "discounts_pending": [],
+  "refunds": [
+    {
+      "id": "regular_cancellation",
+      "reason": "user_cancel",
+      "min": 1,
+      "max": null,
+      "rate": 100,
+      "channel": "my_page",
+      "condition": "이용일 1일 전까지 마이페이지 온라인 취소 시 100% 환불."
+    },
+    {
+      "id": "same_day_weather",
+      "reason": "rain_same_day",
+      "min": 0,
+      "max": 0,
+      "rate": 100,
+      "channel": "control_room_phone_inquiry",
+      "condition": "당일 일반 온라인 취소 불가. 우천 시 관제실 문의 후 이용 불가에 대한 100% 환불."
+    }
+  ],
+  "reservation": {
+    "online_open_days_before": 14,
+    "online_close_days_before": 1,
+    "normal_cancel_online_min_days_before": 1,
+    "closure_note": "연중무휴(명절 등 별도 공지일 제외)"
+  },
+  "discounts_confirmed": [
+    {
+      "id": "national_merit",
+      "rate_percent": 50,
+      "source_label": "국가유공자 및 해당 유족"
+    },
+    {
+      "id": "independence_merit",
+      "rate_percent": 50,
+      "source_label": "독립유공자 및 해당 유족"
+    },
+    {
+      "id": "may18_merit",
+      "rate_percent": 50,
+      "source_label": "5·18민주유공자 및 해당 유족"
+    },
+    {
+      "id": "special_mission_merit",
+      "rate_percent": 50,
+      "source_label": "특수임무유공자 및 해당 유족"
+    },
+    {
+      "id": "war_veteran",
+      "rate_percent": 50,
+      "source_label": "참전유공자 및 해당 유족"
+    },
+    {
+      "id": "disabled",
+      "rate_percent": 50,
+      "source_label": "장애인(중증 장애인 보호자 1인 포함)"
+    },
+    {
+      "id": "multi_child",
+      "rate_percent": 50,
+      "source_label": "부산광역시 거주 다자녀 가정"
+    },
+    {
+      "id": "low_income",
+      "rate_percent": 50,
+      "source_label": "국민기초생활 수급자"
+    }
+  ],
+  "discount_excluded_fee_types": [
+    "lighting_fee"
+  ],
+  "discount_calculation_policy": "representative_full_court",
+  "options": [
+    {
+      "id": "lighting",
+      "calculation_type": "time_overlap_units",
+      "application_type": "mandatory_when_applicable",
+      "rounding_policy": "exact_units",
+      "applies_from": "18:00",
+      "applies_to": "22:00",
+      "note": "동절기 18:00부터 1면 1시간당 10,000원 별도.",
+      "name": "조명시설",
+      "hour_price": 10000,
+      "extra_unit_minutes": null,
+      "extra_unit_price": null
+    }
+  ]
+}
