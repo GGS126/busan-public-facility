@@ -85,7 +85,68 @@ def insert_options(con,rid,options):
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
           (option_id,rid,o['id'],o['calculation_type'],o['application_type'],o['rounding_policy'],o.get('applies_from'),o.get('applies_to'),o.get('note'),o['hour_price'],o.get('extra_unit_minutes'),o.get('extra_unit_price')))
 
+def validate_shared(d):
+    """모든 시설 형식에 적용할 필수 데이터 및 날짜·환불·예약 검증."""
+    for section in ('facility', 'source', 'rule_set', 'reservation'):
+        if not isinstance(d.get(section), dict):
+            raise ValueError(f'{section} 객체 누락 또는 형식 오류')
+    for section, keys in {
+        'facility': ('id', 'name', 'facility_type', 'address', 'booking_url'),
+        'source': ('id', 'url', 'title', 'checked_on', 'verification_level'),
+        'rule_set': ('id', 'effective_from', 'effective_to', 'status'),
+    }.items():
+        for key in keys:
+            value = d[section].get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f'{section}.{key} 누락')
+    source, rule_set = d['source'], d['rule_set']
+    for key, value in (('source.checked_on', source['checked_on']),
+                       ('rule_set.effective_from', rule_set['effective_from']),
+                       ('rule_set.effective_to', rule_set['effective_to'])):
+        try:
+            dt.date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f'{key} 날짜 오류') from exc
+    if rule_set['effective_from'] > rule_set['effective_to']:
+        raise ValueError('규정 적용기간 순서 오류')
+    if source['verification_level'] not in ('official_page_verified', 'user_transcribed_official'):
+        raise ValueError('출처 검증 분류 오류')
+    if rule_set['status'] != 'confirmed':
+        raise ValueError('규정 상태 오류')
+    booking = d['reservation']
+    for key in ('online_open_days_before', 'online_close_days_before',
+                'normal_cancel_online_min_days_before'):
+        value = booking.get(key)
+        if type(value) is not int or value < 0:
+            raise ValueError(f'reservation.{key} 오류')
+    if booking['online_open_days_before'] < booking['online_close_days_before']:
+        raise ValueError('예약 신청 가능 기간 순서 오류')
+    refunds = d.get('refunds')
+    if not isinstance(refunds, list) or not refunds:
+        raise ValueError('환불 규정 목록 누락')
+    ids = set()
+    for refund in refunds:
+        if not isinstance(refund, dict):
+            raise ValueError('환불 규정 형식 오류')
+        key = refund.get('id')
+        if not isinstance(key, str) or not key.strip() or key in ids:
+            raise ValueError('환불 규정 ID 누락 또는 중복')
+        ids.add(key)
+        for bound in ('min', 'max'):
+            val = refund.get(bound)
+            if val is not None and (type(val) is not int or val < 0):
+                raise ValueError('환불 기준 일수 오류')
+        if refund.get('min') is not None and refund.get('max') is not None and refund['min'] > refund['max']:
+            raise ValueError('환불 기간 순서 오류')
+        percent = refund.get('rate')
+        if percent is not None and (type(percent) is not int or not 0 <= percent <= 100):
+            raise ValueError('환불률 오류')
+        for key_name in ('reason', 'channel', 'condition'):
+            if not isinstance(refund.get(key_name), str) or not refund[key_name].strip():
+                raise ValueError(f'환불 규정 {key_name} 누락')
+
 def validate(d):
+    validate_shared(d)
     for field in ('facility','source','rule_set','slots','options','discounts','discount_common','refunds','reservation'):
         if field not in d: raise ValueError(f'필수 키 누락: {field}')
     f,s,r = d['facility'], d['source'], d['rule_set']
@@ -172,13 +233,24 @@ def load_fixed(data_path, db_path):
 
 def load_duration(data_path,db_path):
  d=json.loads(Path(data_path).read_text(encoding='utf-8'))
+ validate_shared(d)
  f,s,r=d['facility'],d['source'],d['rule_set']
- assert r['effective_from']<=r['effective_to']
- dt.date.fromisoformat(r['effective_from']);dt.date.fromisoformat(r['effective_to'])
  p=d['pricing']; t=d['time_policy']; validate_options(d['options'])
  for k in ('reference_minutes','weekday_fee_won','weekend_holiday_fee_won'):
   if type(p[k])!=int or p[k]<0:raise ValueError('요금/시간 유효성 오류: '+k)
  if p['reference_minutes']<=0:raise ValueError('요금 기준 시간 오류')
+ if type(p.get('hourly_fee_won')) is not int or p['hourly_fee_won'] < 0:
+  raise ValueError('1시간 기본요금 오류')
+ if p['reference_minutes'] != 120:
+  raise ValueError('현재 시간형 적재는 2시간 기준 요금만 지원')
+ for key in ('available_start_time','available_end_time'):
+  try: dt.datetime.strptime(t[key],'%H:%M')
+  except (KeyError, ValueError, TypeError) as exc: raise ValueError('이용 가능시간 오류: '+key) from exc
+ if t.get('selection_type')!='flexible_interval': raise ValueError('시간 선택 방식 오류')
+ for key in ('daily_limit_minutes','max_minutes'):
+  if type(t.get(key)) is not int or t[key] <= 0: raise ValueError('이용 시간 제한 오류: '+key)
+ if t['daily_limit_minutes'] < 120 or t['max_minutes'] < 120:
+  raise ValueError('현재 2시간 예약 기준과 이용 시간 제한이 충돌')
  if len({x['id'] for x in d['discounts_pending']})!=len(d['discounts_pending']):raise ValueError('중복 감면 유형')
  if len({x['id'] for x in d.get('discounts_confirmed',[])})!=len(d.get('discounts_confirmed',[])):raise ValueError('중복 감면')
  for x in d.get('discounts_confirmed',[]):
