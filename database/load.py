@@ -3,6 +3,7 @@ import argparse
 import datetime as dt
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -307,17 +308,27 @@ def load_many(paths, db_path=ROOT/'facilities.sqlite3'):
     with tempfile.TemporaryDirectory(dir=db_path.parent) as temp:
         staged=Path(temp)/'staged.sqlite3'
         if db_path.exists():
-            with sqlite3.connect(db_path) as original, sqlite3.connect(staged) as draft:
+            # sqlite3.Connection.__exit__ commits/rolls back, but does NOT close.
+            # Windows will not replace a DB file still held open by SQLite.
+            with closing(sqlite3.connect(db_path)) as original, closing(sqlite3.connect(staged)) as draft:
                 original.backup(draft)
         for p in paths: load(p, staged)
-        with sqlite3.connect(staged) as con:
+        with closing(sqlite3.connect(staged)) as con:
             con.execute('PRAGMA foreign_keys=ON')
             if con.execute('PRAGMA foreign_key_check').fetchall():
                 raise ValueError('외래키 무결성 검사 실패')
             if con.execute('PRAGMA integrity_check').fetchone()[0]!='ok':
                 raise ValueError('DB 무결성 검사 실패')
-        # 복사+교체: 경로 사용 중인 연결이 없다면 원자적 교체
-        os.replace(staged,db_path)
+        # 모든 자체 연결을 닫은 뒤 파일 교체. 외부 SQLite 뷰어가 열어
+        # 두었다면 Windows가 여전히 교체를 차단할 수 있으므로 안내한다.
+        try:
+            os.replace(staged,db_path)
+        except PermissionError as exc:
+            raise PermissionError(
+                f'DB 파일을 교체할 수 없습니다: {db_path}. '
+                'SQLite Viewer/DB Browser, VS Code의 DB 연결 또는 다른 프로그램에서 '
+                '이 DB를 열어 두었다면 연결을 닫고 다시 실행하세요.'
+            ) from exc
 
 
 if __name__=='__main__':

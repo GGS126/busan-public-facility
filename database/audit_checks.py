@@ -1,13 +1,14 @@
 import json, sqlite3, tempfile, pathlib, hashlib
+from contextlib import closing
 import load,query_api as q
 R=pathlib.Path(__file__).resolve().parent
-D=json.loads((R/'seed.json').read_text())
+D=json.loads((R/'seed.json').read_text(encoding='utf-8'))
 files=['seed.json','samrak_winter_2026_2027.json','gudeok_winter_2026_2027.json']
 with tempfile.TemporaryDirectory() as tmp:
  tmp=pathlib.Path(tmp)
  db=tmp/'facilities.sqlite3'
  load.load_many([R/x for x in files],db)
- with sqlite3.connect(db) as c:
+ with closing(sqlite3.connect(db)) as c:
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
   assert c.execute('select count(*) from facilities').fetchone()[0]==3
@@ -19,7 +20,7 @@ with tempfile.TemporaryDirectory() as tmp:
   assert actual['status']=='priced' and actual['total_won']==expected,(fac,actual,expected)
  before=hashlib.sha256(db.read_bytes()).hexdigest()
  for section,key,bad in [('source','checked_on','2026-13-55'),('reservation','online_open_days_before',-1),('facility','name',''),('rule_set','effective_from','2028-01-01')]:
-  mutated=json.loads((R/'seed.json').read_text())
+  mutated=json.loads((R/'seed.json').read_text(encoding='utf-8'))
   mutated[section][key]=bad
   badfile=tmp/'bad.json';badfile.write_text(json.dumps(mutated,ensure_ascii=False))
   try:load.load_many([R/'samrak_winter_2026_2027.json',badfile],db)
