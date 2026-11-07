@@ -1,0 +1,186 @@
+{
+  "facility": {
+    "id": "busan_samrak_ecopark_tennis",
+    "name": "삼락생태공원 테니스장",
+    "facility_type": "tennis",
+    "address": "부산 사상구 낙동대로 1231 (삼락동, 강변공원관리사무소)",
+    "phone": "051-310-6028",
+    "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=395",
+    "open_time": "08:00",
+    "close_time": "17:00",
+    "holiday_note": "설 당일, 추석 당일 휴장"
+  },
+  "source": {
+    "id": "busan_reserve_395_winter_2026",
+    "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=395",
+    "title": "부산광역시 통합예약 - 삼락생태공원 테니스장 동절기",
+    "checked_on": "2026-11-06",
+    "verification_level": "user_transcribed_official",
+    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06)."
+  },
+  "rule_set": {
+    "id": "samrak_tennis_winter_2026_2027",
+    "effective_from": "2026-10-01",
+    "effective_to": "2027-03-31",
+    "status": "confirmed"
+  },
+  "slots": [
+    {
+      "no": 1,
+      "from": "08:00",
+      "to": "10:00",
+      "minutes": 120,
+      "weekday": 6000,
+      "weekend": 9000,
+      "light": 0
+    },
+    {
+      "no": 2,
+      "from": "10:00",
+      "to": "12:00",
+      "minutes": 120,
+      "weekday": 6000,
+      "weekend": 9000,
+      "light": 0
+    },
+    {
+      "no": 3,
+      "from": "13:00",
+      "to": "15:00",
+      "minutes": 120,
+      "weekday": 6000,
+      "weekend": 9000,
+      "light": 0
+    },
+    {
+      "no": 4,
+      "from": "15:00",
+      "to": "17:00",
+      "minutes": 120,
+      "weekday": 6000,
+      "weekend": 9000,
+      "light": 0
+    }
+  ],
+  "discounts": [
+    {
+      "id": "low_income",
+      "category": "기초생활수급자"
+    },
+    {
+      "id": "disabled",
+      "category": "장애인"
+    },
+    {
+      "id": "merit_families",
+      "category": "독립·국가·5·18민주·특수임무유공자, 의사상자 및 해당 유족·가족"
+    },
+    {
+      "id": "war_veteran",
+      "category": "참전유공자"
+    },
+    {
+      "id": "agent_orange",
+      "category": "고엽제후유증·후유의증 환자 및 고엽제후유증 2세 환자"
+    },
+    {
+      "id": "pows",
+      "category": "등록 포로 및 억류지 출신 포로가족"
+    },
+    {
+      "id": "children_group",
+      "category": "체육활동·경기·체육행사에 참여하는 10명 이상 어린이"
+    },
+    {
+      "id": "multichild",
+      "category": "다자녀 가정"
+    }
+  ],
+  "discount_common": {
+    "percent": 50,
+    "basis": "per_eligible_person_equal_split",
+    "applies_to": "base_court_fee_only",
+    "excluded_from": "lighting_fee",
+    "processing": "pay_full_then_refund",
+    "documents": "대상자별 이름과 증빙서류를 반환신청 게시판에 제출. 다자녀 가족사랑카드·모바일카드·차량스티커, 없으면 등본 또는 가족관계증명서. 다자녀 가족은 1부로 대체 가능.",
+    "deadline": "경기장 이용시간 전 반환신청 게시판 접수",
+    "note": "코트 전체에 일괄 할인하지 않고 감면자 개인의 균등분할 몫에 50% 적용. 부산광역시 낙동강 생태공원 보전 및 운영에 관한 조례 제12조 참조."
+  },
+  "refunds": [
+    {
+      "id": "user_3plus",
+      "reason": "user_cancel",
+      "min": 3,
+      "max": null,
+      "rate": 100,
+      "channel": "my_page",
+      "condition": "이용일 3일 이전 취소"
+    },
+    {
+      "id": "user_2",
+      "reason": "user_cancel",
+      "min": 2,
+      "max": 2,
+      "rate": 90,
+      "channel": "nakdong_refund_board",
+      "condition": "이용료 반환신청서 작성 후 제출(낙동강관리본부 이용료반환신청 게시판)."
+    },
+    {
+      "id": "user_1",
+      "reason": "user_cancel",
+      "min": 1,
+      "max": 1,
+      "rate": 80,
+      "channel": "nakdong_refund_board",
+      "condition": "이용료 반환신청서 작성 후 제출(낙동강관리본부 이용료반환신청 게시판)."
+    },
+    {
+      "id": "user_0",
+      "reason": "user_cancel",
+      "min": 0,
+      "max": 0,
+      "rate": 0,
+      "channel": "not_allowed",
+      "condition": "당일 일반 취소 환불 불가"
+    },
+    {
+      "id": "rain_unused",
+      "reason": "rain_unused",
+      "min": null,
+      "max": null,
+      "rate": 100,
+      "channel": "nakdong_refund_board",
+      "condition": "이용일 이후 우천 미사용 시 이용료반환신청 게시판에 접수하면 전액 반환."
+    },
+    {
+      "id": "force_majeure",
+      "reason": "force_majeure_or_city_event",
+      "min": null,
+      "max": null,
+      "rate": 100,
+      "channel": "nakdong_refund_board",
+      "condition": "천재지변·불가항력·부산시 행사 또는 시설 관리 운영 때문에 이용 불가"
+    }
+  ],
+  "reservation": {
+    "online_open_days_before": 60,
+    "online_close_days_before": 2,
+    "normal_cancel_online_min_days_before": 1,
+    "closure_note": "설 당일·추석 당일 휴장"
+  },
+  "options": [
+    {
+      "id": "lighting",
+      "calculation_type": "rounded_units",
+      "application_type": "optional",
+      "rounding_policy": "round_up",
+      "applies_from": "08:00",
+      "applies_to": "17:00",
+      "note": "동절기 운영시간 08:00~17:00 중 선택 조명 사용. 조명료는 1시간당 10,000원, 1시간 미만은 1시간으로 올림.",
+      "name": "조명시설",
+      "hour_price": 10000,
+      "extra_unit_minutes": null,
+      "extra_unit_price": null
+    }
+  ]
+}
