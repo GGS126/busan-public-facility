@@ -45,13 +45,15 @@ async function requestAPI(path, options = {}) {
   } catch (error) {
     if (error.name === 'AbortError') {
       throw new Error(
-        '서버 응답 시간이 초과되었습니다. 다시 시도해 주세요.'
+        '서버 응답 시간이 초과되었습니다. 다시 시도해 주세요.',
+        { cause: error }
       )
     }
 
     if (error instanceof TypeError) {
       throw new Error(
-        '서버에 연결할 수 없습니다. 서버 실행 상태를 확인해 주세요.'
+        '서버에 연결할 수 없습니다. 서버 실행 상태를 확인해 주세요.',
+        { cause: error }
       )
     }
 

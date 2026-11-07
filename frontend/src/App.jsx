@@ -1,6 +1,7 @@
 
 import { useState } from 'react'
 import { compareFacilities } from './api/compare'
+import { getFacilitySlots } from './data/facilitySlots'
 import Header from './components/Header'
 import HeroBanner from './components/HeroBanner'
 import SearchForm from './components/SearchForm'
@@ -55,6 +56,8 @@ function App() {
   const [sport, setSport] = useState('tennis')
   const [district, setDistrict] = useState('전체')
   const [date, setDate] = useState('')
+  const [startTime, setStartTime] = useState('')
+  const [endTime, setEndTime] = useState('')
   const [people, setPeople] = useState('1')
   const [discountType, setDiscountType] = useState('none')
   const [eligibleCount, setEligibleCount] = useState('0')
@@ -93,6 +96,21 @@ function App() {
     }
 
     if (
+      (startTime && !endTime) ||
+      (!startTime && endTime)
+    ) {
+      return '희망 시작시간과 종료시간을 모두 입력해 주세요.'
+    }
+
+    if (
+      startTime &&
+      endTime &&
+      startTime >= endTime
+    ) {
+      return '종료시간은 시작시간보다 늦어야 합니다.'
+    }
+
+    if (
       people === '' ||
       !Number.isInteger(Number(people)) ||
       Number(people) < 1
@@ -110,6 +128,24 @@ function App() {
     }
 
     return ''
+  }
+
+  // 시설의 예약 회차와 희망 시간이 일치하는지 확인
+  function getMatchingTime(facilityId) {
+    if (!startTime || !endTime) {
+      return ''
+    }
+
+    const slots = getFacilitySlots(facilityId, date)
+
+    const matched = slots.find(
+      ([start, end]) =>
+        start === startTime && end === endTime
+    )
+
+    return matched
+      ? `${matched[0]}|${matched[1]}`
+      : ''
   }
 
   // 입력 조건에 맞는 시설 검색
@@ -143,17 +179,31 @@ function App() {
     }, 100)
   }
 
-  // 비교 대상 시설 선택 및 해제
+  // 시설 선택 시 일치하는 예약 회차 자동 선택
   function toggleFacility(id) {
+    const isSelected = selectedIds.includes(id)
+
     setSelectedIds((previous) =>
-      previous.includes(id)
+      isSelected
         ? previous.filter((item) => item !== id)
         : [...previous, id]
     )
 
     setFacilityTimes((previous) => {
       const updated = { ...previous }
-      delete updated[id]
+
+      if (isSelected) {
+        delete updated[id]
+      } else {
+        const matchedTime = getMatchingTime(id)
+
+        if (matchedTime) {
+          updated[id] = matchedTime
+        } else {
+          delete updated[id]
+        }
+      }
+
       return updated
     })
 
@@ -177,6 +227,8 @@ function App() {
     setSport(conditions.sport || 'tennis')
     setDistrict(conditions.district || '전체')
     setDate(conditions.date || '')
+    setStartTime(conditions.start_time || '')
+    setEndTime(conditions.end_time || '')
 
     if (conditions.headcount != null) {
       setPeople(String(conditions.headcount))
@@ -213,7 +265,6 @@ function App() {
       return
     }
 
-    // 선택한 시설 중 시간이 지정되지 않은 시설 확인
     const missingTime = selectedIds.some(
       (id) => !facilityTimes[id]
     )
@@ -228,10 +279,9 @@ function App() {
     setLoading(true)
 
     try {
-      // 시설마다 서로 다른 시간으로 API 요청
       const responses = await Promise.all(
         selectedIds.map(async (facilityId) => {
-          const [startTime, endTime] =
+          const [selectedStart, selectedEnd] =
             facilityTimes[facilityId].split('|')
 
           const request = {
@@ -241,8 +291,8 @@ function App() {
               districts:
                 district === '전체' ? [] : [district],
               date,
-              start_time: startTime,
-              end_time: endTime,
+              start_time: selectedStart,
+              end_time: selectedEnd,
               headcount: Number(people),
               discount_types:
                 discountType === 'none' ||
@@ -264,17 +314,15 @@ function App() {
             )
           }
 
-          // 결과에 시설별 선택 날짜 및 시간 추가
           return response.results.map((result) => ({
             ...result,
             selected_date: date,
-            selected_start_time: startTime,
-            selected_end_time: endTime,
+            selected_start_time: selectedStart,
+            selected_end_time: selectedEnd,
           }))
         })
       )
 
-      // 개별 비교 결과를 하나의 배열로 합침
       setResults(responses.flat())
 
       setTimeout(() => {
@@ -297,7 +345,6 @@ function App() {
       <HeroBanner />
 
       <main className="main-container">
-        {/* 자연어 이용조건 입력 */}
         <NaturalLanguageInput
           onApply={handleApplyAI}
           onDirectInput={handleDirectInput}
@@ -305,7 +352,6 @@ function App() {
 
         <div style={{ height: '28px' }} />
 
-        {/* 이용조건 직접 입력 */}
         <SearchForm
           sport={sport}
           setSport={setSport}
@@ -313,6 +359,10 @@ function App() {
           setDistrict={setDistrict}
           date={date}
           setDate={setDate}
+          startTime={startTime}
+          setStartTime={setStartTime}
+          endTime={endTime}
+          setEndTime={setEndTime}
           people={people}
           setPeople={setPeople}
           discountType={discountType}
@@ -325,7 +375,6 @@ function App() {
           clearResult={clearResult}
         />
 
-        {/* 시설 검색 결과 및 시설별 이용시간 선택 */}
         <FacilityList
           facilities={searchResults}
           selectedIds={selectedIds}
@@ -339,13 +388,11 @@ function App() {
           error={compareError}
         />
 
-        {/* 시설별 요금 및 이용조건 비교 결과 */}
         <FeeResult
           results={results}
           facilities={facilities}
         />
 
-        {/* 서비스 이용 안내 */}
         <section className="guide-section">
           <h2>서비스 이용 안내</h2>
 

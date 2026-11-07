@@ -8,6 +8,14 @@ const discounts = [
   ['independence_merit', '독립유공자'],
 ]
 
+// 30분 단위 이용시간 목록 생성
+const timeOptions = Array.from({ length: 48 }, (_, index) => {
+  const hour = String(Math.floor(index / 2)).padStart(2, '0')
+  const minute = index % 2 === 0 ? '00' : '30'
+
+  return `${hour}:${minute}`
+})
+
 function SearchForm({
   sport,
   setSport,
@@ -15,6 +23,10 @@ function SearchForm({
   setDistrict,
   date,
   setDate,
+  startTime,
+  setStartTime,
+  endTime,
+  setEndTime,
   people,
   setPeople,
   discountType,
@@ -38,7 +50,10 @@ function SearchForm({
         <div>
           <h2>이용 조건 입력</h2>
           <p>종목, 지역, 날짜와 이용 인원을 입력하세요.</p>
-          <p>이용시간은 시설을 선택한 뒤 지정합니다.</p>
+          <p>
+            희망 이용시간과 일치하는 시설 회차가 있으면
+            자동으로 선택됩니다.
+          </p>
         </div>
       </div>
 
@@ -76,6 +91,41 @@ function SearchForm({
             value={date}
             onChange={(e) => update(setDate, e.target.value)}
           />
+        </div>
+
+        <div className="field">
+          <label htmlFor="start-time">희망 시작시간</label>
+          <select
+            id="start-time"
+            value={startTime}
+            onChange={(e) => update(setStartTime, e.target.value)}
+          >
+            <option value="">시작시간 선택</option>
+            {timeOptions.map((time) => (
+              <option key={time} value={time}>
+                {time}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label htmlFor="end-time">희망 종료시간</label>
+          <select
+            id="end-time"
+            value={endTime}
+            onChange={(e) => update(setEndTime, e.target.value)}
+          >
+            <option value="">종료시간 선택</option>
+            {timeOptions
+              .filter((time) => !startTime || time > startTime)
+              .concat('24:00')
+              .map((time) => (
+                <option key={time} value={time}>
+                  {time}
+                </option>
+              ))}
+          </select>
         </div>
 
         <div className="field">
@@ -117,7 +167,9 @@ function SearchForm({
               min="0"
               max={people}
               value={eligibleCount}
-              onChange={(e) => update(setEligibleCount, e.target.value)}
+              onChange={(e) =>
+                update(setEligibleCount, e.target.value)
+              }
             />
           </div>
         )}
