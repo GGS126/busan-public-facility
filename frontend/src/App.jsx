@@ -102,11 +102,7 @@ function App() {
       return '희망 시작시간과 종료시간을 모두 입력해 주세요.'
     }
 
-    if (
-      startTime &&
-      endTime &&
-      startTime >= endTime
-    ) {
+    if (startTime && endTime && startTime >= endTime) {
       return '종료시간은 시작시간보다 늦어야 합니다.'
     }
 
@@ -227,8 +223,10 @@ function App() {
     setSport(conditions.sport || 'tennis')
     setDistrict(conditions.district || '전체')
     setDate(conditions.date || '')
-    setStartTime(conditions.start_time || '')
-    setEndTime(conditions.end_time || '')
+
+    // 자연어 입력 화면과 시간 필드명 일치
+    setStartTime(conditions.startTime || '')
+    setEndTime(conditions.endTime || '')
 
     if (conditions.headcount != null) {
       setPeople(String(conditions.headcount))
@@ -236,9 +234,13 @@ function App() {
 
     clearResult()
 
-    document.getElementById('search')?.scrollIntoView({
-      behavior: 'smooth',
-    })
+    // 화면 갱신 후 01 이용 조건 입력 영역으로 이동
+    setTimeout(() => {
+      document.getElementById('search')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }, 100)
   }
 
   // 직접 입력 영역으로 이동
@@ -279,6 +281,7 @@ function App() {
     setLoading(true)
 
     try {
+      // 시설마다 서로 다른 시간으로 API 요청
       const responses = await Promise.all(
         selectedIds.map(async (facilityId) => {
           const [selectedStart, selectedEnd] =
@@ -314,6 +317,7 @@ function App() {
             )
           }
 
+          // 결과에 시설별 선택 날짜 및 시간 추가
           return response.results.map((result) => ({
             ...result,
             selected_date: date,
@@ -323,6 +327,7 @@ function App() {
         })
       )
 
+      // 개별 비교 결과를 하나의 배열로 합침
       setResults(responses.flat())
 
       setTimeout(() => {
@@ -345,6 +350,7 @@ function App() {
       <HeroBanner />
 
       <main className="main-container">
+        {/* 자연어 이용조건 입력 */}
         <NaturalLanguageInput
           onApply={handleApplyAI}
           onDirectInput={handleDirectInput}
@@ -352,6 +358,7 @@ function App() {
 
         <div style={{ height: '28px' }} />
 
+        {/* 이용조건 직접 입력 */}
         <SearchForm
           sport={sport}
           setSport={setSport}
@@ -375,6 +382,7 @@ function App() {
           clearResult={clearResult}
         />
 
+        {/* 시설 검색 결과 및 시설별 이용시간 선택 */}
         <FacilityList
           facilities={searchResults}
           selectedIds={selectedIds}
@@ -388,11 +396,13 @@ function App() {
           error={compareError}
         />
 
+        {/* 시설별 요금 및 이용조건 비교 결과 */}
         <FeeResult
           results={results}
           facilities={facilities}
         />
 
+        {/* 서비스 이용 안내 */}
         <section className="guide-section">
           <h2>서비스 이용 안내</h2>
 
