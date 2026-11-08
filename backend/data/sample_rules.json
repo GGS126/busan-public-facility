@@ -1,0 +1,74 @@
+{
+  "_notice": "형식 확인용 가상 데이터입니다. 실제 시설 규정이 아닙니다.",
+  "facilities": [
+    {
+      "facility_id": "F001",
+      "name": "예시 체육관",
+      "source_id": "S-01",
+      "holidays": [],
+      "fee_rules": [
+        {
+          "rule_id": "R-F001-01",
+          "sport": "futsal",
+          "type": "base",
+          "amount": 20000,
+          "unit_minutes": 60,
+          "partial_unit": "round_up",
+          "day_types": ["weekday", "weekend", "holiday"],
+          "time_from": "00:00",
+          "time_to": "24:00",
+          "effective_from": "2026-01-01",
+          "source_id": "S-01"
+        },
+        {
+          "rule_id": "R-F001-02",
+          "sport": "futsal",
+          "type": "lighting",
+          "amount": 5000,
+          "unit_minutes": 60,
+          "partial_unit": "round_up",
+          "day_types": ["weekday", "weekend", "holiday"],
+          "time_from": "18:00",
+          "time_to": "22:00",
+          "effective_from": "2026-01-01",
+          "source_id": "S-01"
+        }
+      ],
+      "discount_rules": [
+        {
+          "rule_id": "R-F001-05",
+          "discount_type": "multi_child",
+          "rate": "0.5",
+          "applies_to": "base",
+          "method": "prepay_refund",
+          "stackable": null,
+          "required_documents": ["다자녀 가정 확인 서류"],
+          "effective_from": "2026-01-01",
+          "source_id": "S-02"
+        },
+        {
+          "rule_id": "R-F001-06",
+          "discount_type": "disabled",
+          "rate": "0.5",
+          "applies_to": "base",
+          "method": "onsite",
+          "stackable": null,
+          "required_documents": ["장애인 증명 서류"],
+          "effective_from": "2026-01-01",
+          "source_id": "S-02"
+        }
+      ],
+      "terms": {
+        "booking_open": "이용일 30일 전 09:00부터",
+        "cancel_deadline": "이용일 3일 전까지",
+        "refund": "기한 내 취소 시 전액 환불",
+        "source_id": "S-03"
+      },
+      "sources": [
+        { "source_id": "S-01", "url": "https://example.com/fee-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
+        { "source_id": "S-02", "url": "https://example.com/discount-rules", "checked_at": "2026-11-05", "license": "가상 데이터" },
+        { "source_id": "S-03", "url": "https://example.com/booking-rules", "checked_at": "2026-11-05", "license": "가상 데이터" }
+      ]
+    }
+  ]
+}
