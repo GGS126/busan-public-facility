@@ -3,12 +3,10 @@
 import json
 from pathlib import Path
 
-from app.models import FacilityRules
+from app.models import RuleData
 
 SAMPLE_RULES_PATH = Path(__file__).resolve().parent.parent / "data" / "sample_rules.json"
 
 
-def load_facilities(path: Path = SAMPLE_RULES_PATH) -> dict[str, FacilityRules]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    facilities = [FacilityRules.model_validate(item) for item in data["facilities"]]
-    return {facility.facility_id: facility for facility in facilities}
+def load_rule_data(path: Path = SAMPLE_RULES_PATH) -> RuleData:
+    return RuleData.model_validate(json.loads(path.read_text(encoding="utf-8")))

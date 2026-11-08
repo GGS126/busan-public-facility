@@ -1,9 +1,14 @@
 {
   "_notice": "형식 확인용 가상 데이터입니다. 실제 시설 규정이 아닙니다.",
+  "labels": {
+    "sports": { "futsal": "풋살" },
+    "discount_types": { "multi_child": "다자녀 가정", "disabled": "장애인" }
+  },
   "facilities": [
     {
       "facility_id": "F001",
       "name": "예시 체육관",
+      "district": "해운대구",
       "source_id": "S-01",
       "holidays": [],
       "fee_rules": [
