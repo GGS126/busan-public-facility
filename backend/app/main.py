@@ -1,4 +1,6 @@
 import logging
+import os
+from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -6,8 +8,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse, Conditions, OptionsResponse
+from app.gemini_extractor import GeminiExtractor, GeminiResponseError
+from app.models import KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest
 from app.options import build_options
+from app.query_parser import parse_query
 from app.repository import load_rule_data
 
 logger = logging.getLogger(__name__)
@@ -74,6 +78,33 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
 @app.get("/api/options", response_model=OptionsResponse)
 def options() -> OptionsResponse:
     return available_options
+
+
+@app.post("/api/query/parse")
+def parse_natural_language(request: QueryParseRequest) -> dict:
+    return parse_with_options(request, available_options)
+
+
+def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
+    def extract(query, today):
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError("Gemini API key is unavailable")
+        provider = GeminiExtractor(
+            key,
+            sport_codes={option.code: option.label for option in catalog.sports},
+            discount_codes={option.code: option.label for option in catalog.discount_types},
+            districts=catalog.districts,
+        )
+        try:
+            return provider(query, today)
+        except GeminiResponseError:
+            return provider(query, today)
+
+    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
+    if result["status"] == "llm_failed":
+        result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
+    return result
 
 
 def check_against_options(conditions: Conditions) -> None:

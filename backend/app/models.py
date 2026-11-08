@@ -198,6 +198,10 @@ class OptionsResponse(BaseModel):
     discount_types: list[Option]
 
 
+class QueryParseRequest(BaseModel):
+    query: str = Field(max_length=500)
+
+
 # 계산 결과
 
 
