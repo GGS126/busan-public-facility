@@ -18,7 +18,7 @@ QUESTIONS = {
     "headcount": "이용 인원을 1명 이상으로 알려 주세요.",
     "discount_types": "적용할 감면 유형이 있는지 확인해 주세요.",
 }
-REQUIRED_FIELDS = ("sport", "districts", "date", "start_time", "end_time")
+REQUIRED_FIELDS = ("sport", "date", "start_time", "end_time")
 DATE_FORMAT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 START_TIME = TypeAdapter(ClockTime)
 END_TIME = TypeAdapter(BandTime)
@@ -53,8 +53,15 @@ def parse_query(
     if not isinstance(raw, Mapping):
         return _result("llm_failed", {})
 
-    conditions = {"source": "llm"}
+    conditions = {"source": "llm", "districts": []}
     missing = []
+    districts = raw.get("districts")
+    if districts is not None:
+        if _valid("districts", districts, today):
+            conditions["districts"] = _clean(districts)
+        else:
+            conditions.pop("districts")
+            missing.append("districts")
     for field in REQUIRED_FIELDS:
         value = raw.get(field)
         if not _valid(field, value, today):
@@ -89,7 +96,6 @@ def _valid(field: str, value: object, today: date) -> bool:
     if field in {"districts", "discount_types"}:
         return (
             isinstance(value, list)
-            and (field == "discount_types" or bool(value))
             and all(isinstance(item, str) and item.strip() for item in value)
         )
     if field == "headcount":

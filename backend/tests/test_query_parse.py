@@ -30,7 +30,7 @@ def test_valid_conditions():
 
 @pytest.mark.parametrize(("field", "value"), [
     ("date", None), ("date", "2026-11-08"), ("headcount", 0),
-    ("end_time", "19:00"), ("end_time", "18:00"), ("discount_types", None), ("districts", []),
+    ("end_time", "19:00"), ("end_time", "18:00"), ("discount_types", None), ("districts", "해운대구"),
 ])
 def test_invalid_field_preserves_other_conditions(field, value):
     extract = Mock(return_value=CONDITIONS | {field: value})
@@ -47,6 +47,14 @@ def test_personal_information_is_not_sent_to_provider():
     result = parse_query("풋살 문의 010-1234-5678", today=TODAY, extract=extract)
     assert result["status"] == "llm_failed"
     extract.assert_not_called()
+
+
+@pytest.mark.parametrize("districts", [None, []])
+def test_no_district_searches_all_busan(districts):
+    extract = Mock(return_value=CONDITIONS | {"districts": districts})
+    result = parse_query("내일 풋살", today=TODAY, extract=extract)
+    assert result["status"] == "ok"
+    assert result["conditions"]["districts"] == []
 
 
 def test_provider_exception_returns_failed_without_details():

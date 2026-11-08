@@ -8,9 +8,17 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
+from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots
 from app.gemini_extractor import GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
-    KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest, QueryParseResponse,
+    KST,
+    CompareRequest,
+    CompareResponse,
+    Conditions,
+    FacilitySearchRequest,
+    OptionsResponse,
+    QueryParseRequest,
+    QueryParseResponse,
 )
 from app.options import build_options
 from app.query_parser import parse_query
@@ -82,9 +90,50 @@ def options() -> OptionsResponse:
     return available_options
 
 
+@app.get("/api/facilities/options", response_model=OptionsResponse)
+def facility_search_options():
+    if not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
+    return read_catalog(DB_PATH)[1]
+
+
+@app.post("/api/facilities/search")
+def search_facilities(request: FacilitySearchRequest):
+    if not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
+    conditions = request.conditions
+    catalog_facilities, _ = read_catalog(DB_PATH)
+    candidates = [facility for facility in catalog_facilities if facility["sport"] == conditions.sport]
+    if not candidates:
+        return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
+
+    fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    results = []
+    for facility in candidates:
+        if conditions.districts and facility["district"] not in conditions.districts:
+            continue
+        slots = fixed_slots.get(facility["facility_id"])
+        time_status = "unknown"
+        if slots and conditions.start_time:
+            selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
+            time_status = "eligible" if selected in slots else "not_eligible"
+        results.append({
+            **facility,
+            "time_options": {"selection": "fixed_slot", "slots": slots} if slots else None,
+            "time_check": {"status": time_status},
+        })
+    order = {"eligible": 0, "unknown": 1, "not_eligible": 2}
+    results.sort(key=lambda facility: order[facility["time_check"]["status"]])
+    alternatives = None
+    if not results and conditions.districts:
+        alternatives = {"districts": sorted({facility["district"] for facility in candidates})}
+    return {"results": results, "alternatives": alternatives}
+
+
 @app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
 def parse_natural_language(request: QueryParseRequest) -> dict:
-    return parse_with_options(request, available_options)
+    catalog = read_catalog(DB_PATH)[1] if DB_PATH.is_file() else available_options
+    return parse_with_options(request, catalog)
 
 
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:

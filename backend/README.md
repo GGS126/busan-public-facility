@@ -34,6 +34,15 @@ Gemini 소켓 타임아웃은 5초이며, 응답 형식이 잘못됐을 때만 �
 지역은 시설 검색용으로 확인하며, 감면 유형이 불명확하면 `need_more`로 확인을 요청합니다.
 자연어 추출 결과를 공통 입력 검증에 연결하는 작업은 후속으로 진행합니다.
 
+## SQLite 시설 검색
+
+`GET /api/facilities/options`와 `POST /api/facilities/search`는 저장소의 `database/facilities.sqlite3`를 읽습니다.
+먼저 저장소 루트에서 `python database/build_db.py`를 실행해 SQLite를 생성합니다.
+검색 요청은 `{"conditions":{"sport":"tennis","districts":[],"date":"2026-11-30","source":"direct"}}` 형태입니다.
+지역 목록을 비우면 부산 전체를 검색합니다. 시작·종료 시간을 함께 보내면 고정 회차와 대조합니다.
+SQLite가 있으면 자연어 추출도 같은 종목·지역·감면 선택지를 사용합니다.
+요금 비교 API와 해당 선택지 API(`/api/options`)는 기존 샘플 규정 데이터를 사용합니다.
+
 ## 테스트
 
 ```bash

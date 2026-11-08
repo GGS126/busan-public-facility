@@ -1,39 +1,56 @@
 
 import { useState } from 'react'
+import { getSearchOptions, parseNaturalLanguage } from '../api/compare'
 
 function NaturalLanguageInput({ onApply, onDirectInput }) {
   const [sentence, setSentence] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
   const [message, setMessage] = useState('')
 
-  const [conditions, setConditions] = useState({
-    sport: 'tennis',
-    district: '전체',
-    date: '',
-    startTime: '09:00',
-    endTime: '11:00',
-  })
+  const [conditions, setConditions] = useState(null)
+  const [options, setOptions] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-  // AI API 연결 전에는 기본 조건을 보여주고 직접 수정하도록 안내
-  function handleAnalyze() {
+  async function handleAnalyze() {
+    setShowConfirm(false)
+    setMessage('')
     if (!sentence.trim()) {
       setMessage('이용 조건을 문장으로 입력해 주세요.')
-      setShowConfirm(false)
       return
     }
 
-    setConditions({
-      sport: 'tennis',
-      district: '전체',
-      date: '',
-      startTime: '09:00',
-      endTime: '11:00',
-    })
+    setLoading(true)
+    try {
+      const [catalog, result] = await Promise.all([
+        getSearchOptions(),
+        parseNaturalLanguage(sentence.trim()),
+      ])
+      if (result.status !== 'ok' && result.status !== 'need_more') {
+        setMessage(result.message || '조건을 추출하지 못했습니다. 직접 입력해 주세요.')
+        return
+      }
 
-    setMessage(
-      '현재 AI API가 연결되지 않았습니다. 아래 조건을 직접 확인하고 수정해 주세요.'
-    )
-    setShowConfirm(true)
+      const parsed = result.conditions
+      const districts = parsed.districts ?? []
+      const questions = Object.values(result.questions)
+      if (districts.length > 1) questions.push('검색할 지역을 한 곳 선택해 주세요.')
+      setOptions(catalog)
+      setConditions({
+        sport: parsed.sport ?? '',
+        district: districts.length === 1 ? districts[0] : districts.length === 0 ? '전체' : '',
+        date: parsed.date ?? '',
+        start_time: parsed.start_time ?? '',
+        end_time: parsed.end_time ?? '',
+        headcount: parsed.headcount,
+        discount_types: parsed.discount_types ?? [],
+      })
+      setMessage(questions.join(' '))
+      setShowConfirm(true)
+    } catch {
+      setMessage('조건을 불러오지 못했습니다. 잠시 후 다시 시도하거나 직접 입력해 주세요.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   // 확인 화면에서 조건 수정
@@ -46,21 +63,26 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
 
   // 수정한 조건을 직접 입력 폼에 전달
   function handleApply() {
+    const sport = options.sports.find(({ code }) => code === conditions.sport)
+    if (!sport || !conditions.district) {
+      setMessage('이용 종목과 지역을 선택해 주세요.')
+      return
+    }
     if (!conditions.date) {
       setMessage('이용 날짜를 선택해 주세요.')
       return
     }
 
     if (
-      !conditions.startTime ||
-      !conditions.endTime ||
-      conditions.startTime >= conditions.endTime
+      !conditions.start_time ||
+      !/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/.test(conditions.end_time) ||
+      conditions.start_time >= conditions.end_time
     ) {
       setMessage('시작 시간과 종료 시간을 확인해 주세요.')
       return
     }
 
-    onApply(conditions)
+    onApply({ ...conditions, sportLabel: sport.label })
     setMessage('')
     setShowConfirm(false)
   }
@@ -87,6 +109,8 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
         <textarea
           id="natural-input"
           rows={4}
+          maxLength={500}
+          disabled={loading}
           value={sentence}
           placeholder="예: 이번 주말에 해운대구에서 테니스를 2시간 이용하고 싶어요."
           onChange={(event) => {
@@ -111,8 +135,9 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
         type="button"
         className="search-button"
         onClick={handleAnalyze}
+        disabled={loading}
       >
-        입력 조건 확인하기
+        {loading ? '이용 조건 확인 중…' : '입력 조건 확인하기'}
       </button>
 
       {message && (
@@ -126,9 +151,15 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
           <h3>조건 확인 및 수정</h3>
 
           <p>
-            AI 분석 결과가 아닌 기본 입력값입니다.
-            실제 이용 조건에 맞게 수정해 주세요.
+            추출된 조건을 확인하고 필요한 항목을 수정해 주세요.
           </p>
+
+          {conditions.headcount != null && <p>추출된 이용 인원은 {conditions.headcount}명입니다.</p>}
+          {conditions.discount_types.length > 0 && (
+            <p>추출된 감면 유형은 {conditions.discount_types.map((code) =>
+              options.discount_types.find((option) => option.code === code)?.label ?? code
+            ).join(', ')}입니다. 이용 조건 입력 화면에서 감면 유형과 대상 인원을 선택해 주세요.</p>
+          )}
 
           <div className="search-fields">
             <div className="field">
@@ -142,7 +173,10 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
                   updateCondition('sport', event.target.value)
                 }
               >
-                <option value="tennis">테니스</option>
+                <option value="">종목 선택</option>
+                {options.sports.map(({ code, label }) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
               </select>
             </div>
 
@@ -157,10 +191,11 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
                   updateCondition('district', event.target.value)
                 }
               >
+                <option value="">지역 선택</option>
                 <option value="전체">부산 전체</option>
-                <option value="해운대구">해운대구</option>
-                <option value="사상구">사상구</option>
-                <option value="서구">서구</option>
+                {options.districts.map((district) => (
+                  <option key={district} value={district}>{district}</option>
+                ))}
               </select>
             </div>
 
@@ -185,9 +220,9 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
               <input
                 id="ai-start"
                 type="time"
-                value={conditions.startTime}
+                value={conditions.start_time}
                 onChange={(event) =>
-                  updateCondition('startTime', event.target.value)
+                  updateCondition('start_time', event.target.value)
                 }
               />
             </div>
@@ -198,10 +233,11 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
               </label>
               <input
                 id="ai-end"
-                type="time"
-                value={conditions.endTime}
+                type="text"
+                placeholder="HH:MM"
+                value={conditions.end_time}
                 onChange={(event) =>
-                  updateCondition('endTime', event.target.value)
+                  updateCondition('end_time', event.target.value)
                 }
               />
             </div>
