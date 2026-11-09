@@ -12,8 +12,10 @@ QUESTIONS = {
     "date": "어느 날짜에 이용하시나요?",
     "start_time": "몇 시에 시작하시나요?",
     "end_time": "몇 시에 끝나나요?",
+    "headcount": "이용 인원을 1명 이상으로 알려 주세요.",
+    "discount_types": "적용할 감면 유형이 있는지 확인해 주세요.",
 }
-OPTIONAL_FIELDS = {"headcount", "discount_types"}
+REQUIRED_FIELDS = ("sport", "districts", "date", "start_time", "end_time")
 DATE_FORMAT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 CLOCK_FORMAT = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]")
 SENSITIVE_PATTERN = re.compile(
@@ -31,7 +33,7 @@ def parse_query(
     """Normalize extracted fields; `ok` still requires user confirmation in the UI."""
     query = unicodedata.normalize("NFKC", query).strip()
     if not query:
-        return _result("need_more", {}, list(QUESTIONS))
+        return _result("need_more", {}, list(REQUIRED_FIELDS))
     if SENSITIVE_PATTERN.search(query):
         return {**_result("llm_failed", {}), "message": "개인정보를 빼고 다시 입력하거나 직접 입력해 주세요."}
 
@@ -44,23 +46,22 @@ def parse_query(
     if not isinstance(raw, Mapping):
         return _result("llm_failed", {})
 
-    conditions = {"source": "llm", "discount_types": []}
+    conditions = {"source": "llm"}
     missing = []
-    for field in QUESTIONS:
+    for field in REQUIRED_FIELDS:
         value = raw.get(field)
-        if value is None or value == [] or (isinstance(value, str) and not value.strip()):
+        if not _valid(field, value, today):
             missing.append(field)
             continue
-        if not _valid(field, value, today):
-            return _result("llm_failed", {})
         conditions[field] = _clean(value)
 
-    for field in OPTIONAL_FIELDS:
+    for field in ("headcount", "discount_types"):
         value = raw.get(field)
-        if value is None:
+        if field == "headcount" and value is None:
             continue
         if not _valid(field, value, today):
-            return _result("llm_failed", {})
+            missing.append(field)
+            continue
         conditions[field] = _clean(value)
 
     start = conditions.get("start_time")
@@ -79,7 +80,11 @@ def _valid(field: str, value: object, today: date) -> bool:
     if field == "sport":
         return isinstance(value, str) and bool(value.strip())
     if field in {"districts", "discount_types"}:
-        return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
+        return (
+            isinstance(value, list)
+            and (field == "discount_types" or bool(value))
+            and all(isinstance(item, str) and item.strip() for item in value)
+        )
     if field == "headcount":
         return type(value) is int and value > 0
     if field in {"start_time", "end_time"}:

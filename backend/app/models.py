@@ -1,6 +1,7 @@
 """규정 데이터와 요청·응답 형식. 규정의 모르는 값은 추정하지 않고 None으로 둔다."""
 
 from datetime import date, datetime, timedelta, timezone
+from datetime import date as CalendarDate
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -200,6 +201,25 @@ class OptionsResponse(BaseModel):
 
 class QueryParseRequest(BaseModel):
     query: str = Field(max_length=500)
+
+
+class ExtractedConditions(BaseModel):
+    sport: str | None = None
+    districts: list[str] | None = None
+    date: CalendarDate | None = None
+    start_time: ClockTime | None = None
+    end_time: BandTime | None = None
+    headcount: int | None = Field(default=None, ge=1)
+    discount_types: list[str] | None = None
+    source: Literal["llm"] | None = None
+
+
+class QueryParseResponse(BaseModel):
+    status: Literal["ok", "need_more", "llm_failed"]
+    conditions: ExtractedConditions
+    missing_fields: list[str]
+    questions: dict[str, str]
+    message: str | None = None
 
 
 # 계산 결과

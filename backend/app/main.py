@@ -8,8 +8,10 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.gemini_extractor import GeminiExtractor, GeminiResponseError
-from app.models import KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest
+from app.gemini_extractor import GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.models import (
+    KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest, QueryParseResponse,
+)
 from app.options import build_options
 from app.query_parser import parse_query
 from app.repository import load_rule_data
@@ -80,7 +82,7 @@ def options() -> OptionsResponse:
     return available_options
 
 
-@app.post("/api/query/parse")
+@app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
 def parse_natural_language(request: QueryParseRequest) -> dict:
     return parse_with_options(request, available_options)
 
@@ -89,17 +91,34 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
     def extract(query, today):
         key = os.getenv("GEMINI_API_KEY", "").strip()
         if not key:
-            raise RuntimeError("Gemini API key is unavailable")
-        provider = GeminiExtractor(
-            key,
-            sport_codes={option.code: option.label for option in catalog.sports},
-            discount_codes={option.code: option.label for option in catalog.discount_types},
-            districts=catalog.districts,
-        )
+            logger.warning("Gemini extraction failed: code=missing_api_key")
+            return None
         try:
-            return provider(query, today)
-        except GeminiResponseError:
-            return provider(query, today)
+            provider = GeminiExtractor(
+                key,
+                sport_codes={option.code: option.label for option in catalog.sports},
+                discount_codes={option.code: option.label for option in catalog.discount_types},
+                districts=catalog.districts,
+                model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip(),
+            )
+        except GeminiResponseError as error:
+            logger.warning("Gemini extraction failed: type=%s code=%s", type(error).__name__, error.code)
+            return None
+
+        for attempt in (1, 2):
+            try:
+                return provider(query, today)
+            except GeminiResponseError as error:
+                logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
+                               type(error).__name__, error.code, attempt)
+            except GeminiHTTPError as error:
+                logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
+                break
+            except Exception as error:
+                # Exception messages may include request text or credentials.
+                logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
+                break
+        return None
 
     result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
     if result["status"] == "llm_failed":

@@ -2,6 +2,7 @@
 
 import http.client
 import json
+import re
 from datetime import date
 
 NULLABLE_TEXT = {"type": ["string", "null"]}
@@ -37,11 +38,18 @@ class GeminiHTTPError(RuntimeError):
 class GeminiResponseError(ValueError):
     """An application-defined diagnostic that contains no response text."""
 
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
 
 class GeminiExtractor:
     def __init__(self, api_key: str, *, sport_codes: dict[str, str], discount_codes: dict[str, str],
-                 districts: list[str]):
+                 districts: list[str], model: str = "gemini-3.5-flash-lite"):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model):
+            raise GeminiResponseError("invalid_model_configuration")
         self.api_key = api_key
+        self.model = model
         self.sport_codes = sport_codes
         self.discount_codes = discount_codes
         self.districts = districts
@@ -74,20 +82,23 @@ class GeminiExtractor:
                 "maxOutputTokens": 1024,
             },
         }
-        connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=20)
+        connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=5)
         try:
-            connection.request("POST", "/v1beta/models/gemini-3.5-flash-lite:generateContent",
+            connection.request("POST", f"/v1beta/models/{self.model}:generateContent",
                                json.dumps(payload).encode("utf-8"),
                                {"x-goog-api-key": self.api_key, "Content-Type": "application/json"})
             response = connection.getresponse()
             if response.status != 200:
                 raise GeminiHTTPError(response.status)
-            data = json.loads(response.read())
+            try:
+                data = json.loads(response.read())
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise GeminiResponseError("invalid_api_json") from error
         finally:
             connection.close()
 
-        candidates = data.get("candidates", [])
-        if len(candidates) != 1:
+        candidates = data.get("candidates") if isinstance(data, dict) else None
+        if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], dict):
             raise GeminiResponseError("candidate_missing_or_unexpected_count")
         candidate = candidates[0]
         reason = candidate.get("finishReason")
@@ -95,14 +106,20 @@ class GeminiExtractor:
             raise GeminiResponseError("output_token_limit")
         if reason != "STOP":
             raise GeminiResponseError("generation_did_not_finish")
-        parts = candidate.get("content", {}).get("parts", [])
+        content = candidate.get("content")
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list) or any(
+            not isinstance(part, dict) or not isinstance(part.get("text", ""), str) for part in parts
+        ):
+            raise GeminiResponseError("invalid_content_parts")
         try:
             conditions = json.loads("".join(part.get("text", "") for part in parts if not part.get("thought")))
         except json.JSONDecodeError as error:
             raise GeminiResponseError("invalid_output_json") from error
         if not isinstance(conditions, dict) or conditions.keys() != PROPERTIES.keys():
             raise GeminiResponseError("unexpected_extraction_fields")
-        if conditions["sport"] is not None and conditions["sport"] not in self.sport_codes:
+        sport = conditions["sport"]
+        if sport is not None and (not isinstance(sport, str) or sport not in self.sport_codes):
             raise GeminiResponseError("unsupported_sport_code")
         for field, allowed in (("districts", self.districts), ("discount_types", self.discount_codes)):
             values = conditions[field]
