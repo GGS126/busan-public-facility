@@ -42,7 +42,7 @@ POST /api/compare
 |---|---|---|
 | `facility_ids` | 예 | 1곳 이상, 등록된 시설 |
 | `conditions.sport` | 예 | `GET /api/options`의 종목 |
-| `conditions.districts` | 아니요 | 시설 검색(API-02)에서 필수, 이 API의 계산에는 사용하지 않음 |
+| `conditions.districts` | 아니요 | 시설 검색(API-02)의 지역 필터. 빈 배열이면 부산 전체. 이 API의 계산에는 사용하지 않음 |
 | `conditions.date` | 예 | 올바른 날짜, 지난 날짜 불가 |
 | `conditions.start_time` | 예 | 올바른 시간 |
 | `conditions.end_time` | 예 | `start_time`보다 늦은 시간, 자정까지 이용은 `24:00` |
@@ -349,4 +349,200 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 | 이용조건 미표기 데이터 | SRS 2.4는 이용조건을 확인하지 못한 데이터의 사용을 금지하고 SDD는 빈 값의 적재를 거부하므로, 확인 결과를 `license`에 기록하는 형식을 결정 |
 | `checklist` 위치 | UI-06은 API-07을 호출하므로 API-06 응답에도 둘지 준비사항 단계에서 결정. 합의 전까지 SDD대로 유지 |
 
-시설 검색·상세·선택지·체크리스트 API(API-02, 03, 05, 07)는 첫 통합 후 SDD를 바탕으로 이 문서의 형식에 맞춰 구체화합니다.
+체크리스트 API(API-07)는 SDD를 바탕으로 이 문서의 형식에 맞춰 구체화합니다. 선택지 API(API-05)는 구현되어 있고, 시설 검색·상세 API는 아래 절에서 제안합니다.
+
+## 시설 검색·상세 API (API-02, API-03)
+
+작성일: 2026-11-09  
+상태: 팀 검토용 제안 (#16)
+
+조건에 맞는 후보 시설 목록(UI-03)과 시설 상세(UI-04)에 필요한 형식입니다(FR-003, FR-004, FR-011, FR-012).
+프론트엔드에 하드코딩된 시설 목록·주소·예약 URL과 `facilitySlots.js`의 회차를 이 API로 대체합니다.
+예시는 PR #12의 실제 시설 정보를 사용합니다.
+
+### 시설 검색 (API-02)
+
+```
+POST /api/facilities/search
+```
+
+```json
+{
+  "conditions": {
+    "sport": "tennis",
+    "districts": [],
+    "date": "2026-11-11",
+    "start_time": "09:00",
+    "end_time": "10:00",
+    "source": "direct"
+  }
+}
+```
+
+`conditions`는 API-06과 같은 형식이고 같은 검증을 거칩니다. 검색에서는 다음 항목만 다르게 다룹니다.
+
+| 항목 | 필수 | 검색에서의 처리 |
+|---|---|---|
+| `sport` | 예 | 이 종목의 요금 규정이 있는 시설만 반환 |
+| `districts` | 아니요 | 지정한 지역의 시설만 반환. 빈 배열이면 부산 전체 |
+| `date` | 예 | 이용일에 유효한 이용시간 규정으로 시간 선택지와 이용 가능 여부 판단 |
+| `start_time`, `end_time` | 아니요 | 둘 다 있으면 시설별로 이용 가능 여부 판단, 없으면 판단 생략. 하나만 있으면 `400` |
+| `headcount`, 감면 항목 | 아니요 | 검색에 쓰지 않음. 검색 → 비교로 같은 조건을 넘길 수 있게 받기만 함 |
+
+종목·지역은 **목록에서 제외하는 조건**입니다. 날짜·시간은 목록에서 빼지 않고 시설별로 판단 결과를 붙입니다.
+시간 때문에 시설이 사라지면 사용자가 "가능한 회차"를 알 수 없기 때문입니다(결과 없음 시 조건 완화 안내, UC-003).
+
+#### 응답
+
+```json
+{
+  "results": [
+    {
+      "facility_id": "busan_haeundae_arboretum_tennis",
+      "name": "해운대수목원 테니스장",
+      "sport": "tennis",
+      "district": "해운대구",
+      "address": "부산 해운대구 석대동 26",
+      "time_check": {
+        "status": "not_eligible",
+        "review_items": [
+          {
+            "code": "slot_mismatch",
+            "target": "time",
+            "reason": "정해진 회차로만 예약할 수 있습니다. 가능한 회차: 07:00~09:00, 09:00~11:00, …",
+            "source_id": "busan_reserve_619_2026h2"
+          }
+        ]
+      },
+      "time_options": {
+        "selection": "fixed_slot",
+        "slots": [
+          { "start_time": "07:00", "end_time": "09:00" },
+          { "start_time": "09:00", "end_time": "11:00" }
+        ],
+        "allowed_minutes": [],
+        "open_time": null,
+        "close_time": null,
+        "source_id": "busan_reserve_619_2026h2"
+      },
+      "source_id": "busan_reserve_619_2026h2"
+    }
+  ],
+  "alternatives": null,
+  "sources": [
+    {
+      "source_id": "busan_reserve_619_2026h2",
+      "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=531&progrmSn=619",
+      "checked_at": "2026-11-06",
+      "license": null
+    }
+  ]
+}
+```
+
+| `time_check.status` | 의미 |
+|---|---|
+| `eligible` | 규정상 이 시간에 이용 가능. 실제 잔여석은 확인하지 않음 |
+| `not_eligible` | 규정상 이 시간에 이용 불가. 사유는 API-06의 `slot_mismatch`, `duration_not_allowed`, `outside_hours`와 같음 |
+| `unknown` | 이용일에 유효한 이용시간 규정이 없거나, 요청에 시간이 없어 판단하지 않음 |
+
+- 정렬은 `eligible` → `unknown` → `not_eligible` 순서이고, 같은 상태 안에서는 시설명 순서입니다.
+- `time_options`는 이용일에 유효한 이용시간 규정입니다. 규정이 없으면 `null`입니다. 프론트엔드는 이 값으로 회차·시간 선택지를 그립니다.
+  - `fixed_slot`: `slots` 중에서 선택
+  - `flexible`: `open_time`~`close_time` 안에서 `allowed_minutes` 길이로 선택
+- 이용 가능 여부는 **규정상 판단**이며, 실제 예약 가능 여부(잔여석)는 제공하지 않습니다. 화면에 공식 예약 사이트 확인 안내를 함께 표시합니다.
+- 요금은 계산하지 않습니다. 요금은 비교할 시설을 고른 뒤 API-06으로 계산합니다.
+
+#### 결과 없음
+
+종목·지역에 맞는 시설이 없으면 `200`과 빈 `results`를 반환합니다.
+지역을 지정했는데 결과가 없으면, 같은 종목의 시설이 있는 다른 지역을 `alternatives`로 안내합니다.
+
+```json
+{
+  "results": [],
+  "alternatives": { "districts": ["사상구", "서구", "해운대구"] },
+  "sources": []
+}
+```
+
+종목 자체가 등록되지 않았으면 `GET /api/options`에 없는 값이므로 API-06처럼 `400 invalid_option`으로 응답합니다.
+
+### 시설 상세 (API-03)
+
+```
+GET /api/facilities/{facility_id}?date=2026-11-11
+```
+
+`date`는 선택이며, 없으면 오늘(한국 시간) 기준으로 유효한 규정을 보여 줍니다. 지난 날짜는 `400`입니다.
+
+```json
+{
+  "facility_id": "busan_gudeok_stadium_tennis",
+  "name": "구덕운동장 테니스장",
+  "sports": ["tennis"],
+  "district": "서구",
+  "address": "부산 서구 망양로 57 (서대신동3가, 구덕운동장)",
+  "phone": "051-602-2215 / 051-602-2201",
+  "operating_hours": { "open_time": "08:00", "close_time": "22:00", "note": "연중무휴(정기 휴무일 없음)" },
+  "closure_note": "연중무휴(명절 등 별도 공지일 제외)",
+  "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
+  "time_options": [
+    {
+      "sport": "tennis",
+      "selection": "flexible",
+      "slots": [],
+      "allowed_minutes": [60, 120],
+      "open_time": "08:00",
+      "close_time": "22:00",
+      "source_id": "busan_reserve_472_2026winter"
+    }
+  ],
+  "source_id": "busan_reserve_472_2026winter",
+  "sources": [
+    {
+      "source_id": "busan_reserve_472_2026winter",
+      "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
+      "checked_at": "2026-11-06",
+      "license": null
+    }
+  ]
+}
+```
+
+- 모르는 값은 `null`이며 화면에는 '확인 필요'로 표시합니다(FR-004).
+- `booking_url`이 `null`이면 공식 예약 링크 대신 '공식 예약 링크 확인 필요'를 표시합니다(FR-012).
+- 등록되지 않은 시설은 `404 facility_not_found`입니다.
+- 요금·예약·취소 조건은 API-06이 맡고, 상세 API에는 넣지 않습니다.
+
+### 필요한 데이터
+
+| 항목 | PR #12 DB | 상태 |
+|---|---|---|
+| `name`, `address`, `phone`, `booking_url` | `facilities` | 있음 |
+| `operating_hours` | `facilities.open_time`, `close_time`, `holiday_note` | 있음 |
+| `closure_note` | `reservation_rules.closure_note` | 있음 |
+| `time_options` | `time_selection_policies`, `pricing_rules`의 회차 | 있음. 백엔드 이용시간 규정(#19)으로 변환 |
+| `district` | 없음 | **추가 필요**. 지역 필터와 `/api/options`의 지역 선택지에 사용 |
+| `sources[].license` | 없음 | 확인 필요. 없으면 `null` |
+
+시설 데이터 항목의 `reservation_url`은 DB와 프론트엔드에 맞춰 `booking_url`로 부릅니다.
+
+### SDD와 다른 점
+
+| 항목 | 제안 | 이유 |
+|---|---|---|
+| 검색 요청 | `{"conditions": {...}}` | API-06과 같은 조건 형식을 재사용 |
+| `districts` | 선택 항목, 빈 배열이면 부산 전체 | 직접 입력 화면의 '부산 전체' 선택과 자연어 입력에서 지역을 말하지 않은 경우 |
+| 시간 판단 | 목록에서 빼지 않고 `time_check`로 표시 | 결과 없음 대신 가능한 회차를 안내(UC-003 대안 흐름) |
+| `time_options` | 검색·상세 응답에 추가 | 프론트엔드의 하드코딩된 회차 데이터 대체(#16) |
+| 상세 `date` 파라미터 | 추가 | 동절기·하절기처럼 기간별로 다른 회차를 보여 줌 |
+| `alternatives` | 결과 없음 응답에 추가 | 조건 완화 안내(UC-003) |
+
+### 확인할 내용
+
+| 담당 | 확인할 내용 |
+|---|---|
+| 김승일 | `time_check`·`time_options`로 시설 목록과 회차 선택 화면을 그릴 수 있는지, `alternatives` 안내 문구 |
+| 왕연호 | `district` 컬럼 추가, `license`(이용허락범위) 기록 방법 |
+| 김규성 | 자연어 추출에서 지역이 없을 때 `districts: []`(부산 전체)로 넘기는 방식 |
