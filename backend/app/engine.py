@@ -30,6 +30,10 @@ class NeedsReview(Exception):
 
 
 def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
+    unavailable = _check_time(rules, conditions)
+    if unavailable is not None:
+        return unavailable
+
     items: list[FeeItem] = []
     reviews: list[ReviewItem] = []
 
@@ -74,6 +78,51 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
         expected_refund=refund,
         net_cost_after_refund=due - refund,
         review_items=[],
+    )
+
+
+def _check_time(rules: FacilityRules, conditions: Conditions) -> FeeResult | None:
+    """규정상 예약할 수 없는 시간이면 요금을 계산하지 않고 사유를 돌려준다.
+
+    이용일에 유효한 이용시간 규정이 없으면 제한을 확인하지 않고, 요금 규정이 있는지로 판단한다.
+    """
+    policies = [
+        p for p in rules.time_policies if p.sport == conditions.sport and p.in_effect(conditions.date)
+    ]
+    if not policies:
+        return None
+    if len(policies) > 1:
+        return _not_calculated("needs_review", "rule_conflict", "이용시간 규정이 충돌합니다.", policies[0].source_id)
+
+    policy = policies[0]
+    start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
+    if policy.open_time is not None and (
+        start < to_minutes(policy.open_time) or end > to_minutes(policy.close_time)
+    ):
+        reason = f"운영시간({policy.open_time}~{policy.close_time}) 안에서 선택해 주세요."
+        return _not_calculated("not_eligible", "outside_hours", reason, policy.source_id)
+    if policy.selection == "fixed_slot":
+        slots = [(slot.start_time, slot.end_time) for slot in policy.slots]
+        if (conditions.start_time, conditions.end_time) not in slots:
+            choices = ", ".join(f"{slot_start}~{slot_end}" for slot_start, slot_end in slots)
+            reason = f"정해진 회차로만 예약할 수 있습니다. 가능한 회차: {choices}"
+            return _not_calculated("not_eligible", "slot_mismatch", reason, policy.source_id)
+    elif end - start not in policy.allowed_minutes:
+        choices = ", ".join(f"{minutes}분" for minutes in policy.allowed_minutes)
+        reason = f"이용 시간은 {choices} 중에서 선택할 수 있습니다."
+        return _not_calculated("not_eligible", "duration_not_allowed", reason, policy.source_id)
+    return None
+
+
+def _not_calculated(status: str, code: str, reason: str, source_id: str) -> FeeResult:
+    return FeeResult(
+        status=status,
+        items=[],
+        total=None,
+        payment_due=None,
+        expected_refund=None,
+        net_cost_after_refund=None,
+        review_items=[ReviewItem(code=code, target="time", reason=reason, source_id=source_id)],
     )
 
 
