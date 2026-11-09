@@ -94,6 +94,32 @@ with tempfile.TemporaryDirectory() as tmp:
  except ValueError:pass
  else:raise AssertionError('배치 중복 적재 허용')
  assert hashlib.sha256(db.read_bytes()).hexdigest()==hash_before
+ # 회귀 테스트: 구분자 없는 ISO 날짜(YYYYMMDD)도 조회·저장 시 YYYY-MM-DD로 정규화한다.
+ fac='busan_haeundae_arboretum_tennis'
+ for value in ('20261109', '2026-11-09'):
+  assert q.pricing_rules(db,fac,value,False)==q.pricing_rules(db,fac,'2026-11-09',False)
+  assert q.discounts(db,fac,value)==q.discounts(db,fac,'2026-11-09')
+  assert q.refund_rules(db,fac,value)==q.refund_rules(db,fac,'2026-11-09')
+  assert q.facility_options(db,fac,value)==q.facility_options(db,fac,'2026-11-09')
+  quote=q.quote(db,fac,value,'09:00','11:00',False)
+  assert quote['status']=='priced' and quote['total_won']==8000 and quote['date']=='2026-11-09',quote
+ normalized=json.loads((R/'seed.json').read_text(encoding='utf-8'))
+ normalized['source']['checked_on']=normalized['source']['checked_on'].replace('-','')
+ normalized['rule_set']['effective_from']='20260701'
+ normalized['rule_set']['effective_to']='20261231'
+ normalized_path=tmp/'date_without_separators.json'
+ normalized_path.write_text(json.dumps(normalized,ensure_ascii=False),encoding='utf-8')
+ normalized_db=tmp/'normalized_dates.sqlite3'
+ load.load_many([normalized_path],normalized_db)
+ with closing(sqlite3.connect(normalized_db)) as c:
+  assert c.execute('SELECT effective_from,effective_to FROM rule_sets').fetchone()==('2026-07-01','2026-12-31')
+  assert c.execute('SELECT checked_on FROM sources').fetchone()[0]==normalized['source']['checked_on'][:4]+'-'+normalized['source']['checked_on'][4:6]+'-'+normalized['source']['checked_on'][6:]
+ assert q.quote(normalized_db,fac,'20261109','09:00','11:00',False)['total_won']==8000
+ for invalid in ('20261309','not-a-date'):
+  try:q.pricing_rules(db,fac,invalid,False)
+  except ValueError:pass
+  else:raise AssertionError('잘못된 조회 날짜 수락: '+invalid)
+ print('PASS: YYYYMMDD 날짜 조회·저장 정규화, 구분자 있는 날짜와 동일 결과, 잘못된 날짜 차단')
  print('PASS: 규정 ID 변경 시 기간 중복 차단(고정회차/시간제), 동일 ID 갱신, 인접 기간, 원본 DB 보존')
  print('PASS: 시간제 시설 2곳 추가 시 PK 충돌 없음, 평일/주말 1시간 요금 분리 확인')
  print('PASS: JSON 3개 재적재, DB 무결성, 요금 계산 8건, 잘못된 JSON 4건 차단 및 DB 원본 보존')

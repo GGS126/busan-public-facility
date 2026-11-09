@@ -6,6 +6,15 @@ import sqlite3
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 
+def normalize_use_date(value):
+    """허용되는 날짜 입력을 SQLite 비교용 YYYY-MM-DD 형식으로 통일한다."""
+    if not isinstance(value, str):
+        raise ValueError('이용일은 날짜 문자열이어야 합니다')
+    try:
+        return dt.date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise ValueError('이용일 날짜 형식 오류') from exc
+
 def fetch(db,sql,params=()):
     con=sqlite3.connect(f'file:{Path(db).resolve()}?mode=ro',uri=True)
     con.row_factory=sqlite3.Row
@@ -16,7 +25,7 @@ def facilities(db):
     return fetch(db,'SELECT id,name,facility_type,address,booking_url FROM facilities ORDER BY name')
 
 def pricing_rules(db,facility_id,use_date,is_weekend_or_holiday):
-    dt.date.fromisoformat(use_date)
+    use_date=normalize_use_date(use_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('is_weekend_or_holiday는 bool 필수')
     col='weekend_holiday_base_won' if is_weekend_or_holiday else 'weekday_base_won'
     return fetch(db,f'''SELECT p.id AS price_rule_id,p.rule_set_id,p.selection_type,p.slot_no,p.start_time,p.end_time,
@@ -37,20 +46,20 @@ def duration_prices(db,facility_id,use_date):
     return [p for p in pricing_rules(db,facility_id,use_date,False) if p['selection_type']=='flexible_interval']
 
 def discounts(db,facility_id,use_date):
-    dt.date.fromisoformat(use_date)
+    use_date=normalize_use_date(use_date)
     return fetch(db,'''SELECT category_id,category_name,percent,basis,applies_to,excluded_from,
     processing,deadline,documents,source_url,checked_on
     FROM v_facility_discounts WHERE facility_id=? AND ? BETWEEN effective_from AND effective_to
     ORDER BY category_name''',(facility_id,use_date))
 
 def refund_rules(db,facility_id,use_date):
-    dt.date.fromisoformat(use_date)
+    use_date=normalize_use_date(use_date)
     return fetch(db,'''SELECT rr.reason,rr.days_before_min,rr.days_before_max,rr.rate_percent,
     rr.channel,rr.condition,rr.status FROM refund_rules rr JOIN rule_sets r ON r.id=rr.rule_set_id
     WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to''',(facility_id,use_date))
 
 def facility_options(db,facility_id,use_date):
-    dt.date.fromisoformat(use_date)
+    use_date=normalize_use_date(use_date)
     records=fetch(db,'''SELECT o.*,c.name AS option_name FROM facility_options o
         JOIN option_categories c ON c.id=o.option_id JOIN rule_sets r ON r.id=o.rule_set_id
         WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to
@@ -95,7 +104,7 @@ def optional_lighting_quote(db,facility_id,use_date,lighting_minutes):
 
 def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0):
     # 동일 요청 형식으로 고정 회차와 자유 선택의 기본요금 및 조명료를 계산.
-    dt.date.fromisoformat(use_date)
+    use_date=normalize_use_date(use_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('주말·공휴일 판정은 bool이어야 합니다')
     if type(optional_lighting_minutes) is not int or optional_lighting_minutes<0: raise ValueError('선택 조명 이용시간 오류')
     def parse(t,allow_24=False):

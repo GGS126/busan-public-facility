@@ -105,9 +105,11 @@ def validate_shared(d):
                        ('rule_set.effective_from', rule_set['effective_from']),
                        ('rule_set.effective_to', rule_set['effective_to'])):
         try:
-            dt.date.fromisoformat(value)
-        except ValueError as exc:
+            normalized = dt.date.fromisoformat(value).isoformat()
+        except (ValueError, TypeError) as exc:
             raise ValueError(f'{key} 날짜 오류') from exc
+        section, field = key.split('.')
+        d[section][field] = normalized
     if rule_set['effective_from'] > rule_set['effective_to']:
         raise ValueError('규정 적용기간 순서 오류')
     if source['verification_level'] not in ('official_page_verified', 'user_transcribed_official'):
@@ -155,7 +157,7 @@ def validate(d):
         if not isinstance(f.get(k),str) or not f[k].strip(): raise ValueError(f'facility.{k} 누락')
     for k in ('id','url','title','checked_on'):
         if not isinstance(s.get(k),str) or not s[k].strip(): raise ValueError(f'source.{k} 누락')
-    for v in (s['checked_on'],r['effective_from'],r['effective_to']): dt.date.fromisoformat(v)
+    # validate_shared()에서 날짜 문자열을 ISO 형식으로 정규화했다.
     if r['effective_from']>r['effective_to']: raise ValueError('규정 기간 역전')
     if not isinstance(d['slots'],list) or not d['slots']: raise ValueError('시간대 최소 1개 필요')
     seen=set()
