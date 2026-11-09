@@ -1,4 +1,4 @@
-from test_engine import base_rule, conditions, discount_rule, facility
+from test_engine import MONDAY, base_rule, conditions, discount_rule, facility
 
 from app.compare import compare_facility
 
@@ -62,3 +62,15 @@ def test_no_discount_selected_gives_empty_checklist():
 
     assert result.checklist == []
     assert result.checklist_review_items == []
+
+
+def test_holiday_source_listed_when_date_is_holiday():
+    result = compare_facility(facility(holidays=[MONDAY]), conditions(day=MONDAY))
+
+    assert "S-HOLIDAY" in source_ids(result)
+
+
+def test_holiday_source_not_listed_on_ordinary_day():
+    result = compare_facility(facility(), conditions(day=MONDAY))
+
+    assert "S-HOLIDAY" not in source_ids(result)

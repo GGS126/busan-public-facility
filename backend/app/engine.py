@@ -14,6 +14,7 @@ from app.models import (
     FeeItem,
     FeeResult,
     FeeRule,
+    HolidayCalendar,
     ReviewItem,
     to_minutes,
 )
@@ -77,11 +78,14 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
     )
 
 
-def _day_types(day: date, holidays: list[date]) -> set[str]:
+def _day_type_candidates(day: date, calendar: HolidayCalendar | None) -> list[set[str]]:
+    """이용일의 요일 구분. 공휴일 목록에 없는 기간이면 공휴일인 경우와 아닌 경우를 모두 돌려준다."""
     weekend = day.weekday() >= 5
-    if day in holidays:
-        return {"holiday", "weekend"} if weekend else {"holiday"}
-    return {"weekend"} if weekend else {"weekday"}
+    plain = {"weekend"} if weekend else {"weekday"}
+    holiday = {"holiday", "weekend"} if weekend else {"holiday"}
+    if calendar is None or not calendar.covers(day):
+        return [plain, holiday]
+    return [holiday] if calendar.is_holiday(day) else [plain]
 
 
 def _active_fee_rules(rules: FacilityRules, conditions: Conditions, fee_type: str) -> list[FeeRule]:
@@ -91,16 +95,22 @@ def _active_fee_rules(rules: FacilityRules, conditions: Conditions, fee_type: st
     이용일에 유효하지 않은 규정은 유효한 규정이 그 시간을 대신하지 못할 때만 확인 필요로 보낸다.
     """
     start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
-    day_types = _day_types(conditions.date, rules.holidays)
-    relevant = [
-        r
-        for r in rules.fee_rules
-        if r.type == fee_type
-        and r.sport == conditions.sport
-        and (r.months is None or conditions.date.month in r.months)
-        and (r.day_types is None or day_types & set(r.day_types))
-        and (r.time_from is None or (to_minutes(r.time_from) < end and start < to_minutes(r.time_to)))
+    selections = [
+        [
+            r
+            for r in rules.fee_rules
+            if r.type == fee_type
+            and r.sport == conditions.sport
+            and (r.months is None or conditions.date.month in r.months)
+            and (r.day_types is None or day_types & set(r.day_types))
+            and (r.time_from is None or (to_minutes(r.time_from) < end and start < to_minutes(r.time_to)))
+        ]
+        for day_types in _day_type_candidates(conditions.date, rules.holiday_calendar)
     ]
+    # 공휴일 여부에 따라 적용 규정이 달라질 때만 확인 필요로 보낸다.
+    if any(selection != selections[0] for selection in selections):
+        raise NeedsReview("rule_missing", "이용일이 공휴일인지 확인할 수 없습니다.")
+    relevant = selections[0]
 
     active = [r for r in relevant if r.in_effect(conditions.date)]
     for rule in active:
