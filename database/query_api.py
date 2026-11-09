@@ -31,8 +31,8 @@ def pricing_rules(db,facility_id,use_date,is_weekend_or_holiday):
     return fetch(db,f'''SELECT p.id AS price_rule_id,p.rule_set_id,p.selection_type,p.slot_no,p.start_time,p.end_time,
        p.duration_minutes,p.{col} AS base_fee_won,p.mandatory_light_won,
        p.{col}+p.mandatory_light_won AS initial_payment_won,
-       ts.available_start_time,ts.available_end_time,ts.step_minutes,ts.daily_limit_minutes,
-       s.url AS source_url,s.checked_on
+       ts.available_start_time,ts.available_end_time,ts.min_minutes,ts.max_minutes,ts.step_minutes,ts.daily_limit_minutes,
+       s.id AS source_id,s.url AS source_url,s.checked_on
        FROM pricing_rules p JOIN rule_sets r ON r.id=p.rule_set_id
        JOIN sources s ON s.id=r.source_id
        JOIN time_selection_policies ts ON ts.rule_set_id=r.id
@@ -122,14 +122,36 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
     if typ=='fixed_slot':
         matches=[r for r in prices if r['start_time']==start_time and r['end_time']==end_time]
     else:
+        # 자유시간형은 시간 정책을 요금 규칙 존재 여부와 독립적으로 확인한다.
+        # 요금 규칙이 없을 뿐인 60/90분은 무조건 이용 불가로 처리하지 않는다.
+        policy=prices[0]
+        min_start=parse(policy['available_start_time']) if policy['available_start_time'] else 0
+        max_end=parse(policy['available_end_time'],True) if policy['available_end_time'] else 1440
+        step=policy['step_minutes']
+        if (start<min_start or end>max_end
+            or (step is not None and (start-min_start)%step)
+            or (policy['min_minutes'] is not None and duration<policy['min_minutes'])
+            or (policy['max_minutes'] is not None and duration>policy['max_minutes'])
+            or (policy['daily_limit_minutes'] is not None and duration>policy['daily_limit_minutes'])):
+            return {'status':'invalid_time','reason':'해당 시설의 이용시간 정책에 맞지 않는 시간'}
         matches=[r for r in prices if r['duration_minutes']==duration]
-        if matches:
-            p=matches[0]
-            min_start=parse(p['available_start_time']) if p['available_start_time'] else 0
-            max_end=parse(p['available_end_time'],True) if p['available_end_time'] else 1440
-            step=p['step_minutes']
-            if start<min_start or end>max_end or (step is not None and (start-min_start)%step):matches=[]
-            if p['daily_limit_minutes'] is not None and duration>p['daily_limit_minutes']:matches=[]
+        if not matches:
+            return {
+                'status':'needs_review',
+                'facility_id':facility_id,'date':use_date,
+                'start_time':start_time,'end_time':end_time,
+                'duration_minutes':duration,
+                'base_fee_won':None,'lighting_fee_won':None,'total_won':None,
+                'payment_due':None,'expected_refund':None,'net_cost_after_refund':None,
+                'review_items':[{
+                    'code':'rule_missing','target':'base',
+                    'reason':'해당 이용시간의 공식 기본요금 규정이 확인되지 않아 요금을 계산할 수 없습니다. 이용 가능 여부도 공식 예약 규정으로 확인해야 합니다.',
+                    'source_id':policy['source_id'],
+                    'source_url':policy['source_url'],
+                    'checked_on':policy['checked_on']
+                }],
+                'booking_availability_verified':False
+            }
     if not matches:return {'status':'invalid_time','reason':'해당 시설에서 선택할 수 없는 시간 또는 이용시간'}
     if len(matches)!=1:raise ValueError('중복된 요금 규정')
     p=matches[0];light=p['mandatory_light_won']; light_minutes=0

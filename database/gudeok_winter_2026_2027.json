@@ -28,11 +28,11 @@
     "reference_minutes": 120,
     "weekday_fee_won": 8000,
     "weekend_holiday_fee_won": 8000,
-    "shorter_use_policy": "proportional",
+    "shorter_use_policy": null,
     "extra_use_policy": "not_allowed",
     "basis": "one_court_2hours",
-    "note": "1면 1시간 4,000원, 2시간 8,000원(평일·주말·공휴일 동일). 1인 하루 최대 2시간.",
-    "hourly_fee_won": 4000
+    "note": "공식 안내상 1면/2시간 기준 8,000원(평일·주말·공휴일 동일). 1시간·90분 요금 및 시간 선택 가능 여부는 별도 확인 필요. 임의 시간 비례 계산 금지.",
+    "hourly_fee_won": null
   },
   "time_policy": {
     "selection_type": "flexible_interval",
@@ -43,7 +43,7 @@
     "step_minutes": null,
     "daily_limit_minutes": 120,
     "status": "confirmed",
-    "note": "고정 회차 없이 08:00~22:00 내에서 시작시간을 선택하며, 1시간 또는 2시간 예약 가능. 1인 1일 최대 2시간."
+    "note": "08:00~22:00 운영, 1인 1일 최대 2시간. 예약 시작 간격 및 1시간·90분 단위 선택 가능 여부는 공식 안내에서 확인되지 않음."
   },
   "discounts_pending": [],
   "refunds": [

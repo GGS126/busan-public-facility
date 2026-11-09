@@ -12,12 +12,21 @@ with tempfile.TemporaryDirectory() as tmp:
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
   assert c.execute('select count(*) from facilities').fetchone()[0]==3
-  assert c.execute('select count(*) from pricing_rules').fetchone()[0]==14
+  assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
- checks=[('busan_haeundae_arboretum_tennis','09:00','11:00',False,0,8000),('busan_haeundae_arboretum_tennis','20:00','22:00',False,0,28000),('busan_haeundae_arboretum_tennis','18:00','20:00',False,80,21200),('busan_samrak_ecopark_tennis','08:00','10:00',False,70,26000),('busan_samrak_ecopark_tennis','08:00','10:00',True,0,9000),('busan_gudeok_stadium_tennis','10:00','11:00',False,0,4000),('busan_gudeok_stadium_tennis','17:00','19:00',False,0,18000),('busan_gudeok_stadium_tennis','18:00','20:00',False,0,28000)]
+ checks=[('busan_haeundae_arboretum_tennis','09:00','11:00',False,0,8000),('busan_haeundae_arboretum_tennis','20:00','22:00',False,0,28000),('busan_haeundae_arboretum_tennis','18:00','20:00',False,80,21200),('busan_samrak_ecopark_tennis','08:00','10:00',False,70,26000),('busan_samrak_ecopark_tennis','08:00','10:00',True,0,9000),('busan_gudeok_stadium_tennis','17:00','19:00',False,0,18000),('busan_gudeok_stadium_tennis','18:00','20:00',False,0,28000)]
  for fac,start,end,week,light,expected in checks:
   actual=q.quote(db,fac,'2026-11-09',start,end,week,light)
   assert actual['status']=='priced' and actual['total_won']==expected,(fac,actual,expected)
+ # 공식 근거가 없는 1시간·90분 요금은 금액을 만들지 않고 확인 필요로 응답한다.
+ for start,end in [('10:00','11:00'),('10:00','11:30')]:
+  missing=q.quote(db,'busan_gudeok_stadium_tennis','2026-11-09',start,end,False)
+  assert missing['status']=='needs_review' and missing['total_won'] is None,missing
+  assert missing['review_items'][0]['code']=='rule_missing',missing
+  assert missing['review_items'][0]['source_url'].startswith('https://reserve.busan.go.kr/'),missing
+ assert q.quote(db,'busan_gudeok_stadium_tennis','2026-11-09','10:00','13:00',False)['status']=='invalid_time'
+ with closing(sqlite3.connect(db)) as c:
+  assert c.execute("SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id='gudeok_tennis_winter_2026_2027' AND duration_minutes=60").fetchone()[0]==0
  before=hashlib.sha256(db.read_bytes()).hexdigest()
  for section,key,bad in [('source','checked_on','2026-13-55'),('reservation','online_open_days_before',-1),('facility','name',''),('rule_set','effective_from','2028-01-01')]:
   mutated=json.loads((R/'seed.json').read_text(encoding='utf-8'))
@@ -34,6 +43,7 @@ with tempfile.TemporaryDirectory() as tmp:
  first['pricing']['weekday_fee_won']=8000
  first['pricing']['weekend_holiday_fee_won']=12000
  first['pricing']['hourly_fee_won']=4000
+ first['pricing']['hourly_weekend_holiday_fee_won']=6000
  second=json.loads(json.dumps(first,ensure_ascii=False))
  second['facility']['id']='test_other_flexible_facility'
  second['facility']['name']='추가 시간제 시설(테스트 전용)'
@@ -119,7 +129,40 @@ with tempfile.TemporaryDirectory() as tmp:
   try:q.pricing_rules(db,fac,invalid,False)
   except ValueError:pass
   else:raise AssertionError('잘못된 조회 날짜 수락: '+invalid)
+ # 회귀 테스트: JSON time_policy의 NULL/최소/최대/단위 값을 하드코딩 없이 저장·조회한다.
+ with closing(sqlite3.connect(db)) as c:
+  actual=c.execute("SELECT min_minutes,max_minutes,step_minutes,daily_limit_minutes FROM time_selection_policies WHERE rule_set_id=?",(base['rule_set']['id'],)).fetchone()
+  assert actual==(None,120,None,120),actual
+ flexible=json.loads((R/'gudeok_winter_2026_2027.json').read_text(encoding='utf-8'))
+ flexible['time_policy'].update(min_minutes=60,max_minutes=180,step_minutes=30,daily_limit_minutes=180)
+ policy_file=tmp/'flexible_30min.json'
+ policy_file.write_text(json.dumps(flexible,ensure_ascii=False),encoding='utf-8')
+ policy_db=tmp/'policy.sqlite3'
+ load.load_many([policy_file],policy_db)
+ with closing(sqlite3.connect(policy_db)) as c:
+  got=c.execute('SELECT min_minutes,max_minutes,step_minutes,daily_limit_minutes FROM time_selection_policies').fetchone()
+  assert got==(60,180,30,180),got
+  assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+ fac=flexible['facility']['id']
+ assert q.quote(policy_db,fac,'2026-11-09','08:30','10:30',False)['total_won']==8000
+ assert q.quote(policy_db,fac,'2026-11-09','08:15','10:15',False)['status']=='invalid_time'
+ # 3시간 허용 정책이 저장되어도 3시간 가격이 없으므로 요금을 지어내지 않는다.
+ assert q.quote(policy_db,fac,'2026-11-09','08:30','11:30',False)['status']!='priced'
+ # 최소 이용시간이 90분이면 1시간 요금행이 있어도 선택할 수 없어야 한다.
+ flexible['time_policy']['min_minutes']=90
+ policy_file.write_text(json.dumps(flexible,ensure_ascii=False),encoding='utf-8')
+ load.load_many([policy_file],policy_db)
+ assert q.quote(policy_db,fac,'2026-11-09','08:30','09:30',False)['status']=='invalid_time'
+ for bad in (0,-30,'30',True):
+  flexible['time_policy']['step_minutes']=bad
+  policy_file.write_text(json.dumps(flexible,ensure_ascii=False),encoding='utf-8')
+  pristine=hashlib.sha256(policy_db.read_bytes()).hexdigest()
+  try:load.load_many([policy_file],policy_db)
+  except ValueError:pass
+  else:raise AssertionError('잘못된 시간 단위 수락: '+repr(bad))
+  assert hashlib.sha256(policy_db.read_bytes()).hexdigest()==pristine
+ print('PASS: JSON 시간 정책 최소/최대/단위 저장, 30분 시작, NULL 보존, 잘못된 값 차단')
  print('PASS: YYYYMMDD 날짜 조회·저장 정규화, 구분자 있는 날짜와 동일 결과, 잘못된 날짜 차단')
  print('PASS: 규정 ID 변경 시 기간 중복 차단(고정회차/시간제), 동일 ID 갱신, 인접 기간, 원본 DB 보존')
  print('PASS: 시간제 시설 2곳 추가 시 PK 충돌 없음, 평일/주말 1시간 요금 분리 확인')
- print('PASS: JSON 3개 재적재, DB 무결성, 요금 계산 8건, 잘못된 JSON 4건 차단 및 DB 원본 보존')
+ print('PASS: JSON 3개 재적재, DB 무결성, 확인된 요금 계산 7건 및 미확인 요금 2건 확인 필요, 잘못된 JSON 4건 차단 및 DB 원본 보존')

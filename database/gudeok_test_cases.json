@@ -29,11 +29,11 @@
       "start": "10:00",
       "end": "11:00",
       "duration_minutes": 60,
-      "base_won": 4000,
-      "lighting_won": 0,
-      "total_won": 4000,
-      "status": "confirmed_base_price",
-      "basis": "사용자가 공식 사이트에서 직접 확인한 1면 1시간 기본요금 4,000원."
+      "base_won": null,
+      "lighting_won": null,
+      "total_won": null,
+      "status": "needs_review",
+      "basis": "공식 안내는 2시간 기준 8,000원만 명시. 1시간 기본요금과 그에 따른 감면액은 확인 필요."
     },
     {
       "id": "gudeok_discount",
@@ -86,11 +86,23 @@
     {
       "id": "gudeok_holder_eligible_one_hour",
       "reservation_holder_eligible": true,
-      "base_won": 4000,
-      "lighting_won": 0,
-      "refund_discount_won": 2000,
-      "net_won": 2000,
-      "basis": "1시간 기본 요금 4,000원의 50% 반환"
+      "base_won": null,
+      "lighting_won": null,
+      "refund_discount_won": null,
+      "net_won": null,
+      "basis": "공식 안내는 2시간 기준 8,000원만 명시. 1시간 기본요금과 그에 따른 감면액은 확인 필요.",
+      "status": "needs_review"
+    },
+    {
+      "id": "gudeok_90_minutes_unconfirmed",
+      "start": "10:00",
+      "end": "11:30",
+      "duration_minutes": 90,
+      "base_won": null,
+      "lighting_won": null,
+      "total_won": null,
+      "status": "needs_review",
+      "basis": "90분 공식 기본요금 및 예약 가능 여부 미확인. 2시간 요금을 비례 적용하지 않음."
     }
   ]
 }

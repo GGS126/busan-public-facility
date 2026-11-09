@@ -270,31 +270,43 @@ def load_duration(data_path,db_path):
  for k in ('reference_minutes','weekday_fee_won','weekend_holiday_fee_won'):
   if type(p[k])!=int or p[k]<0:raise ValueError('요금/시간 유효성 오류: '+k)
  if p['reference_minutes']<=0:raise ValueError('요금 기준 시간 오류')
- if type(p.get('hourly_fee_won')) is not int or p['hourly_fee_won'] < 0:
-  raise ValueError('1시간 평일 기본요금 오류')
+ # 1시간 요금은 공식 근거가 있을 때에만 저장한다.
+ # 2시간 요금의 절반을 임의로 1시간 요금으로 만들어서는 안 된다.
+ hourly=p.get('hourly_fee_won')
+ weekend_hourly=p.get('hourly_weekend_holiday_fee_won')
+ if hourly is not None:
+  if type(hourly) is not int or hourly < 0:
+   raise ValueError('1시간 평일 요금 오류')
+  # 주말이 평일과 같은 요금이라는 근거가 있어도 1시간 요금 자체의
+  # 존재가 먼저 확인되어야 한다.
+  if weekend_hourly is None and p['weekday_fee_won']==p['weekend_holiday_fee_won']:
+   weekend_hourly=hourly
+  if type(weekend_hourly) is not int or weekend_hourly < 0:
+   raise ValueError('1시간 주말·공휴일 요금 확인 필요')
+ elif weekend_hourly is not None:
+  raise ValueError('평일 1시간 요금 없이 주말 요금만 등록할 수 없음')
  if p['reference_minutes'] != 120:
   raise ValueError('현재 시간형 적재는 2시간 기준 요금만 지원')
- # 주말 1시간 요금을 평일 요금으로 복사하지 않는다.
- # 명시된 주말 1시간 요금이 있으면 우선 사용하고, 그렇지 않으면
- # '시간 비례'가 명시된 경우에만 2시간 주말 요금의 절반을 사용한다.
- weekend_hourly=p.get('hourly_weekend_holiday_fee_won')
- if weekend_hourly is not None:
-  if type(weekend_hourly) is not int or weekend_hourly < 0:
-   raise ValueError('1시간 주말·공휴일 기본요금 오류')
- elif p['weekday_fee_won']==p['weekend_holiday_fee_won']:
-  weekend_hourly=p['hourly_fee_won']
- elif p.get('shorter_use_policy')=='proportional' and p['weekend_holiday_fee_won']%2==0:
-  weekend_hourly=p['weekend_holiday_fee_won']//2
- else:
-  raise ValueError('주말·공휴일 1시간 요금 미확정: hourly_weekend_holiday_fee_won 입력 필요')
  for key in ('available_start_time','available_end_time'):
   try: dt.datetime.strptime(t[key],'%H:%M')
   except (KeyError, ValueError, TypeError) as exc: raise ValueError('이용 가능시간 오류: '+key) from exc
  if t.get('selection_type')!='flexible_interval': raise ValueError('시간 선택 방식 오류')
- for key in ('daily_limit_minutes','max_minutes'):
-  if type(t.get(key)) is not int or t[key] <= 0: raise ValueError('이용 시간 제한 오류: '+key)
- if t['daily_limit_minutes'] < 120 or t['max_minutes'] < 120:
-  raise ValueError('현재 2시간 예약 기준과 이용 시간 제한이 충돌')
+ # JSON의 시간 선택 정책을 그대로 저장한다. 미확정(NULL) 값은 임의로 60분으로 채우지 않는다.
+ for key in ('daily_limit_minutes', 'max_minutes'):
+  if type(t.get(key)) is not int or t[key] <= 0:
+   raise ValueError('이용 시간 제한 오류: '+key)
+ for key in ('min_minutes', 'step_minutes'):
+  value=t.get(key)
+  if value is not None and (type(value) is not int or value <= 0):
+   raise ValueError('이용 시간 정책 오류: '+key)
+ if t['min_minutes'] is not None and t['min_minutes'] > t['max_minutes']:
+  raise ValueError('최소 이용시간이 최대 이용시간보다 큼')
+ # 현재 적재기는 1시간/2시간 요금 규칙만 제공한다. 180분 허용 정책은
+ # 저장할 수 있지만 180분의 요금을 만들어낼 수는 없다.
+ if t['max_minutes'] < p['reference_minutes'] or t['daily_limit_minutes'] < p['reference_minutes']:
+  raise ValueError('2시간 기본요금 규칙과 이용 시간 제한이 충돌')
+ if t['min_minutes'] is not None and t['min_minutes'] > p['reference_minutes']:
+  raise ValueError('2시간 기본요금 규칙보다 최소 이용시간이 큼')
  if len({x['id'] for x in d['discounts_pending']})!=len(d['discounts_pending']):raise ValueError('중복 감면 유형')
  if len({x['id'] for x in d.get('discounts_confirmed',[])})!=len(d.get('discounts_confirmed',[])):raise ValueError('중복 감면')
  for x in d.get('discounts_confirmed',[]):
@@ -314,9 +326,10 @@ def load_duration(data_path,db_path):
    con.execute('DELETE FROM rule_sets WHERE id=?',(rid,))
    con.execute('INSERT INTO rule_sets(id,facility_id,source_id,effective_from,effective_to,status) VALUES(?,?,?,?,?,?)',(rid,f['id'],s['id'],r['effective_from'],r['effective_to'],r['status']))
    con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_2hours',rid,'flexible_interval',None,None,None,p['reference_minutes'],p['weekday_fee_won'],p['weekend_holiday_fee_won'],0))
-   con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_1hour',rid,'flexible_interval',None,None,None,60,p['hourly_fee_won'],weekend_hourly,0))
+   if hourly is not None:
+    con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_1hour',rid,'flexible_interval',None,None,None,60,hourly,weekend_hourly,0))
    insert_options(con,rid,d['options'])
-   con.execute('INSERT INTO time_selection_policies VALUES(?,?,?,?,?,?,?,?,?,?)',(rid,t['selection_type'],t['available_start_time'],t['available_end_time'],60,120,60,t['daily_limit_minutes'],t['status'],t['note']))
+   con.execute('INSERT INTO time_selection_policies VALUES(?,?,?,?,?,?,?,?,?,?)',(rid,t['selection_type'],t['available_start_time'],t['available_end_time'],t.get('min_minutes'),t['max_minutes'],t.get('step_minutes'),t['daily_limit_minutes'],t['status'],t['note']))
    for x in d.get('discounts_confirmed',[]):
     cat=x['id']
     if cat not in ('national_merit','independence_merit','may18_merit','special_mission_merit','war_veteran','disabled','multi_child','low_income'):raise ValueError('알 수 없는 감면 대상')
