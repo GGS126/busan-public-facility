@@ -27,4 +27,31 @@ with tempfile.TemporaryDirectory() as tmp:
   except (ValueError, KeyError, sqlite3.Error):pass
   else:raise AssertionError(f'잘못된 JSON 수락: {section}.{key}')
   assert hashlib.sha256(db.read_bytes()).hexdigest()==before,'실패 후 DB 변경'
+ # 회귀 테스트: 같은 시간제 방식의 시설이 추가되어도 기본요금 규칙 ID는 충돌하지 않는다.
+ # 서로 다른 2시간 주말요금의 1시간 값이 평일과 구분되어 저장되는지도 확인한다.
+ base=json.loads((R/'gudeok_winter_2026_2027.json').read_text(encoding='utf-8'))
+ first=json.loads(json.dumps(base,ensure_ascii=False))
+ first['pricing']['weekday_fee_won']=8000
+ first['pricing']['weekend_holiday_fee_won']=12000
+ first['pricing']['hourly_fee_won']=4000
+ second=json.loads(json.dumps(first,ensure_ascii=False))
+ second['facility']['id']='test_other_flexible_facility'
+ second['facility']['name']='추가 시간제 시설(테스트 전용)'
+ second['source']['id']='test_other_flexible_source'
+ second['rule_set']['id']='test_other_flexible_ruleset'
+ first_path=tmp/'flexible_first.json'
+ second_path=tmp/'flexible_second.json'
+ first_path.write_text(json.dumps(first,ensure_ascii=False),encoding='utf-8')
+ second_path.write_text(json.dumps(second,ensure_ascii=False),encoding='utf-8')
+ extra_db=tmp/'additional_facilities.sqlite3'
+ load.load_many([first_path,second_path],extra_db)
+ with closing(sqlite3.connect(extra_db)) as c:
+  assert c.execute('SELECT COUNT(*) FROM pricing_rules').fetchone()[0]==4
+  rows=c.execute('SELECT id,rule_set_id,duration_minutes,weekday_base_won,weekend_holiday_base_won FROM pricing_rules').fetchall()
+  assert len({row[0] for row in rows})==4, '시간제 시설 요금 규칙 ID 충돌'
+  for row in rows:
+   assert row[0].startswith(row[1]+'_'), '규칙 ID가 rule_set ID에서 생성되지 않음'
+   if row[2]==60: assert (row[3],row[4])==(4000,6000), row
+  assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+ print('PASS: 시간제 시설 2곳 추가 시 PK 충돌 없음, 평일/주말 1시간 요금 분리 확인')
  print('PASS: JSON 3개 재적재, DB 무결성, 요금 계산 8건, 잘못된 JSON 4건 차단 및 DB 원본 보존')

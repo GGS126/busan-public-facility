@@ -241,9 +241,22 @@ def load_duration(data_path,db_path):
   if type(p[k])!=int or p[k]<0:raise ValueError('요금/시간 유효성 오류: '+k)
  if p['reference_minutes']<=0:raise ValueError('요금 기준 시간 오류')
  if type(p.get('hourly_fee_won')) is not int or p['hourly_fee_won'] < 0:
-  raise ValueError('1시간 기본요금 오류')
+  raise ValueError('1시간 평일 기본요금 오류')
  if p['reference_minutes'] != 120:
   raise ValueError('현재 시간형 적재는 2시간 기준 요금만 지원')
+ # 주말 1시간 요금을 평일 요금으로 복사하지 않는다.
+ # 명시된 주말 1시간 요금이 있으면 우선 사용하고, 그렇지 않으면
+ # '시간 비례'가 명시된 경우에만 2시간 주말 요금의 절반을 사용한다.
+ weekend_hourly=p.get('hourly_weekend_holiday_fee_won')
+ if weekend_hourly is not None:
+  if type(weekend_hourly) is not int or weekend_hourly < 0:
+   raise ValueError('1시간 주말·공휴일 기본요금 오류')
+ elif p['weekday_fee_won']==p['weekend_holiday_fee_won']:
+  weekend_hourly=p['hourly_fee_won']
+ elif p.get('shorter_use_policy')=='proportional' and p['weekend_holiday_fee_won']%2==0:
+  weekend_hourly=p['weekend_holiday_fee_won']//2
+ else:
+  raise ValueError('주말·공휴일 1시간 요금 미확정: hourly_weekend_holiday_fee_won 입력 필요')
  for key in ('available_start_time','available_end_time'):
   try: dt.datetime.strptime(t[key],'%H:%M')
   except (KeyError, ValueError, TypeError) as exc: raise ValueError('이용 가능시간 오류: '+key) from exc
@@ -268,8 +281,8 @@ def load_duration(data_path,db_path):
    con.execute('''INSERT INTO sources(id,url,title,checked_on,verification_level,note) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET url=excluded.url,title=excluded.title,checked_on=excluded.checked_on,verification_level=excluded.verification_level,note=excluded.note''',tuple(s[k] for k in ('id','url','title','checked_on','verification_level','note')))
    rid=r['id'];con.execute('DELETE FROM rule_sets WHERE id=?',(rid,))
    con.execute('INSERT INTO rule_sets(id,facility_id,source_id,effective_from,effective_to,status) VALUES(?,?,?,?,?,?)',(rid,f['id'],s['id'],r['effective_from'],r['effective_to'],r['status']))
-   con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',('gudeok_2hours',rid,'flexible_interval',None,None,None,p['reference_minutes'],p['weekday_fee_won'],p['weekend_holiday_fee_won'],0))
-   con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',('gudeok_1hour',rid,'flexible_interval',None,None,None,60,p['hourly_fee_won'],p['hourly_fee_won'],0))
+   con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_2hours',rid,'flexible_interval',None,None,None,p['reference_minutes'],p['weekday_fee_won'],p['weekend_holiday_fee_won'],0))
+   con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_1hour',rid,'flexible_interval',None,None,None,60,p['hourly_fee_won'],weekend_hourly,0))
    insert_options(con,rid,d['options'])
    con.execute('INSERT INTO time_selection_policies VALUES(?,?,?,?,?,?,?,?,?,?)',(rid,t['selection_type'],t['available_start_time'],t['available_end_time'],60,120,60,t['daily_limit_minutes'],t['status'],t['note']))
    for x in d.get('discounts_confirmed',[]):
