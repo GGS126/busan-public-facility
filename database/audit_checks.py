@@ -53,5 +53,47 @@ with tempfile.TemporaryDirectory() as tmp:
    assert row[0].startswith(row[1]+'_'), '규칙 ID가 rule_set ID에서 생성되지 않음'
    if row[2]==60: assert (row[3],row[4])==(4000,6000), row
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+ # 회귀 테스트: 규정 ID를 변경하면서 동일 시설 기간을 중복 적재하면 거부한다.
+ # 실패한 다중 파일 적재에서는 원본 DB가 바뀌지 않아야 한다.
+ for source_file in ('seed.json','gudeok_winter_2026_2027.json'):
+  original=json.loads((R/source_file).read_text(encoding='utf-8'))
+  same_fac_new_id=json.loads(json.dumps(original,ensure_ascii=False))
+  same_fac_new_id['rule_set']['id']=original['rule_set']['id']+'_v2'
+  conflicting_file=tmp/('overlap_'+source_file)
+  conflicting_file.write_text(json.dumps(same_fac_new_id,ensure_ascii=False),encoding='utf-8')
+  pristine_hash=hashlib.sha256(db.read_bytes()).hexdigest()
+  try:
+   load.load_many([conflicting_file],db)
+  except ValueError as exc:
+   assert '기간' in str(exc),str(exc)
+  else:
+   raise AssertionError(f'다른 ID의 중복 적용기간 허용: {source_file}')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==pristine_hash, '실패한 적재가 원본 DB 변경'
+  # 같은 규정 ID를 사용하는 정상 재적재는 허용한다.
+  load.load_many([R/source_file],db)
+  with closing(sqlite3.connect(db)) as c:
+   assert c.execute('SELECT COUNT(*) FROM rule_sets WHERE facility_id=?',(original['facility']['id'],)).fetchone()[0]==1
+ # 바로 다음 날짜부터 시작하는 기간은 허용하고, 경계일이 겹치면 거부한다.
+ import datetime as dt
+ original=json.loads((R/'seed.json').read_text(encoding='utf-8'))
+ valid_next=json.loads(json.dumps(original,ensure_ascii=False))
+ valid_next['rule_set']['id']=original['rule_set']['id']+'_next'
+ last_day=dt.date.fromisoformat(original['rule_set']['effective_to'])
+ valid_next['rule_set']['effective_from']=(last_day+dt.timedelta(days=1)).isoformat()
+ valid_next['rule_set']['effective_to']=(last_day+dt.timedelta(days=31)).isoformat()
+ nextfile=tmp/'next_period.json'
+ nextfile.write_text(json.dumps(valid_next,ensure_ascii=False),encoding='utf-8')
+ extra_db2=tmp/'adjacent_periods.sqlite3'
+ load.load_many([R/'seed.json',nextfile],extra_db2)
+ with closing(sqlite3.connect(extra_db2)) as c:
+  assert c.execute('SELECT COUNT(*) FROM rule_sets').fetchone()[0]==2
+ # 같은 파일 배치에 기간이 중복된 다른 ID 두 개를 포함하면 전체 실패.
+ batch_db=tmp/'batch_failure.sqlite3'
+ hash_before=hashlib.sha256(db.read_bytes()).hexdigest()
+ try:load.load_many([R/'gudeok_winter_2026_2027.json',conflicting_file],db)
+ except ValueError:pass
+ else:raise AssertionError('배치 중복 적재 허용')
+ assert hashlib.sha256(db.read_bytes()).hexdigest()==hash_before
+ print('PASS: 규정 ID 변경 시 기간 중복 차단(고정회차/시간제), 동일 ID 갱신, 인접 기간, 원본 DB 보존')
  print('PASS: 시간제 시설 2곳 추가 시 PK 충돌 없음, 평일/주말 1시간 요금 분리 확인')
  print('PASS: JSON 3개 재적재, DB 무결성, 요금 계산 8건, 잘못된 JSON 4건 차단 및 DB 원본 보존')

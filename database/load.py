@@ -180,6 +180,33 @@ def validate(d):
         if refund['rate'] is not None and (type(refund['rate']) is not int or not 0<=refund['rate']<=100): raise ValueError('환불률 오류')
     return d
 
+def ensure_rule_set_period_available(con, facility_id, rule_set_id, start, end):
+    """같은 시설에서 다른 규정의 적용기간이 겹치면 안전하게 거부한다.
+
+    시작일·종료일은 모두 포함되며, 동일 규정 ID의 갱신은 허용한다.
+    """
+    existing = con.execute(
+        'SELECT facility_id FROM rule_sets WHERE id=?', (rule_set_id,)
+    ).fetchone()
+    if existing is not None and existing[0] != facility_id:
+        raise ValueError(
+            f'규정 ID {rule_set_id}가 다른 시설({existing[0]})에서 사용 중입니다'
+        )
+    conflict = con.execute(
+        'SELECT id, effective_from, effective_to FROM rule_sets '
+        'WHERE facility_id=? AND id<>? '
+        'AND effective_from<=? AND effective_to>=? LIMIT 1',
+        (facility_id, rule_set_id, end, start)
+    ).fetchone()
+    if conflict is not None:
+        old_id, old_start, old_end = conflict
+        raise ValueError(
+            f'같은 시설 규정의 적용기간이 중복됩니다: '
+            f'{rule_set_id}({start}~{end}) / {old_id}({old_start}~{old_end}). '
+            '기존 규정을 정리하거나 적용기간을 변경하세요.'
+        )
+
+
 def load_fixed(data_path, db_path):
     d=validate(json.loads(Path(data_path).read_text(encoding='utf-8')))
     db_path=Path(db_path)
@@ -202,6 +229,7 @@ def load_fixed(data_path, db_path):
                 url=excluded.url,title=excluded.title,checked_on=excluded.checked_on,
                 verification_level=excluded.verification_level,note=excluded.note''',
                 tuple(s.get(k) for k in ('id','url','title','checked_on','verification_level','note')))
+            ensure_rule_set_period_available(con, f['id'], rid, r['effective_from'], r['effective_to'])
             con.execute('DELETE FROM rule_sets WHERE id=?',(rid,))
             con.execute('INSERT INTO rule_sets(id,facility_id,source_id,effective_from,effective_to,status) VALUES(?,?,?,?,?,?)',
                 (rid,f['id'],s['id'],r['effective_from'],r['effective_to'],r['status']))
@@ -279,7 +307,9 @@ def load_duration(data_path,db_path):
     VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,facility_type=excluded.facility_type,address=excluded.address,phone=excluded.phone,booking_url=excluded.booking_url,open_time=excluded.open_time,close_time=excluded.close_time,holiday_note=excluded.holiday_note''',
     (f['id'],f['name'],f['facility_type'],f['address'],f['phone'],f['booking_url'],f['open_time'],f['close_time'],f['holiday_note']))
    con.execute('''INSERT INTO sources(id,url,title,checked_on,verification_level,note) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET url=excluded.url,title=excluded.title,checked_on=excluded.checked_on,verification_level=excluded.verification_level,note=excluded.note''',tuple(s[k] for k in ('id','url','title','checked_on','verification_level','note')))
-   rid=r['id'];con.execute('DELETE FROM rule_sets WHERE id=?',(rid,))
+   rid=r['id']
+   ensure_rule_set_period_available(con, f['id'], rid, r['effective_from'], r['effective_to'])
+   con.execute('DELETE FROM rule_sets WHERE id=?',(rid,))
    con.execute('INSERT INTO rule_sets(id,facility_id,source_id,effective_from,effective_to,status) VALUES(?,?,?,?,?,?)',(rid,f['id'],s['id'],r['effective_from'],r['effective_to'],r['status']))
    con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_2hours',rid,'flexible_interval',None,None,None,p['reference_minutes'],p['weekday_fee_won'],p['weekend_holiday_fee_won'],0))
    con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_1hour',rid,'flexible_interval',None,None,None,60,p['hourly_fee_won'],weekend_hourly,0))
