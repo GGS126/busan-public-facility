@@ -101,12 +101,13 @@
   "discount_common": {
     "percent": 50,
     "basis": "per_eligible_person_equal_split",
+    "rounding_policy": null,
     "applies_to": "base_court_fee_only",
     "excluded_from": "lighting_fee",
     "processing": "pay_full_then_refund",
     "documents": "대상자별 이름과 증빙서류를 반환신청 게시판에 제출. 다자녀 가족사랑카드·모바일카드·차량스티커, 없으면 등본 또는 가족관계증명서. 다자녀 가족은 1부로 대체 가능.",
     "deadline": "경기장 이용시간 전 반환신청 게시판 접수",
-    "note": "코트 전체에 일괄 할인하지 않고 감면자 개인의 균등분할 몫에 50% 적용. 부산광역시 낙동강 생태공원 보전 및 운영에 관한 조례 제12조 참조."
+    "note": "공식 예약 안내 확인: 할인율은 코트당 적용하지 않고 감면 대상 이용자에게 개별 적용. 평일 6,000원, 4명 중 2명 감면 시 6,000÷4×50%=750원/인, 총 1,500원 반환. 소수점이 발생하는 끝전 처리 기준은 미확인. 부산광역시 낙동강 생태공원 보전 및 운영에 관한 조례 제12조 참조."
   },
   "refunds": [
     {

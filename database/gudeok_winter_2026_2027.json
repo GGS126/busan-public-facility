@@ -119,7 +119,7 @@
   "discount_excluded_fee_types": [
     "lighting_fee"
   ],
-  "discount_calculation_policy": "representative_full_court",
+  "discount_calculation_policy": "per_eligible_person_equal_split",
   "options": [
     {
       "id": "lighting",
@@ -136,12 +136,13 @@
     }
   ],
   "discount_common": {
-    "basis": "representative_full_court",
+    "basis": "per_eligible_person_equal_split",
+    "rounding_policy": null,
     "applies_to": "base_court_fee_only",
     "processing": "pay_full_then_refund",
-    "documents": null,
+    "documents": "사용일 당일 구장 이용 전 또는 후 관제실에서 감면 대상 이용자별 증빙자료 확인 및 감경대상자 확인서 제출. 감면액은 대표 예약자에게 반환.",
     "deadline": null,
-    "note": "예약 대표자 본인이 감면 자격을 증빙한 경우에만 해당 대상자의 감면율을 코트 기본 이용료에 적용. 동반자 자격만으로는 감면하지 않으며 조명료는 제외."
+    "note": "코트 기본요금을 실제 이용 인원으로 균등 배분하고 감면 대상자로 확인된 이용자의 몫에만 해당 감면율을 적용. 예약자에게 감면액을 반환하며 조명료는 제외. 공식 안내에서 감면 대상 이용자별 적용 및 대표자 환급을 확인했고, 인원별 비례 계산 방식은 이용자 확인에 따라 반영. 원 미만 끝전 처리 기준은 미확인으로 유지."
   },
   "closure_rules": []
 }

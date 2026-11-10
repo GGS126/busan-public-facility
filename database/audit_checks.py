@@ -20,6 +20,59 @@ with tempfile.TemporaryDirectory() as tmp:
   }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+ # 감면 적용 대상과 환급 수령인 구분: 해운대는 확인된 인원 비례, 구덕은 대상 이용자별 감면·대표자 환급.
+ with closing(sqlite3.connect(db)) as c:
+  hae=c.execute("SELECT DISTINCT basis FROM v_facility_discounts WHERE facility_id=?", ('busan_haeundae_arboretum_tennis',)).fetchall()
+  gud=c.execute("SELECT DISTINCT basis,note,processing FROM facility_discounts WHERE rule_set_id=?", ('gudeok_tennis_winter_2026_2027',)).fetchall()
+  assert hae==[('per_eligible_person_equal_split',)],hae
+  sam=c.execute("SELECT DISTINCT basis,note FROM facility_discounts WHERE rule_set_id=?", ('samrak_tennis_winter_2026_2027',)).fetchall()
+  assert len(sam)==1 and sam[0][0]=='per_eligible_person_equal_split',sam
+  assert '총 1,500원 반환' in sam[0][1],sam
+  assert '끝전 처리 기준은 미확인' in sam[0][1],sam
+  assert len(gud)==1 and gud[0][0]=='per_eligible_person_equal_split' and '대표' in gud[0][1] and gud[0][2]=='pay_full_then_refund',gud
+  assert c.execute("SELECT COUNT(*) FROM facility_discounts WHERE rule_set_id=?", ('gudeok_tennis_winter_2026_2027',)).fetchone()[0]==8
+ g_cases=json.loads((R/'gudeok_test_cases.json').read_text(encoding='utf-8'))['cases']
+ for case in g_cases:
+  if case['id'] in ('gudeok_discount','gudeok_companion_eligible_only','gudeok_holder_eligible_night'):
+   assert case['status']=='confirmed' and case['refund_discount_won'] in (1000,3000) and case['net_won'] in (7000,5000,27000),case
+ print('PASS: 세 시설 인원별 비례 감면, 구덕 환급 수령인은 대표 예약자')
+ # 세 시설 모두 공식 끝전 처리 기준 미확인: NULL 저장·조회 및 검증 사례 확인
+ with closing(sqlite3.connect(db)) as c:
+  rows=c.execute('SELECT r.facility_id, d.discount_rounding_policy FROM facility_discounts d JOIN rule_sets r ON r.id=d.rule_set_id').fetchall()
+  assert len(rows)==31 and all(policy is None for _, policy in rows),rows
+ for fac in ('busan_haeundae_arboretum_tennis','busan_samrak_ecopark_tennis','busan_gudeok_stadium_tennis'):
+  rules=q.discounts(db,fac,'2026-11-09')
+  assert rules and all(x['discount_rounding_policy'] is None and x['rounding_status']=='unverified' for x in rules),fac
+ ha='busan_haeundae_arboretum_tennis'; sa='busan_samrak_ecopark_tennis'; gu='busan_gudeok_stadium_tennis'
+ assert q.discount_proration_check(db,ha,'2026-11-09',8000,4,2,'disabled')['discount_refund_won']==2000
+ assert q.discount_proration_check(db,sa,'2026-11-09',6000,4,2,'disabled')['discount_refund_won']==1500
+ assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,1,'disabled')['discount_refund_won']==1000
+ assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,3,'disabled')['discount_refund_won']==3000
+ for fac,fee,n,code in [(ha,8000,3,'discount_rounding_unverified'),
+                         (sa,6000,7,'discount_rounding_unverified'),
+                         (gu,8000,3,'discount_rounding_unverified')]:
+  result=q.discount_proration_check(db,fac,'2026-11-09',fee,n,1,'disabled')
+  assert result['status']=='needs_review' and result['discount_refund_won'] is None and result['net_court_fee_won'] is None,result
+  assert result['review_items'][0]['code']==code,result
+ for path,ident in [('test_cases.json','T_rounding_unverified'),
+                    ('samrak_test_cases.json','S_rounding_unverified'),
+                    ('gudeok_test_cases.json','gudeok_rounding_unverified')]:
+  cases=json.loads((R/path).read_text(encoding='utf-8'))['cases']
+  case=next(x for x in cases if x['id']==ident)
+  expected=case.get('expected',case)
+  assert expected['status']=='needs_review' and expected.get('discount_refund_won',expected.get('refund_discount_won')) is None,case
+ import copy as rounding_copy
+ for bad_value in ('round_up', 'floor_won', 0):
+  changed=rounding_copy.deepcopy(D)
+  changed['discount_common']['rounding_policy']=bad_value
+  badfile=tmp/'invalid_discount_rounding.json'
+  badfile.write_text(json.dumps(changed,ensure_ascii=False),encoding='utf-8')
+  before=hashlib.sha256(db.read_bytes()).hexdigest()
+  try:load.load_many([badfile],db)
+  except ValueError as exc:assert 'rounding_policy' in str(exc),str(exc)
+  else:raise AssertionError('공식 근거 없는 끝전 처리 기준을 적재함')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==before
+ print('PASS: 세 시설 감면 끝전 처리 NULL/미확인, 정수 사례 유지, 소수점 끝전 미확인 needs_review')
  # source.license는 검증된 이용조건이 없으므로 NULL이어야 한다.
  with closing(sqlite3.connect(db)) as c:
   licenses=c.execute('SELECT id,license FROM sources ORDER BY id').fetchall()

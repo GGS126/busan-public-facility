@@ -214,6 +214,7 @@ def validate(d):
             if type(slot[k]) is not int or slot[k]<0: raise ValueError(f'회차 {slot["no"]}: {k} 요금 오류')
     validate_options(d['options'])
     common=d['discount_common']
+    validate_discount_rounding(common)
     if type(common.get('percent')) is not int or not 0<=common['percent']<=100: raise ValueError('감면율 오류')
     codes=[]
     for discount in d['discounts']:
@@ -317,21 +318,29 @@ def load_fixed(data_path, db_path):
                 for code in GROUP_TO_CODES[item['id']]:
                     con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
-                        (id,rule_set_id,category_id,percent,basis,applies_to,excluded_from,
+                        (id,rule_set_id,category_id,percent,discount_rounding_policy,basis,applies_to,excluded_from,
                          processing,documents,deadline,note,original_group_label)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-                        (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),c['basis'],c['applies_to'],c['excluded_from'],
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),c['rounding_policy'],c['basis'],c['applies_to'],c['excluded_from'],
                          c['processing'],c['documents'],c['deadline'],c['note'],item['category']))
             insert_refunds_and_reservation(con, rid, d)
     finally:
         con.close()
 
 
+def validate_discount_rounding(common):
+    # NULL: 공식 끝전 처리 기준 미확인. 추정값을 넣지 않는다.
+    if 'rounding_policy' not in common:
+        raise ValueError('discount_common.rounding_policy 필수 (미확인은 null)')
+    if common['rounding_policy'] is not None:
+        raise ValueError('discount_common.rounding_policy는 공식 근거 확인 전 null이어야 합니다')
+
 def validate_duration_discounts(d):
     """원본 JSON의 시설별 감면 정책을 검사하고, 추정 기본값을 만들지 않는다."""
     common = d.get('discount_common')
     if not isinstance(common, dict):
         raise ValueError('discount_common: 감면 규정 데이터 누락')
+    validate_discount_rounding(common)
     for field in ('basis', 'applies_to', 'processing'):
         if not isinstance(common.get(field), str) or not common[field].strip():
             raise ValueError(f'discount_common.{field} 누락')
@@ -368,10 +377,10 @@ def insert_duration_discounts(con, rid, d):
         con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',
                     (cat, CATEGORY_NAMES[cat]))
         con.execute("""INSERT INTO facility_discounts
-          (id,rule_set_id,category_id,percent,basis,applies_to,excluded_from,
+          (id,rule_set_id,category_id,percent,discount_rounding_policy,basis,applies_to,excluded_from,
            processing,documents,deadline,note,original_group_label,verification_status)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-          (f'{rid}_{cat}', rid, cat, item['rate_percent'],
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (f'{rid}_{cat}', rid, cat, item['rate_percent'], common['rounding_policy'],
            item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
            excluded, item.get('processing', common['processing']),
            item.get('documents', common.get('documents')),

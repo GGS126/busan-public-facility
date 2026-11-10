@@ -113,10 +113,51 @@ def duration_prices(db,facility_id,use_date):
 
 def discounts(db,facility_id,use_date):
     use_date=normalize_use_date(use_date)
-    return fetch(db,'''SELECT category_id,category_name,percent,basis,applies_to,excluded_from,
+    return fetch(db,'''SELECT category_id,category_name,percent,discount_rounding_policy,
+    CASE WHEN discount_rounding_policy IS NULL THEN 'unverified' ELSE 'confirmed' END AS rounding_status,
+    basis,applies_to,excluded_from,
     processing,deadline,documents,source_url,checked_on
     FROM v_facility_discounts WHERE facility_id=? AND ? BETWEEN effective_from AND effective_to
     ORDER BY category_name''',(facility_id,use_date))
+
+def discount_proration_check(db, facility_id, use_date, base_fee_won,
+                              participant_count, eligible_count, category_id):
+    """DB 규정의 비례 감면 정합성 검사. 결제/API 오류 생성은 백엔드 책임.
+
+    끝전/인원별 배분의 공식 규칙이 불명확하면 환급·최종 금액은 반환하지 않는다.
+    """
+    from fractions import Fraction
+    if type(base_fee_won) is not int or base_fee_won < 0:
+        raise ValueError('기본요금은 0 이상의 정수여야 합니다')
+    if (type(participant_count) is not int or participant_count <= 0 or
+        type(eligible_count) is not int or not (0 <= eligible_count <= participant_count)):
+        raise ValueError('참여인원 및 감면 대상 인원 오류')
+    rules = {r['category_id']:r for r in discounts(db, facility_id, use_date)}
+    if category_id not in rules:
+        raise ValueError('등록되지 않은 감면 유형')
+    rule = rules[category_id]
+    if eligible_count == 0:
+        return {'status':'confirmed','discount_refund_won':0,'net_court_fee_won':base_fee_won}
+    base = {'facility_id': facility_id, 'date': normalize_use_date(use_date),
+            'base_fee_won':base_fee_won, 'participant_count':participant_count,
+            'eligible_count':eligible_count, 'discount_category_id':category_id,
+            'rounding_policy':rule['discount_rounding_policy'],
+            'rounding_status':rule['rounding_status'],
+            'source_url':rule['source_url'], 'checked_on':rule['checked_on']}
+    if rule['basis'] != 'per_eligible_person_equal_split':
+        return {**base,'status':'needs_review','discount_refund_won':None,
+                'net_court_fee_won':None,'review_items':[{'code':'discount_proration_unverified',
+                'reason':'인원별 기본요금 배분 공식이 확인되지 않았습니다.'}]}
+    # 감면이 이용자마다 다른 경우는 해당 자격의 합산 규칙을 별도로 확인해야 한다.
+    refund_per_person = Fraction(base_fee_won * rule['percent'], participant_count * 100)
+    refund_total = refund_per_person * eligible_count
+    if refund_per_person.denominator != 1 or refund_total.denominator != 1:
+        return {**base,'status':'needs_review','discount_refund_won':None,
+                'net_court_fee_won':None,'review_items':[{'code':'discount_rounding_unverified',
+                'reason':'인원별 감면액에 원 미만의 끝전이 발생하지만 공식 처리 기준이 확인되지 않았습니다.'}]}
+    refund = int(refund_total)
+    return {**base,'status':'confirmed','discount_refund_won':refund,
+            'net_court_fee_won':base_fee_won-refund}
 
 def discount_selection_review(db, facility_id, use_date, category_ids):
     """중복 적용 근거가 없는 복수 감면은 금액을 산출하지 않는다.
