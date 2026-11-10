@@ -150,15 +150,9 @@ def validate_shared(d):
 
 def validate(d):
     validate_shared(d)
-    for field in ('facility','source','rule_set','slots','options','discounts','discount_common','refunds','reservation'):
-        if field not in d: raise ValueError(f'필수 키 누락: {field}')
-    f,s,r = d['facility'], d['source'], d['rule_set']
-    for k in ('id','name','facility_type','address','booking_url'):
-        if not isinstance(f.get(k),str) or not f[k].strip(): raise ValueError(f'facility.{k} 누락')
-    for k in ('id','url','title','checked_on'):
-        if not isinstance(s.get(k),str) or not s[k].strip(): raise ValueError(f'source.{k} 누락')
-    # validate_shared()에서 날짜 문자열을 ISO 형식으로 정규화했다.
-    if r['effective_from']>r['effective_to']: raise ValueError('규정 기간 역전')
+    for field in ('slots', 'options', 'discounts', 'discount_common'):
+        if field not in d:
+            raise ValueError(f'필수 키 누락: {field}')
     if not isinstance(d['slots'],list) or not d['slots']: raise ValueError('시간대 최소 1개 필요')
     seen=set()
     for slot in d['slots']:
@@ -178,8 +172,6 @@ def validate(d):
             raise ValueError('개별 감면율 오류: '+discount['id'])
         codes.extend(GROUP_TO_CODES[discount['id']])
     if len(set(codes))!=len(codes): raise ValueError('동일 시설 감면 분류 중복')
-    for refund in d['refunds']:
-        if refund['rate'] is not None and (type(refund['rate']) is not int or not 0<=refund['rate']<=100): raise ValueError('환불률 오류')
     return d
 
 def ensure_rule_set_period_available(con, facility_id, rule_set_id, start, end):
@@ -209,6 +201,50 @@ def ensure_rule_set_period_available(con, facility_id, rule_set_id, start, end):
         )
 
 
+def insert_shared_records(con, d):
+    """시설·출처·규정의 공통 저장 경로 (고정 회차/자유시간형)."""
+    f, s, r = d['facility'], d['source'], d['rule_set']
+    rid = r['id']
+    con.execute("""INSERT INTO facilities
+        (id,name,facility_type,address,phone,booking_url,open_time,close_time,holiday_note)
+        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+        name=excluded.name, facility_type=excluded.facility_type,
+        address=excluded.address, phone=excluded.phone, booking_url=excluded.booking_url,
+        open_time=excluded.open_time, close_time=excluded.close_time,
+        holiday_note=excluded.holiday_note""",
+        tuple(f.get(key) for key in ('id','name','facility_type','address','phone',
+                                     'booking_url','open_time','close_time','holiday_note')))
+    con.execute("""INSERT INTO sources
+        (id,url,title,checked_on,verification_level,note) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET url=excluded.url,title=excluded.title,
+        checked_on=excluded.checked_on,verification_level=excluded.verification_level,
+        note=excluded.note""",
+        tuple(s.get(key) for key in ('id','url','title','checked_on','verification_level','note')))
+    ensure_rule_set_period_available(con, f['id'], rid,
+                                     r['effective_from'], r['effective_to'])
+    con.execute('DELETE FROM rule_sets WHERE id=?', (rid,))
+    con.execute("""INSERT INTO rule_sets
+        (id,facility_id,source_id,effective_from,effective_to,status)
+        VALUES(?,?,?,?,?,?)""",
+        (rid, f['id'], s['id'], r['effective_from'], r['effective_to'], r['status']))
+    return rid
+
+
+def insert_refunds_and_reservation(con, rid, d):
+    """두 적재 방식에서 동일하게 처리해야 하는 취소·예약 규정."""
+    for item in d['refunds']:
+        con.execute('INSERT INTO refund_rules VALUES(?,?,?,?,?,?,?,?,?)',
+                    (f'{rid}_{item["id"]}', rid, item['reason'], item['min'],
+                     item['max'], item['rate'], item['channel'], item['condition'],
+                     'confirmed'))
+    booking = d['reservation']
+    con.execute('INSERT INTO reservation_rules VALUES(?,?,?,?,?)',
+                (rid, booking['online_open_days_before'],
+                 booking['online_close_days_before'],
+                 booking['normal_cancel_online_min_days_before'],
+                 booking.get('closure_note')))
+
+
 def load_fixed(data_path, db_path):
     d=validate(json.loads(Path(data_path).read_text(encoding='utf-8')))
     db_path=Path(db_path)
@@ -218,23 +254,7 @@ def load_fixed(data_path, db_path):
     try:
         con.executescript((ROOT/'schema.sql').read_text(encoding='utf-8'))
         with con:
-            f,s,r=d['facility'],d['source'],d['rule_set']; rid=r['id']
-            # REPLACE 시설행은 FK 손상을 유발할 수 있어 UPSERT로 유지
-            con.execute('''INSERT INTO facilities(id,name,facility_type,address,phone,booking_url,open_time,close_time,holiday_note)
-                VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-                name=excluded.name,facility_type=excluded.facility_type,address=excluded.address,
-                phone=excluded.phone,booking_url=excluded.booking_url,open_time=excluded.open_time,
-                close_time=excluded.close_time,holiday_note=excluded.holiday_note''',
-                tuple(f.get(k) for k in ('id','name','facility_type','address','phone','booking_url','open_time','close_time','holiday_note')))
-            con.execute('''INSERT INTO sources(id,url,title,checked_on,verification_level,note)
-                VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-                url=excluded.url,title=excluded.title,checked_on=excluded.checked_on,
-                verification_level=excluded.verification_level,note=excluded.note''',
-                tuple(s.get(k) for k in ('id','url','title','checked_on','verification_level','note')))
-            ensure_rule_set_period_available(con, f['id'], rid, r['effective_from'], r['effective_to'])
-            con.execute('DELETE FROM rule_sets WHERE id=?',(rid,))
-            con.execute('INSERT INTO rule_sets(id,facility_id,source_id,effective_from,effective_to,status) VALUES(?,?,?,?,?,?)',
-                (rid,f['id'],s['id'],r['effective_from'],r['effective_to'],r['status']))
+            rid = insert_shared_records(con, d)
             for t in d['slots']:
                 con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',
                     (f'{rid}_slot{t["no"]}',rid,'fixed_slot',t['no'],t['from'],t['to'],t['minutes'],t['weekday'],t['weekend'],t['light']))
@@ -251,15 +271,61 @@ def load_fixed(data_path, db_path):
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),c['basis'],c['applies_to'],c['excluded_from'],
                          c['processing'],c['documents'],c['deadline'],c['note'],item['category']))
-            for rr in d['refunds']:
-                con.execute('INSERT INTO refund_rules VALUES(?,?,?,?,?,?,?,?,?)',
-                    (f'{rid}_{rr["id"]}',rid,rr['reason'],rr['min'],rr['max'],rr['rate'],rr['channel'],rr['condition'],
-                     'confirmed'))
-            a=d['reservation']
-            con.execute('INSERT INTO reservation_rules VALUES(?,?,?,?,?)',
-                (rid,a['online_open_days_before'],a['online_close_days_before'],a['normal_cancel_online_min_days_before'],a['closure_note']))
+            insert_refunds_and_reservation(con, rid, d)
     finally:
         con.close()
+
+
+def validate_duration_discounts(d):
+    """원본 JSON의 시설별 감면 정책을 검사하고, 추정 기본값을 만들지 않는다."""
+    common = d.get('discount_common')
+    if not isinstance(common, dict):
+        raise ValueError('discount_common: 감면 규정 데이터 누락')
+    for field in ('basis', 'applies_to', 'processing'):
+        if not isinstance(common.get(field), str) or not common[field].strip():
+            raise ValueError(f'discount_common.{field} 누락')
+    # 구덕의 기존 루트 필드는 계속 지원하고 실제 감면 계산 기준과 일치시키되,
+    # 다른 시설의 처리 기준을 특정 시설의 값으로 강제하지 않는다.
+    basis = d.get('discount_calculation_policy')
+    if basis is not None and basis != common['basis']:
+        raise ValueError('discount_calculation_policy와 discount_common.basis 불일치')
+    excluded = d.get('discount_excluded_fee_types')
+    if not isinstance(excluded, list) or any(not isinstance(x, str) or not x.strip() for x in excluded):
+        raise ValueError('discount_excluded_fee_types 목록 오류')
+    if len(set(excluded)) != len(excluded):
+        raise ValueError('감면 제외 요금 유형 중복')
+    for field in ('documents', 'deadline', 'note'):
+        if common.get(field) is not None and not isinstance(common[field], str):
+            raise ValueError(f'discount_common.{field} 문자열 또는 null 필수')
+    for item in d.get('discounts_confirmed', []):
+        for field in ('basis', 'applies_to', 'processing'):
+            val = item.get(field, common[field])
+            if not isinstance(val, str) or not val.strip():
+                raise ValueError(f'감면 대상 {item["id"]}: {field} 누락')
+        for field in ('documents', 'deadline', 'note'):
+            val = item.get(field, common.get(field))
+            if val is not None and not isinstance(val, str):
+                raise ValueError(f'감면 대상 {item["id"]}: {field} 형식 오류')
+
+
+def insert_duration_discounts(con, rid, d):
+    """감면율·범위·처리·증빙 문구는 JSON에서만 읽어 저장한다."""
+    common = d['discount_common']
+    excluded = ','.join(d['discount_excluded_fee_types']) or None
+    for item in d.get('discounts_confirmed', []):
+        cat = item['id']
+        con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',
+                    (cat, CATEGORY_NAMES[cat]))
+        con.execute("""INSERT INTO facility_discounts
+          (id,rule_set_id,category_id,percent,basis,applies_to,excluded_from,
+           processing,documents,deadline,note,original_group_label,verification_status)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (f'{rid}_{cat}', rid, cat, item['rate_percent'],
+           item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
+           excluded, item.get('processing', common['processing']),
+           item.get('documents', common.get('documents')),
+           item.get('deadline', common.get('deadline')),
+           item.get('note', common.get('note')), item['source_label'], 'official_confirmed'))
 
 
 def load_duration(data_path,db_path):
@@ -312,34 +378,19 @@ def load_duration(data_path,db_path):
  for x in d.get('discounts_confirmed',[]):
   if x['id'] not in ('national_merit','independence_merit','may18_merit','special_mission_merit','war_veteran','disabled','multi_child','low_income'): raise ValueError('알 수 없는 확정 감면 대상: '+x['id'])
   if type(x['rate_percent']) is not int or not 0<=x['rate_percent']<=100:raise ValueError('잘못된 감면율')
- if d.get('discount_calculation_policy') not in ('representative_full_court',):raise ValueError('감면 계산 기준 오류')
+ validate_duration_discounts(d)
  con=sqlite3.connect(db_path);con.execute('PRAGMA foreign_keys=ON')
  try:
   con.executescript((ROOT/'schema.sql').read_text(encoding='utf-8'))
   with con:
-   con.execute('''INSERT INTO facilities(id,name,facility_type,address,phone,booking_url,open_time,close_time,holiday_note)
-    VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,facility_type=excluded.facility_type,address=excluded.address,phone=excluded.phone,booking_url=excluded.booking_url,open_time=excluded.open_time,close_time=excluded.close_time,holiday_note=excluded.holiday_note''',
-    (f['id'],f['name'],f['facility_type'],f['address'],f['phone'],f['booking_url'],f['open_time'],f['close_time'],f['holiday_note']))
-   con.execute('''INSERT INTO sources(id,url,title,checked_on,verification_level,note) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET url=excluded.url,title=excluded.title,checked_on=excluded.checked_on,verification_level=excluded.verification_level,note=excluded.note''',tuple(s[k] for k in ('id','url','title','checked_on','verification_level','note')))
-   rid=r['id']
-   ensure_rule_set_period_available(con, f['id'], rid, r['effective_from'], r['effective_to'])
-   con.execute('DELETE FROM rule_sets WHERE id=?',(rid,))
-   con.execute('INSERT INTO rule_sets(id,facility_id,source_id,effective_from,effective_to,status) VALUES(?,?,?,?,?,?)',(rid,f['id'],s['id'],r['effective_from'],r['effective_to'],r['status']))
+   rid = insert_shared_records(con, d)
    con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_2hours',rid,'flexible_interval',None,None,None,p['reference_minutes'],p['weekday_fee_won'],p['weekend_holiday_fee_won'],0))
    if hourly is not None:
     con.execute('INSERT INTO pricing_rules VALUES(?,?,?,?,?,?,?,?,?,?)',(f'{rid}_1hour',rid,'flexible_interval',None,None,None,60,hourly,weekend_hourly,0))
    insert_options(con,rid,d['options'])
    con.execute('INSERT INTO time_selection_policies VALUES(?,?,?,?,?,?,?,?,?,?)',(rid,t['selection_type'],t['available_start_time'],t['available_end_time'],t.get('min_minutes'),t['max_minutes'],t.get('step_minutes'),t['daily_limit_minutes'],t['status'],t['note']))
-   for x in d.get('discounts_confirmed',[]):
-    cat=x['id']
-    if cat not in ('national_merit','independence_merit','may18_merit','special_mission_merit','war_veteran','disabled','multi_child','low_income'):raise ValueError('알 수 없는 감면 대상')
-    con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',(cat,CATEGORY_NAMES[cat]))
-    con.execute('''INSERT INTO facility_discounts(id,rule_set_id,category_id,percent,basis,applies_to,excluded_from,processing,documents,deadline,note,original_group_label,verification_status)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(rid+'_'+cat,rid,cat,x['rate_percent'],d['discount_calculation_policy'],'base_court_fee_only','lighting_fee','pay_full_then_refund','사용일 당일 관제실 증빙 제시, 감경대상자 확인서 작성 제출','이용일 당일 이용 전 또는 후','예약 대표자 본인이 감면 자격을 증빙한 경우에만 코트 기본 이용료의 50% 반환. 동반자 자격만으로는 감면하지 않음. 조명료 제외.',x['source_label'],'official_confirmed'))
-   for x in d['refunds']:
-    con.execute('INSERT INTO refund_rules VALUES(?,?,?,?,?,?,?,?,?)',(rid+'_'+x['id'],rid,x['reason'],x['min'],x['max'],x['rate'],x['channel'],x['condition'],'confirmed'))
-   a=d['reservation']
-   con.execute('INSERT INTO reservation_rules VALUES(?,?,?,?,?)',(rid,a['online_open_days_before'],a['online_close_days_before'],a['normal_cancel_online_min_days_before'],a['closure_note']))
+   insert_duration_discounts(con, rid, d)
+   insert_refunds_and_reservation(con, rid, d)
  finally:con.close()
 
 

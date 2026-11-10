@@ -132,5 +132,13 @@
       "extra_unit_minutes": null,
       "extra_unit_price": null
     }
-  ]
+  ],
+  "discount_common": {
+    "basis": "representative_full_court",
+    "applies_to": "base_court_fee_only",
+    "processing": "pay_full_then_refund",
+    "documents": null,
+    "deadline": null,
+    "note": "예약 대표자 본인이 감면 자격을 증빙한 경우에만 해당 대상자의 감면율을 코트 기본 이용료에 적용. 동반자 자격만으로는 감면하지 않으며 조명료는 제외."
+  }
 }

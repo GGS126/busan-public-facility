@@ -212,6 +212,30 @@ with tempfile.TemporaryDirectory() as tmp:
  try:q.quote(db,d_fac,'2026-11-09','09:00','11:00',False,discount_category_ids=['unknown_discount'])
  except ValueError:pass
  else:raise AssertionError('등록되지 않은 감면 자격을 허용함')
+ # 회귀 테스트: 전화번호·선택적 메모가 없는 시설도 양 적재 경로에서 동등하게 처리한다.
+ for input_name, mode in [('seed.json', 'fixed'),
+                          ('gudeok_winter_2026_2027.json', 'duration')]:
+  item=json.loads((R/input_name).read_text(encoding='utf-8'))
+  item['facility'].pop('phone', None)
+  item['source'].pop('note', None)
+  item['reservation'].pop('closure_note', None)
+  phone_file=tmp/f'no_phone_{mode}.json'
+  phone_file.write_text(json.dumps(item,ensure_ascii=False),encoding='utf-8')
+  phone_db=tmp/f'no_phone_{mode}.sqlite3'
+  load.load_many([phone_file],phone_db)
+  with closing(sqlite3.connect(phone_db)) as c:
+   stored=c.execute('SELECT phone FROM facilities WHERE id=?',
+                    (item['facility']['id'],)).fetchone()
+   assert stored==(None,), (mode,stored)
+   source_note=c.execute('SELECT note FROM sources WHERE id=?',
+                         (item['source']['id'],)).fetchone()
+   assert source_note==(None,), (mode,source_note)
+   rid=item['rule_set']['id']
+   assert c.execute('SELECT count(*) FROM rule_sets WHERE id=?',(rid,)).fetchone()[0]==1
+   assert c.execute('SELECT count(*) FROM refund_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==len(item['refunds'])
+   assert c.execute('SELECT closure_note FROM reservation_rules WHERE rule_set_id=?',(rid,)).fetchone()==(None,)
+   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+ print('PASS: 공통 저장 경로 테스트(고정 회차/시간제), 전화번호·출처 메모 누락 허용, 예약·환불 규정 유지')
  print('PASS: quote() 옵션 조회 호출 1회(필수/포함/선택 조명), 독립 옵션 계산 유지')
  print('PASS: 복수 감면 60%+50%는 needs_review/금액 null/근거 출처 반환, 단일 자격 및 기존 계산 유지')
  print('PASS: JSON 시간 정책 최소/최대/단위 저장, 30분 시작, NULL 보존, 잘못된 값 차단')
