@@ -16,7 +16,7 @@ def normalize_use_date(value):
         raise ValueError('이용일 날짜 형식 오류') from exc
 
 def fetch(db,sql,params=()):
-    con=sqlite3.connect(f'file:{Path(db).resolve()}?mode=ro',uri=True)
+    con=sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
     con.row_factory=sqlite3.Row
     try: return [dict(x) for x in con.execute(sql,params)]
     finally: con.close()

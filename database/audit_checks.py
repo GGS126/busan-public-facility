@@ -1,4 +1,4 @@
-import json, sqlite3, tempfile, pathlib, hashlib
+import json, sqlite3, tempfile, pathlib, hashlib, shutil, os
 from contextlib import closing
 from unittest.mock import patch
 import load,query_api as q
@@ -235,6 +235,25 @@ with tempfile.TemporaryDirectory() as tmp:
    assert c.execute('SELECT count(*) FROM refund_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==len(item['refunds'])
    assert c.execute('SELECT closure_note FROM reservation_rules WHERE rule_set_id=?',(rid,)).fetchone()==(None,)
    assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+ # 읽기 전용 SQLite URI에서 경로의 #, %, 공백, 한글, (POSIX에서) ?를 안전하게 인코딩한다.
+ special_dir=tmp/'DB # 100% 한글 경로'
+ special_dir.mkdir()
+ special_names=['시설 # 50%.sqlite3']
+ if os.name!='nt':
+  special_names.append('시설 ? query.sqlite3')
+ for name in special_names:
+  special_db=special_dir/name
+  shutil.copyfile(db,special_db)
+  assert len(q.facilities(special_db))==3, name
+  result=q.quote(special_db,'busan_haeundae_arboretum_tennis',
+                 '2026-11-09','09:00','11:00',False)
+  assert result['status']=='priced' and result['total_won']==8000,(name,result)
+  # fetch()가 읽기 전용으로 연결되는지도 확인한다.
+  try:q.fetch(special_db,'INSERT INTO facilities(id) VALUES(?)',('temporary_probe',))
+  except sqlite3.OperationalError as exc:
+   assert 'readonly' in str(exc).lower(),exc
+  else:raise AssertionError('읽기 전용 연결에서 INSERT가 성공함: '+name)
+ print('PASS: 특수문자(#, %, 공백, 한글, POSIX ? 포함) DB 경로에서 읽기 전용 조회')
  print('PASS: 공통 저장 경로 테스트(고정 회차/시간제), 전화번호·출처 메모 누락 허용, 예약·환불 규정 유지')
  print('PASS: quote() 옵션 조회 호출 1회(필수/포함/선택 조명), 독립 옵션 계산 유지')
  print('PASS: 복수 감면 60%+50%는 needs_review/금액 null/근거 출처 반환, 단일 자격 및 기존 계산 유지')
