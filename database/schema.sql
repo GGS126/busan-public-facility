@@ -1,6 +1,7 @@
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS facilities (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, facility_type TEXT NOT NULL,
+ district TEXT NOT NULL CHECK(length(trim(district)) > 0),
  address TEXT NOT NULL, phone TEXT, booking_url TEXT NOT NULL,
  open_time TEXT, close_time TEXT,
  holiday_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

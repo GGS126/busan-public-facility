@@ -76,3 +76,7 @@ python database/build_db.py --data database/seed.json database/samrak_winter_202
 ```
 
 `database/.gitignore`는 생성된 SQLite 파일과 Python 임시 파일을 새로 커밋하지 않도록 합니다. **이미 Git에 올라간 `facilities.sqlite3`와 중복 `README_database_content.md`는 GitHub 브랜치에서 별도로 삭제 커밋해야 합니다.**
+
+## 구·군 정보 (`district`)
+
+`facilities.district`는 시설별 구·군 이름을 저장하며, 시설 목록 조회(`query_api.facilities`)에도 포함됩니다. 현재 등록된 값은 해운대수목원 `해운대구`, 삼락생태공원 `사상구`, 구덕운동장 `서구`입니다. 신규 시설 JSON의 `facility.district`는 필수이며 비어 있으면 적재를 거부합니다.

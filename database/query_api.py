@@ -22,7 +22,7 @@ def fetch(db,sql,params=()):
     finally: con.close()
 
 def facilities(db):
-    return fetch(db,'SELECT id,name,facility_type,address,booking_url FROM facilities ORDER BY name')
+    return fetch(db,'SELECT id,name,facility_type,district,address,booking_url FROM facilities ORDER BY name')
 
 def pricing_rules(db,facility_id,use_date,is_weekend_or_holiday):
     use_date=normalize_use_date(use_date)

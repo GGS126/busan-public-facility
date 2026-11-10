@@ -13,8 +13,19 @@ with tempfile.TemporaryDirectory() as tmp:
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
   assert c.execute('select count(*) from facilities').fetchone()[0]==3
+  assert dict(c.execute('SELECT id,district FROM facilities').fetchall()) == {
+   'busan_haeundae_arboretum_tennis': '해운대구',
+   'busan_samrak_ecopark_tennis': '사상구',
+   'busan_gudeok_stadium_tennis': '서구',
+  }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+ listed = {row['id']: row['district'] for row in q.facilities(db)}
+ assert listed == {
+  'busan_haeundae_arboretum_tennis': '해운대구',
+  'busan_samrak_ecopark_tennis': '사상구',
+  'busan_gudeok_stadium_tennis': '서구',
+ }, '시설 조회 district 결과 오류'
  checks=[('busan_haeundae_arboretum_tennis','09:00','11:00',False,0,8000),('busan_haeundae_arboretum_tennis','20:00','22:00',False,0,28000),('busan_haeundae_arboretum_tennis','18:00','20:00',False,80,21200),('busan_samrak_ecopark_tennis','08:00','10:00',False,70,26000),('busan_samrak_ecopark_tennis','08:00','10:00',True,0,9000),('busan_gudeok_stadium_tennis','17:00','19:00',False,0,18000),('busan_gudeok_stadium_tennis','18:00','20:00',False,0,28000)]
  for fac,start,end,week,light,expected in checks:
   actual=q.quote(db,fac,'2026-11-09',start,end,week,light)
@@ -46,6 +57,7 @@ with tempfile.TemporaryDirectory() as tmp:
  # 잘못된 데이터가 반드시 기대한 검증 오류로 거부되는지 확인한다.
  # 무관한 KeyError/SQLite 오류가 발생하면 검증 성공으로 처리하지 않는다.
  invalid_cases = [
+  ('facility', 'district', '', 'facility.district 누락'),
   ('source', 'checked_on', '2026-13-55', 'source.checked_on 날짜 오류'),
   ('reservation', 'online_open_days_before', -1, 'reservation.online_open_days_before 오류'),
   ('facility', 'name', '', 'facility.name 누락'),
@@ -261,4 +273,5 @@ with tempfile.TemporaryDirectory() as tmp:
  print('PASS: YYYYMMDD 날짜 조회·저장 정규화, 구분자 있는 날짜와 동일 결과, 잘못된 날짜 차단')
  print('PASS: 규정 ID 변경 시 기간 중복 차단(고정회차/시간제), 동일 ID 갱신, 인접 기간, 원본 DB 보존')
  print('PASS: 시간제 시설 2곳 추가 시 PK 충돌 없음, 평일/주말 1시간 요금 분리 확인')
+ print('PASS: 시설별 district 3곳 저장·조회 및 빈 값 입력 차단')
  print('PASS: JSON 3개 재적재, DB 무결성, 확인된 요금 계산 7건 및 미확인 요금 2건 확인 필요, 잘못된 JSON 4건 차단 및 DB 원본 보존')

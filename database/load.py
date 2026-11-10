@@ -92,7 +92,7 @@ def validate_shared(d):
         if not isinstance(d.get(section), dict):
             raise ValueError(f'{section} 객체 누락 또는 형식 오류')
     for section, keys in {
-        'facility': ('id', 'name', 'facility_type', 'address', 'booking_url'),
+        'facility': ('id', 'name', 'facility_type', 'district', 'address', 'booking_url'),
         'source': ('id', 'url', 'title', 'checked_on', 'verification_level'),
         'rule_set': ('id', 'effective_from', 'effective_to', 'status'),
     }.items():
@@ -206,13 +206,13 @@ def insert_shared_records(con, d):
     f, s, r = d['facility'], d['source'], d['rule_set']
     rid = r['id']
     con.execute("""INSERT INTO facilities
-        (id,name,facility_type,address,phone,booking_url,open_time,close_time,holiday_note)
-        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+        (id,name,facility_type,district,address,phone,booking_url,open_time,close_time,holiday_note)
+        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
         name=excluded.name, facility_type=excluded.facility_type,
-        address=excluded.address, phone=excluded.phone, booking_url=excluded.booking_url,
+        district=excluded.district, address=excluded.address, phone=excluded.phone, booking_url=excluded.booking_url,
         open_time=excluded.open_time, close_time=excluded.close_time,
         holiday_note=excluded.holiday_note""",
-        tuple(f.get(key) for key in ('id','name','facility_type','address','phone',
+        tuple(f.get(key) for key in ('id','name','facility_type','district','address','phone',
                                      'booking_url','open_time','close_time','holiday_note')))
     con.execute("""INSERT INTO sources
         (id,url,title,checked_on,verification_level,note) VALUES(?,?,?,?,?,?)

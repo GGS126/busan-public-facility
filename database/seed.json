@@ -8,7 +8,8 @@
     "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=531&progrmSn=619",
     "open_time": "07:00",
     "close_time": "22:00",
-    "holiday_note": "1월 1일, 설날 당일, 추석 당일 휴원"
+    "holiday_note": "1월 1일, 설날 당일, 추석 당일 휴원",
+    "district": "해운대구"
   },
   "source": {
     "id": "busan_reserve_619_2026h2",

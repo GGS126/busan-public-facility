@@ -8,7 +8,8 @@
     "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
     "open_time": "08:00",
     "close_time": "22:00",
-    "holiday_note": "연중무휴(정기 휴무일 없음)"
+    "holiday_note": "연중무휴(정기 휴무일 없음)",
+    "district": "서구"
   },
   "source": {
     "id": "busan_reserve_472_2026winter",
