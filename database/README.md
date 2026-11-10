@@ -10,6 +10,40 @@
 | 삼락생태공원 테니스장 | 동절기 지정 4개 회차 중 선택 | 평일·주말 및 회차별 요금 | 동절기(2026.10.01~2027.03.31) 기준 |
 | 구덕운동장 테니스장 | 08:00~22:00 범위에서 자유 시작, 최대 2시간 | 2시간 8,000원(1시간·90분 요금 확인 필요) | 18:00~22:00 야간 조명료 별도 |
 
+## 백엔드 PR #19 이용시간 규정 호환성
+
+`query_api.backend_time_policy(db, facility_id, use_date)`는 SQLite의 `time_selection_policies`,
+`pricing_rules`, `facilities`, `rule_sets`, `sources`를 조회하여 PR #19의 `TimePolicy` 입력과
+비교합니다. `compatible: true`인 경우에만 `policy`를 백엔드 모델로 전달합니다.
+
+| 시설 | PR #19 선택 방식 | 변환 상태 | 근거 |
+| --- | --- | --- | --- |
+| 해운대수목원 | `fixed_slot` | 호환: 8개 회차 | 회차별 시작/종료시간, 07:00~22:00 운영시간 |
+| 삼락생태공원 | `fixed_slot` | 호환: 4개 회차 | 동절기 시작/종료시간, 08:00~17:00 운영시간(점심 공백은 회차로 통제) |
+| 구덕운동장 | `flexible` | **미확인 / 변환 보류** | 08:00~22:00, 최대 120분, 하루 120분은 확인됐으나 `allowed_minutes`는 미확인 |
+
+- 백엔드의 `TimePolicy.selection`은 `fixed_slot`/`flexible`이고, 원본 DB에는
+  `fixed_slot`/`flexible_interval`을 사용하므로 매핑이 필요합니다.
+- **구덕:** 공식 2시간 기본요금(8,000원)은 허용시간 목록이 아닙니다. 확인 없이
+  `allowed_minutes=[60,120]` 또는 `[120]`을 만들지 않습니다. `status: needs_review`,
+  `compatible: false`, `policy: null`과 `known_constraints`로 반환합니다.
+- 원본 DB의 구덕 `daily_limit_minutes=120`은 백엔드 PR #19의 `TimePolicy` 필드에 없으며,
+  예약 이력에 따른 하루 사용시간 판정은 별도 처리해야 합니다.
+- **PR #19는 유효한 시간 규정이 없어도 요금 계산으로 넘어가는 구조**입니다.
+  따라서 구덕의 `policy: null`을 '예약 가능'으로 해석하지 말고, 백엔드 연동 시
+  시간 규칙 검증 보류를 별도로 다뤄야 합니다.
+- **운영시간은 계절별 `rule_sets` 적용기간의 시설값을 조회**합니다. 다른 계절에
+  운영시간이 변경되면 그 기간에 해당하는 확정 자료를 별도로 보완해야 합니다.
+
+조회 예시(프로젝트 루트):
+
+```bash
+python database/build_db.py
+python database/query_api.py backend_time_policy --facility busan_haeundae_arboretum_tennis --date 2026-11-09
+python database/query_api.py backend_time_policy --facility busan_gudeok_stadium_tennis --date 2026-11-09
+python database/audit_checks.py
+```
+
 ## 주요 테이블과 저장 내용
 
 | 테이블 | 저장 내용 |
@@ -146,3 +180,70 @@ result = query_api.closure_status(db_path, facility_id, '2026-11-09',
 - `query_api.discounts()`가 보호자 규칙을 반환합니다. `discount_proration_check()`에 넘기는 `eligible_count`에는 **자격이 확인된 동반 보호자 1명**을 포함할 수 있지만, 개인별 자격·동행 확인과 API 입력 검증은 백엔드가 담당합니다. 원 미만 감면 끝전은 기존과 같이 `needs_review`입니다.
 
 공식 근거: https://www.busan.go.kr/green/gchwd0400 ; https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=1961769 ; https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=1662641 (법규의 적용 조문·시점은 배포 시 최신 판본 재확인).
+
+## 삼락생태공원 공휴일 요금 공식 확인 (2026-11-10)
+
+- **공식 운영기관:** 부산광역시 낙동강관리본부, [시설 이용안내](https://www.busan.go.kr/nakdong/ndreservation)
+- **테니스장 1면 2시간:** 평일 **6,000원**, **주말 및 공휴일 9,000원**.
+- 시설 예약 상세 페이지에는 '주중/주말'로 표시되지만 운영기관 안내에는 '주말 및 공휴일'로 명시되어 있음.
+- 기존 `pricing_rules.weekend_holiday_base_won` 9,000원 데이터 및 `quote(..., is_weekend_or_holiday=True)` 방식은 올바르므로 요금·스키마 변경은 필요 없음. 백엔드가 공휴일 여부를 판정해 전달해야 함.
+- `samrak_test_cases.json`에 평일인 공휴일(2026-12-25) 9,000원 사례를 추가하고 `audit_checks.py`에서 평일 6,000원과 공휴일 9,000원 모두 검증함.
+- 설날 당일과 추석 당일은 별도의 정기 휴장 규칙에 따라 처리해야 하며, 공휴일 요금 확정이 휴장일 예약을 허용한다는 의미는 아님.
+
+## 계산 검증 사례 JSON 공통 형식 (v2.0)
+
+`test_cases.json`(해운대), `samrak_test_cases.json`(삼락),
+`gudeok_test_cases.json`(구덕)은 같은 구조를 사용합니다.
+**기존 계산 결과나 공식 근거는 바꾸지 않고 필드 위치 및 이름만 통일**했습니다.
+
+```json
+{
+  "format_version": "2.0",
+  "facility_id": "busan_samrak_ecopark_tennis",
+  "cases": [
+    {
+      "id": "S03",
+      "description": "삼락 평일 4명 중 2명 감면",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "slot": 3,
+        "is_weekend_or_holiday": false,
+        "party_size": 4,
+        "eligible_count": 2
+      },
+      "expected": {
+        "initial_payment_won": 6000,
+        "discount_refund_won": 1500,
+        "final_expected_cost_won": 4500
+      }
+    }
+  ]
+}
+```
+
+- **항상 있는 키:** 각 사례의 `id`, `inputs`, `expected`, `inputs.facility_id`.
+  나머지는 사례 유형(요금/감면/조명/환불)에 따라 **필요할 때만 존재**합니다.
+- **시간 입력:** 고정 회차는 `slot`, 자유시간 시설은 `start`와 `end`(필요하면 `duration_minutes`).
+  서로 다른 선택 방식을 억지로 같은 값으로 변환하지 않습니다.
+- **요일:** `is_weekend_or_holiday`는 주말 **또는** 공휴일 여부로 통일.
+  실제 평일/주말/공휴일 구별 근거가 있는 사례에만 별도로 `is_weekend`, `is_holiday`, `use_date`를 둡니다.
+  주말 또는 공휴일이라는 사실만으로 `is_weekend: true`를 새로 만들어 넣지 않습니다.
+- **인원:** `party_size`(전체 이용 인원), `eligible_count`(전체 감면 대상 인원).
+  구덕의 `eligible_companion_count`와 `reservation_holder_eligible`은 기존의 대표자/동반자 구분을 보존합니다.
+- **금액:** `initial_payment_won`(선결제액), `total_fee_won`(표시된 총 요금),
+  `base_court_won`(감면 전 코트 기본요금), `lighting_won`(조명료),
+  `optional_lighting_on_site_won`(선택 조명의 현장 결제 금액),
+  `discount_refund_won`(감면 환급금), `final_expected_cost_won`(감면 후 실질 이용료).
+  **현장 선택 조명료는 선결제액에 합산하지 않습니다.**
+  `final_cost_won`은 취소·환불 후 최종 부담액으로 별도로 유지합니다.
+- **상태:** 확인되지 않은 요금/끝전은 기존과 같이 `expected.status: needs_review` 및
+  금액 `null`로 보존합니다. 테스트 입력에 실제 근거 없는 일자·가격·허용 이용시간을 만들어 넣지 않습니다.
+- **호환성 주의:** 이번 변경은 테스트 데이터 형식 변경입니다.
+  이전 키(`initial_court_payment_won`, `refund_discount_won`, `net_won` 등)를 직접 읽던
+  백엔드 테스트는 새 키로 변경하거나 별도 변환 계층이 필요합니다.
+
+다음 명령으로 35건의 공통 스키마 및 기존 DB 회귀 검증을 실행할 수 있습니다.
+
+```powershell
+python database/audit_checks.py
+```

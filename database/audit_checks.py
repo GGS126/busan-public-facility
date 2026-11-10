@@ -20,6 +20,64 @@ with tempfile.TemporaryDirectory() as tmp:
   }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+ # 공통 테스트 사례 스키마: 같은 항목은 같은 이름, 선택적 항목은 의미를 보존.
+ test_fixtures={
+  'test_cases.json':'busan_haeundae_arboretum_tennis',
+  'samrak_test_cases.json':'busan_samrak_ecopark_tennis',
+  'gudeok_test_cases.json':'busan_gudeok_stadium_tennis',
+ }
+ expected_names={'status','review_code','initial_payment_won','base_court_won','mandatory_lighting_won',
+  'lighting_won','optional_lighting_on_site_won','discount_refund_won','final_expected_cost_won',
+  'total_fee_won','refund_percent','refund_won','final_cost_won'}
+ input_names={'facility_id','slot','start','end','duration_minutes','is_weekend_or_holiday','is_weekend',
+  'is_holiday','use_date','party_size','eligible_count','eligible_companion_count',
+  'reservation_holder_eligible','base_court_won','lighting_won','lighting_minutes',
+  'optional_lighting_minutes','initial_paid_won','days_before','reason','discount_category','percent'}
+ total_cases=0
+ for file,facility in test_fixtures.items():
+  payload=json.loads((R/file).read_text(encoding='utf-8'))
+  assert payload['facility_id']==facility and payload['format_version']=='2.0',file
+  ids=set()
+  for item in payload['cases']:
+   total_cases+=1
+   assert item['id'] not in ids,(file,item['id'])
+   ids.add(item['id'])
+   assert 'inputs' in item and 'expected' in item,(file,item)
+   assert item['inputs']['facility_id']==facility,(file,item)
+   assert not (set(item['inputs'])-input_names),(file,item)
+   assert not (set(item['expected'])-expected_names),(file,item)
+   assert not {'initial_court_payment_won','refund_discount_won','net_won','total_won','participant_count','base_won'} & set(item),(file,item)
+   inp=item['inputs']
+   if 'is_weekend' in inp and 'is_holiday' in inp:
+    assert inp['is_weekend_or_holiday']==(inp['is_weekend'] or inp['is_holiday']),(file,item)
+   if item['expected'].get('status')=='needs_review':
+    assert item['expected'].get('discount_refund_won') is None,(file,item)
+ assert total_cases==35,total_cases
+ print('PASS: 계산 검증 JSON 35건 공통 입력/기대값 스키마 및 값 보존')
+ # PR #19 TimePolicy 호환성: 고정 회차는 정확히 변환, 구덕은 허용시간 미확인 보존.
+ for facility, expected_slots, period in [
+   ('busan_haeundae_arboretum_tennis',8,('2026-07-01','2026-12-31')),
+   ('busan_samrak_ecopark_tennis',4,('2026-10-01','2027-03-31'))]:
+  result=q.backend_time_policy(db,facility,'2026-11-09')
+  assert result['status']=='compatible' and result['compatible'] and not result['review_items'],result
+  policy=result['policy']
+  assert policy['selection']=='fixed_slot' and len(policy['slots'])==expected_slots,policy
+  assert (policy['effective_from'],policy['effective_to'])==period,policy
+  assert policy['source_id'] and policy['sport']=='tennis',policy
+  assert all(slot['start_time']<slot['end_time'] for slot in policy['slots']),policy
+  assert policy['open_time'] <= min(x['start_time'] for x in policy['slots']),policy
+  assert policy['close_time'] >= max(x['end_time'] for x in policy['slots']),policy
+ g=q.backend_time_policy(db,'busan_gudeok_stadium_tennis','2026-11-09')
+ assert g['status']=='needs_review' and not g['compatible'] and g['policy'] is None,g
+ assert g['review_items'][0]['code']=='allowed_minutes_unverified',g
+ assert g['known_constraints']['selection']=='flexible',g
+ assert g['known_constraints']['open_time']=='08:00' and g['known_constraints']['close_time']=='22:00',g
+ assert g['known_constraints']['max_minutes']==120 and g['known_constraints']['daily_limit_minutes']==120,g
+ assert g['known_constraints']['min_minutes'] is None and g['known_constraints']['step_minutes'] is None,g
+ assert g['known_constraints']['priced_duration_minutes']==[120],g
+ missing=q.backend_time_policy(db,'busan_haeundae_arboretum_tennis','2027-01-01')
+ assert missing['status']=='no_active_rule_set' and missing['policy'] is None,missing
+ print('PASS: PR #19 이용시간 변환(해운대 8회차/삼락 4회차), 구덕 허용시간 미확인 안전 보류')
  # 감면 적용 대상과 환급 수령인 구분: 해운대는 확인된 인원 비례, 구덕은 대상 이용자별 감면·대표자 환급.
  with closing(sqlite3.connect(db)) as c:
   hae=c.execute("SELECT DISTINCT basis FROM v_facility_discounts WHERE facility_id=?", ('busan_haeundae_arboretum_tennis',)).fetchall()
@@ -34,7 +92,7 @@ with tempfile.TemporaryDirectory() as tmp:
  g_cases=json.loads((R/'gudeok_test_cases.json').read_text(encoding='utf-8'))['cases']
  for case in g_cases:
   if case['id'] in ('gudeok_discount','gudeok_companion_eligible_only','gudeok_holder_eligible_night'):
-   assert case['status']=='confirmed' and case['refund_discount_won'] in (1000,3000) and case['net_won'] in (7000,5000,27000),case
+   assert case['expected']['status']=='confirmed' and case['expected']['discount_refund_won'] in (1000,3000) and case['expected']['final_expected_cost_won'] in (7000,5000,27000),case
  # 중증 장애인 동반 보호자 최대 1명: 세 시설의 감면 규칙 조회 및 증빙 안내 검증
  for fac in ('busan_haeundae_arboretum_tennis','busan_samrak_ecopark_tennis','busan_gudeok_stadium_tennis'):
   rules=q.discounts(db,fac,'2026-11-09')
@@ -80,8 +138,8 @@ with tempfile.TemporaryDirectory() as tmp:
                     ('gudeok_test_cases.json','gudeok_rounding_unverified')]:
   cases=json.loads((R/path).read_text(encoding='utf-8'))['cases']
   case=next(x for x in cases if x['id']==ident)
-  expected=case.get('expected',case)
-  assert expected['status']=='needs_review' and expected.get('discount_refund_won',expected.get('refund_discount_won')) is None,case
+  expected=case['expected']
+  assert expected['status']=='needs_review' and expected.get('discount_refund_won') is None,case
  import copy as rounding_copy
  for bad_value in ('round_up', 'floor_won', 0):
   changed=rounding_copy.deepcopy(D)
@@ -178,6 +236,16 @@ with tempfile.TemporaryDirectory() as tmp:
   'busan_samrak_ecopark_tennis': '사상구',
   'busan_gudeok_stadium_tennis': '서구',
  }, '시설 조회 district 결과 오류'
+ # 삼락 공식 이용안내: 평일 6,000원 / 주말 및 공휴일 9,000원 (2026-11-10 확인).
+ sa='busan_samrak_ecopark_tennis'; holiday='2026-12-25'  # 금요일 공휴일
+ holiday_price=q.quote(db,sa,holiday,'08:00','10:00',True)
+ weekday_price=q.quote(db,sa,'2026-12-24','08:00','10:00',False)
+ assert holiday_price['status']=='priced' and holiday_price['total_won']==9000,holiday_price
+ assert weekday_price['status']=='priced' and weekday_price['total_won']==6000,weekday_price
+ holiday_case=next(c for c in json.loads((R/'samrak_test_cases.json').read_text(encoding='utf-8'))['cases'] if c['id']=='S_holiday_9000_confirmed')
+ assert holiday_case['inputs']['is_holiday'] is True and holiday_case['inputs']['is_weekend'] is False
+ assert holiday_case['expected']['initial_payment_won']==holiday_price['total_won']
+ print('PASS: 삼락 평일 6,000원, 공휴일 9,000원 (운영기관 공식 요금표)')
  checks=[('busan_haeundae_arboretum_tennis','09:00','11:00',False,0,8000),('busan_haeundae_arboretum_tennis','20:00','22:00',False,0,28000),('busan_haeundae_arboretum_tennis','18:00','20:00',False,80,21200),('busan_samrak_ecopark_tennis','08:00','10:00',False,70,26000),('busan_samrak_ecopark_tennis','08:00','10:00',True,0,9000),('busan_gudeok_stadium_tennis','17:00','19:00',False,0,18000),('busan_gudeok_stadium_tennis','18:00','20:00',False,0,28000)]
  for fac,start,end,week,light,expected in checks:
   actual=q.quote(db,fac,'2026-11-09',start,end,week,light)

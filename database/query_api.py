@@ -90,6 +90,68 @@ def closure_status(db,facility_id,use_date,holiday_codes=None):
             'note':'임시 휴장·행사·별도 공지는 반영되지 않았습니다. 실제 예약 가능 여부는 공식 예약 사이트에서 확인해야 합니다.'}
 
 
+def backend_time_policy(db, facility_id, use_date):
+    """PR #19 TimePolicy와의 안전한 호환성 점검 및 변환 자료.
+
+    확정되지 않은 허용 시간 목록을 임의 생성하지 않는다. compatible=True일 때만
+    policy를 백엔드의 TimePolicy 모델에 전달할 수 있다.
+    """
+    use_date = normalize_use_date(use_date)
+    rows = fetch(db, """SELECT r.id AS rule_set_id,r.effective_from,r.effective_to,
+           f.facility_type,f.open_time,f.close_time,
+           t.selection_type,t.available_start_time,t.available_end_time,
+           t.min_minutes,t.max_minutes,t.step_minutes,t.daily_limit_minutes,t.note,
+           s.id AS source_id,s.url AS source_url
+       FROM rule_sets r JOIN facilities f ON f.id=r.facility_id
+       JOIN time_selection_policies t ON t.rule_set_id=r.id
+       JOIN sources s ON s.id=r.source_id
+       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to
+       ORDER BY r.id""", (facility_id, use_date))
+    base = {'facility_id': facility_id, 'date': use_date}
+    if not rows:
+        return {**base, 'status': 'no_active_rule_set', 'compatible': False,
+                'policy': None, 'review_items': [{'code':'rule_missing',
+                'reason':'해당 이용일에 적용되는 이용시간 규정이 없습니다.'}]}
+    if len(rows) != 1:
+        return {**base, 'status':'needs_review','compatible':False,'policy':None,
+                'review_items':[{'code':'rule_conflict',
+                'reason':'동일 날짜에 유효한 이용시간 규정이 여러 개입니다.'}]}
+    x = rows[0]
+    common = {'policy_id': x['rule_set_id'] + '_time',
+              'sport': x['facility_type'], 'effective_from':x['effective_from'],
+              'effective_to':x['effective_to'], 'source_id':x['source_id']}
+    if x['selection_type'] == 'fixed_slot':
+        slots = fetch(db, """SELECT start_time,end_time FROM pricing_rules
+            WHERE rule_set_id=? AND selection_type='fixed_slot'
+            ORDER BY slot_no""", (x['rule_set_id'],))
+        if not slots:
+            return {**base, 'status':'needs_review','compatible':False,'policy':None,
+                    'review_items':[{'code':'slot_missing','reason':'지정 회차 정보가 없습니다.'}]}
+        policy = {**common,'selection':'fixed_slot','slots':slots,
+                  'allowed_minutes':[], 'open_time':x['open_time'],
+                  'close_time':x['close_time']}
+        return {**base,'status':'compatible','compatible':True,
+                'policy':policy,'source_url':x['source_url'],'review_items':[]}
+    if x['selection_type'] == 'flexible_interval':
+        # 120분 기준 요금이 있다는 사실만으로 60분·120분만 허용한다고 단정할 수 없다.
+        # max_minutes=120, step_minutes=NULL 등으로는 정확한 allowed_minutes를 복원할 수 없다.
+        return {**base,'status':'needs_review','compatible':False,'policy':None,
+                'source_url':x['source_url'],
+                'known_constraints':{'selection':'flexible',
+                    'open_time':x['available_start_time'] or x['open_time'],
+                    'close_time':x['available_end_time'] or x['close_time'],
+                    'min_minutes':x['min_minutes'],'max_minutes':x['max_minutes'],
+                    'step_minutes':x['step_minutes'],
+                    'daily_limit_minutes':x['daily_limit_minutes'],
+                    'priced_duration_minutes':[x['duration_minutes'] for x in fetch(db,
+                        "SELECT DISTINCT duration_minutes FROM pricing_rules WHERE rule_set_id=? ORDER BY duration_minutes",
+                        (x['rule_set_id'],))]},
+                'review_items':[{'code':'allowed_minutes_unverified',
+                    'reason':'PR #19의 flexible 형식은 허용 이용시간 목록(allowed_minutes)이 필수이나, 공식 자료에서 정확한 목록이 확인되지 않았습니다. 2시간 요금과 최대 2시간 제한을 근거로 60분/120분만 허용한다고 추정하지 않습니다.'}]}
+    return {**base,'status':'needs_review','compatible':False,'policy':None,
+            'review_items':[{'code':'selection_unknown','reason':'알 수 없는 이용시간 선택 형식입니다.'}]}
+
+
 def pricing_rules(db,facility_id,use_date,is_weekend_or_holiday):
     use_date=normalize_use_date(use_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('is_weekend_or_holiday는 bool 필수')
@@ -367,7 +429,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
 duration_quote=quote
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description='공통 시설 요금 조회')
-    parser.add_argument('resource',choices=['facilities','pricing','slots','duration_prices','quote','duration_quote','optional_lighting','options','discounts','refunds'])
+    parser.add_argument('resource',choices=['facilities','pricing','slots','duration_prices','quote','duration_quote','optional_lighting','options','discounts','refunds','backend_time_policy'])
     parser.add_argument('--facility');parser.add_argument('--date');parser.add_argument('--weekend',choices=['true','false'])
     parser.add_argument('--start-time');parser.add_argument('--end-time')
     parser.add_argument('--optional-lighting-minutes',type=int,default=0)
@@ -382,6 +444,7 @@ if __name__=='__main__':
         if a.resource=='pricing':result=pricing_rules(a.db,a.facility,a.date,is_weekend)
         elif a.resource=='slots':result=slots(a.db,a.facility,a.date,is_weekend)
         elif a.resource=='duration_prices':result=duration_prices(a.db,a.facility,a.date)
+        elif a.resource=='backend_time_policy':result=backend_time_policy(a.db,a.facility,a.date)
         elif a.resource=='options':result=facility_options(a.db,a.facility,a.date)
         elif a.resource=='discounts':result=discounts(a.db,a.facility,a.date)
         elif a.resource=='refunds':result=refund_rules(a.db,a.facility,a.date)

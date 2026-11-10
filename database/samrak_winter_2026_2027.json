@@ -15,9 +15,9 @@
     "id": "busan_reserve_395_winter_2026",
     "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=395",
     "title": "부산광역시 통합예약 - 삼락생태공원 테니스장 동절기",
-    "checked_on": "2026-11-06",
+    "checked_on": "2026-11-10",
     "verification_level": "user_transcribed_official",
-    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06).",
+    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06). 공휴일 요금은 낙동강관리본부 공식 이용안내(https://www.busan.go.kr/nakdong/ndreservation, 2026-11-10 확인)의 테니스장 1면/2시간 평일 6,000원, 주말 및 공휴일 9,000원 표를 추가 근거로 확인.",
     "license": null
   },
   "rule_set": {

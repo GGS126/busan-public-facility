@@ -9,7 +9,8 @@
         "slot": 1,
         "is_weekend": false,
         "party_size": 4,
-        "eligible_count": 0
+        "eligible_count": 0,
+        "is_weekend_or_holiday": false
       },
       "expected": {
         "initial_payment_won": 6000,
@@ -25,7 +26,8 @@
         "slot": 2,
         "is_weekend": true,
         "party_size": 4,
-        "eligible_count": 0
+        "eligible_count": 0,
+        "is_weekend_or_holiday": true
       },
       "expected": {
         "initial_payment_won": 9000,
@@ -41,7 +43,8 @@
         "slot": 3,
         "is_weekend": false,
         "party_size": 4,
-        "eligible_count": 2
+        "eligible_count": 2,
+        "is_weekend_or_holiday": false
       },
       "expected": {
         "initial_payment_won": 6000,
@@ -57,7 +60,8 @@
         "slot": 4,
         "is_weekend": true,
         "party_size": 3,
-        "eligible_count": 1
+        "eligible_count": 1,
+        "is_weekend_or_holiday": true
       },
       "expected": {
         "initial_payment_won": 9000,
@@ -123,6 +127,28 @@
         "final_expected_cost_won": null,
         "review_code": "discount_rounding_unverified"
       }
+    },
+    {
+      "id": "S_holiday_9000_confirmed",
+      "description": "삼락 평일에 해당하는 공휴일(2026-12-25 금요일)에는 주말·공휴일 요금 9,000원 적용. 출처: 부산광역시 낙동강관리본부 이용안내",
+      "inputs": {
+        "facility_id": "busan_samrak_ecopark_tennis",
+        "use_date": "2026-12-25",
+        "slot": 1,
+        "is_weekend": false,
+        "is_holiday": true,
+        "is_weekend_or_holiday": true,
+        "party_size": 4,
+        "eligible_count": 0
+      },
+      "expected": {
+        "initial_payment_won": 9000,
+        "discount_refund_won": 0,
+        "final_expected_cost_won": 9000
+      },
+      "source_url": "https://www.busan.go.kr/nakdong/ndreservation"
     }
-  ]
+  ],
+  "format_version": "2.0",
+  "facility_id": "busan_samrak_ecopark_tennis"
 }
