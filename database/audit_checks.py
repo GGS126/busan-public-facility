@@ -161,6 +161,27 @@ with tempfile.TemporaryDirectory() as tmp:
   except ValueError:pass
   else:raise AssertionError('잘못된 시간 단위 수락: '+repr(bad))
   assert hashlib.sha256(policy_db.read_bytes()).hexdigest()==pristine
+ # 복수 감면 자격은 공식 중복 적용 기준이 없으므로 추정 금액을 반환하지 않는다.
+ d_fac='busan_haeundae_arboretum_tennis'
+ double=q.quote(db,d_fac,'2026-11-09','09:00','11:00',False,
+                discount_category_ids=['independence_merit','disabled'])
+ assert double['status']=='needs_review',double
+ assert double['total_won'] is None and double['discount_won'] is None,double
+ assert double['review_items'][0]['code']=='discount_stacking_unverified',double
+ assert {rule['percent'] for rule in double['selected_discount_rules']}=={50,60},double
+ assert all(rule['source_url'].startswith('https://reserve.busan.go.kr/') for rule in double['selected_discount_rules']),double
+ # 동일한 자격 ID를 중복 전달해도 복수 감면으로 오인하지 않는다.
+ same=q.quote(db,d_fac,'2026-11-09','09:00','11:00',False,
+              discount_category_ids=['disabled','disabled'])
+ assert same['status']=='priced' and same['total_won']==8000,same
+ # 감면 자격을 전달하지 않은 기존 요금 조회 결과는 그대로 유지한다.
+ no_discount=q.quote(db,d_fac,'2026-11-09','09:00','11:00',False)
+ assert no_discount['status']=='priced' and no_discount['total_won']==8000,no_discount
+ # 해당 시설에 등록되지 않은 자격 ID는 잘못된 입력으로 거부한다.
+ try:q.quote(db,d_fac,'2026-11-09','09:00','11:00',False,discount_category_ids=['unknown_discount'])
+ except ValueError:pass
+ else:raise AssertionError('등록되지 않은 감면 자격을 허용함')
+ print('PASS: 복수 감면 60%+50%는 needs_review/금액 null/근거 출처 반환, 단일 자격 및 기존 계산 유지')
  print('PASS: JSON 시간 정책 최소/최대/단위 저장, 30분 시작, NULL 보존, 잘못된 값 차단')
  print('PASS: YYYYMMDD 날짜 조회·저장 정규화, 구분자 있는 날짜와 동일 결과, 잘못된 날짜 차단')
  print('PASS: 규정 ID 변경 시 기간 중복 차단(고정회차/시간제), 동일 ID 갱신, 인접 기간, 원본 DB 보존')

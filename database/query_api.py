@@ -52,6 +52,57 @@ def discounts(db,facility_id,use_date):
     FROM v_facility_discounts WHERE facility_id=? AND ? BETWEEN effective_from AND effective_to
     ORDER BY category_name''',(facility_id,use_date))
 
+def discount_selection_review(db, facility_id, use_date, category_ids):
+    """중복 적용 근거가 없는 복수 감면은 금액을 산출하지 않는다.
+
+    이 함수는 감면 자격의 존재만 조회한다. 중복 선택 시 더 높은 감면율을
+    임의로 택하거나 두 감면율을 합산하지 않는다.
+    """
+    if category_ids is None:
+        return None
+    if not isinstance(category_ids, (list, tuple)) or any(
+        not isinstance(code, str) or not code.strip() for code in category_ids
+    ):
+        raise ValueError('감면 대상은 문자열 ID 목록이어야 합니다')
+    selected = list(dict.fromkeys(category_ids))
+    if not selected:
+        return None
+    rules = discounts(db, facility_id, use_date)
+    by_category = {rule['category_id']: rule for rule in rules}
+    unknown = [code for code in selected if code not in by_category]
+    if unknown:
+        raise ValueError('해당 시설 및 이용일에 등록되지 않은 감면 대상: ' + ', '.join(unknown))
+    if len(selected) < 2:
+        return None
+    matched = [by_category[code] for code in selected]
+    return {
+        'status': 'needs_review',
+        'reason': '복수 감면 자격의 중복 적용 기준이 공식 자료로 확인되지 않았습니다.',
+        'facility_id': facility_id,
+        'date': normalize_use_date(use_date),
+        'selected_discount_categories': selected,
+        'selected_discount_rules': [
+            {'category_id': r['category_id'], 'category_name': r['category_name'],
+             'percent': r['percent'], 'source_url': r['source_url'],
+             'checked_on': r['checked_on']}
+            for r in matched
+        ],
+        'base_fee_won': None,
+        'lighting_fee_won': None,
+        'discount_won': None,
+        'total_won': None,
+        'payment_due': None,
+        'expected_refund': None,
+        'net_cost_after_refund': None,
+        'review_items': [{
+            'code': 'discount_stacking_unverified',
+            'target': 'discount',
+            'reason': '여러 감면 자격을 동시에 충족할 때 합산·최고율 적용 등 처리 기준이 확인되지 않았습니다.',
+            'source_urls': list(dict.fromkeys(r['source_url'] for r in matched)),
+            'checked_on': [r['checked_on'] for r in matched]
+        }]
+    }
+
 def refund_rules(db,facility_id,use_date):
     use_date=normalize_use_date(use_date)
     return fetch(db,'''SELECT rr.reason,rr.days_before_min,rr.days_before_max,rr.rate_percent,
@@ -102,7 +153,7 @@ def optional_lighting_quote(db,facility_id,use_date,lighting_minutes):
     return {'status':'priced','lighting_minutes':lighting_minutes,'optional_lighting_fee_won':result['amount_won'],
             'billed_lighting_minutes':result['billed_minutes'],'optional_before_time':rules[0]['applies_to']}
 
-def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0):
+def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0,discount_category_ids=None):
     # 동일 요청 형식으로 고정 회차와 자유 선택의 기본요금 및 조명료를 계산.
     use_date=normalize_use_date(use_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('주말·공휴일 판정은 bool이어야 합니다')
@@ -154,6 +205,10 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             }
     if not matches:return {'status':'invalid_time','reason':'해당 시설에서 선택할 수 없는 시간 또는 이용시간'}
     if len(matches)!=1:raise ValueError('중복된 요금 규정')
+    discount_review=discount_selection_review(db,facility_id,use_date,discount_category_ids)
+    if discount_review is not None:
+        discount_review.update(start_time=start_time, end_time=end_time)
+        return discount_review
     p=matches[0];light=p['mandatory_light_won']; light_minutes=0
     if typ=='flexible_interval':
         records=[r for r in facility_options(db,facility_id,use_date) if r['option_id']=='lighting' and r['application_type']=='mandatory_when_applicable']
@@ -186,6 +241,8 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
         r=options[0]
         if start<parse(r['applies_from']) or end>parse(r['applies_to']):
             return {'status':'invalid_optional_lighting','reason':'선택 조명 가능 시간 밖의 회차'}
+    # 단일 감면은 이 함수에서 적용하지 않는다: 반환 금액은 감면 전 금액이다.
+    single_discount_selected=bool(discount_category_ids)
     return {'status':'priced','facility_id':facility_id,'date':use_date,'selection_type':typ,
             'start_time':start_time,'end_time':end_time,'duration_minutes':duration,
             'price_rule_id':p['price_rule_id'],'base_fee_won':p['base_fee_won'],
@@ -193,7 +250,8 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'total_won':p['base_fee_won']+light+optional['optional_lighting_fee_won'],
             'optional_lighting_minutes':optional_lighting_minutes,
             'optional_lighting_on_site_won':optional['optional_lighting_fee_won'],
-            'booking_availability_verified':False}
+            'booking_availability_verified':False,
+            'discount_application_status':'not_calculated' if single_discount_selected else 'not_requested'}
 
 duration_quote=quote
 if __name__=='__main__':
@@ -202,6 +260,7 @@ if __name__=='__main__':
     parser.add_argument('--facility');parser.add_argument('--date');parser.add_argument('--weekend',choices=['true','false'])
     parser.add_argument('--start-time');parser.add_argument('--end-time')
     parser.add_argument('--optional-lighting-minutes',type=int,default=0)
+    parser.add_argument('--discount-categories',help='감면 대상 ID를 쉼표로 구분 (예: independence_merit,disabled)')
     parser.add_argument('--db',default=str(ROOT/'facilities.sqlite3'))
     a=parser.parse_args()
     if a.resource=='facilities':result=facilities(a.db)
@@ -218,5 +277,6 @@ if __name__=='__main__':
         elif a.resource=='optional_lighting':result=optional_lighting_quote(a.db,a.facility,a.date,a.optional_lighting_minutes)
         else:
             if not a.start_time or not a.end_time:parser.error('--start-time, --end-time 필요')
-            result=quote(a.db,a.facility,a.date,a.start_time,a.end_time,is_weekend,a.optional_lighting_minutes)
+            selected=a.discount_categories.split(',') if a.discount_categories else None
+            result=quote(a.db,a.facility,a.date,a.start_time,a.end_time,is_weekend,a.optional_lighting_minutes,selected)
     print(json.dumps(result,ensure_ascii=False,indent=2))
