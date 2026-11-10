@@ -246,5 +246,22 @@
       "extra_unit_minutes": null,
       "extra_unit_price": null
     }
+  ],
+  "closure_rules": [
+    {
+      "type": "annual_date",
+      "value": "01-01",
+      "note": "양력 1월 1일 휴원"
+    },
+    {
+      "type": "holiday_code",
+      "value": "lunar_new_year_day",
+      "note": "설날 당일 휴원"
+    },
+    {
+      "type": "holiday_code",
+      "value": "chuseok_day",
+      "note": "추석 당일 휴원"
+    }
   ]
 }

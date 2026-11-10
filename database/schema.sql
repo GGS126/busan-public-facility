@@ -45,6 +45,16 @@ CREATE TABLE IF NOT EXISTS reservation_rules (
  normal_cancel_online_min_days_before INTEGER NOT NULL,
  closure_note TEXT
 );
+-- 정기 휴장: 양력 반복일/특정 날짜/명절 코드, 소속 규정기간 및 출처 연결
+CREATE TABLE IF NOT EXISTS closure_rules (
+ id TEXT PRIMARY KEY,
+ rule_set_id TEXT NOT NULL REFERENCES rule_sets(id) ON DELETE CASCADE,
+ closure_type TEXT NOT NULL CHECK(closure_type IN ('annual_date','exact_date','holiday_code')),
+ closure_value TEXT NOT NULL CHECK(length(trim(closure_value)) > 0),
+ note TEXT NOT NULL CHECK(length(trim(note)) > 0),
+ UNIQUE(rule_set_id,closure_type,closure_value)
+);
+CREATE INDEX IF NOT EXISTS ix_closure_ruleset ON closure_rules(rule_set_id);
 CREATE INDEX IF NOT EXISTS ix_rules_date ON rule_sets(facility_id,effective_from,effective_to);
 
 CREATE VIEW IF NOT EXISTS v_facility_discounts AS

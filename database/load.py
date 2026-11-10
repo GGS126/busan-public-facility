@@ -86,6 +86,48 @@ def insert_options(con,rid,options):
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
           (option_id,rid,o['id'],o['calculation_type'],o['application_type'],o['rounding_policy'],o.get('applies_from'),o.get('applies_to'),o.get('note'),o['hour_price'],o.get('extra_unit_minutes'),o.get('extra_unit_price')))
 
+CLOSURE_HOLIDAY_CODES = frozenset(('lunar_new_year_day', 'chuseok_day'))
+
+def validate_closure_rules(d):
+    rules = d.get('closure_rules')
+    if not isinstance(rules,list):
+        raise ValueError('closure_rules는 빈 목록을 포함해 반드시 목록이어야 합니다')
+    seen = set()
+    for item in rules:
+        if not isinstance(item,dict):
+            raise ValueError('휴장 규정 객체 형식 오류')
+        typ, val, note = item.get('type'), item.get('value'), item.get('note')
+        if not isinstance(val,str) or not val.strip() or not isinstance(note,str) or not note.strip():
+            raise ValueError('휴장 규정 값 또는 안내 누락')
+        if typ == 'annual_date':
+            try:
+                mm, dd = map(int,val.split('-'))
+                if val != f'{mm:02d}-{dd:02d}': raise ValueError()
+                dt.date(2024,mm,dd)
+            except (ValueError,TypeError) as exc:
+                raise ValueError('휴장 양력 반복일 형식 오류 (MM-DD)') from exc
+        elif typ == 'exact_date':
+            try:
+                if dt.date.fromisoformat(val).isoformat() != val: raise ValueError()
+            except ValueError as exc:
+                raise ValueError('휴장 날짜 형식 오류 (YYYY-MM-DD)') from exc
+            if not d['rule_set']['effective_from'] <= val <= d['rule_set']['effective_to']:
+                raise ValueError('휴장 날짜가 규정 적용기간 밖입니다')
+        elif typ == 'holiday_code':
+            if val not in CLOSURE_HOLIDAY_CODES:
+                raise ValueError('지원하지 않는 휴장 명절 코드: '+val)
+        else:
+            raise ValueError('휴장 규정 유형 오류')
+        if (typ,val) in seen: raise ValueError('중복 휴장 규정')
+        seen.add((typ,val))
+
+
+def insert_closure_rules(con,rid,d):
+    for i,item in enumerate(d['closure_rules'],1):
+        con.execute('INSERT INTO closure_rules (id,rule_set_id,closure_type,closure_value,note) VALUES(?,?,?,?,?)',
+                    (f'{rid}_closure_{i}',rid,item['type'],item['value'],item['note']))
+
+
 def validate_shared(d):
     """모든 시설 형식에 적용할 필수 데이터 및 날짜·환불·예약 검증."""
     for section in ('facility', 'source', 'rule_set', 'reservation'):
@@ -112,6 +154,7 @@ def validate_shared(d):
         d[section][field] = normalized
     if rule_set['effective_from'] > rule_set['effective_to']:
         raise ValueError('규정 적용기간 순서 오류')
+    validate_closure_rules(d)
     if source['verification_level'] not in ('official_page_verified', 'user_transcribed_official'):
         raise ValueError('출처 검증 분류 오류')
     if rule_set['status'] != 'confirmed':
@@ -237,6 +280,7 @@ def insert_refunds_and_reservation(con, rid, d):
                     (f'{rid}_{item["id"]}', rid, item['reason'], item['min'],
                      item['max'], item['rate'], item['channel'], item['condition'],
                      'confirmed'))
+    insert_closure_rules(con,rid,d)
     booking = d['reservation']
     con.execute('INSERT INTO reservation_rules VALUES(?,?,?,?,?)',
                 (rid, booking['online_open_days_before'],

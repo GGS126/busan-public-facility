@@ -23,7 +23,8 @@
 | `facility_options` | 시설마다 다른 옵션 적용시간·필수/선택 여부·요금·계산 방식 |
 | `discount_categories` | 공통 감면 대상자 분류 12종 |
 | `facility_discounts` | 시설별 감면 대상, 감면율, 계산 기준, 조명료 제외 여부, 증빙 조건 |
-| `reservation_rules` | 예약 신청 가능일 범위, 온라인 취소 가능 기한, 휴장 안내 |
+| `reservation_rules` | 예약 신청 가능일 범위, 온라인 취소 가능 기한, 기존 휴장 안내 원문 |
+| `closure_rules` | 규정 적용기간과 출처에 연결된 정기 휴장 규칙(고정 양력일·명절 코드·특정 날짜) |
 | `refund_rules` | 취소 사유·이용일 전 취소 시점별 환불률과 반환신청 조건 |
 
 ## 시설별 주요 계산 규정
@@ -80,3 +81,40 @@ python database/build_db.py --data database/seed.json database/samrak_winter_202
 ## 구·군 정보 (`district`)
 
 `facilities.district`는 시설별 구·군 이름을 저장하며, 시설 목록 조회(`query_api.facilities`)에도 포함됩니다. 현재 등록된 값은 해운대수목원 `해운대구`, 삼락생태공원 `사상구`, 구덕운동장 `서구`입니다. 신규 시설 JSON의 `facility.district`는 필수이며 비어 있으면 적재를 거부합니다.
+
+## 정기 휴장일 구조화 (`closure_rules`)
+
+시설 JSON의 `closure_rules`를 공통 테이블에 저장합니다. 기존 `holiday_note` 및
+`reservation.closure_note`의 원문도 보존합니다. 코드 유형은 다음과 같습니다.
+
+- `annual_date`: 매년 같은 **양력** 날짜 `MM-DD` (예: `01-01`)
+- `holiday_code`: `lunar_new_year_day`(설날 당일), `chuseok_day`(추석 당일)
+- `exact_date`: 공식 근거로 확인된 날짜 `YYYY-MM-DD` (해당 규정 적용기간 안에서만 허용)
+
+| 시설 | 구조화된 정기 휴장 규칙 |
+| --- | --- |
+| 해운대수목원 테니스장 | `01-01`(양력), `lunar_new_year_day`, `chuseok_day` |
+| 삼락생태공원 테니스장 | `lunar_new_year_day`, `chuseok_day` |
+| 구덕운동장 테니스장 | 정기 휴장 없음(`[]`); 명절 등 별도 공지는 따로 확인 필요 |
+
+원본 규정의 **설·추석 '당일'**과 연휴·대체공휴일은 다릅니다. 명절 코드를
+임의로 특정 날짜에 대응시키지 않았습니다. 백엔드가 검증된 한국 공휴일/음력 날짜
+자료에서 이용일의 `holiday_codes`를 조회하여 전달해야 합니다.
+
+```python
+from database import query_api  # 프로젝트 루트에서 사용할 경우
+rules = query_api.closure_rules(db_path, facility_id, '2026-11-09')
+result = query_api.closure_status(db_path, facility_id, '2026-11-09',
+                                  holiday_codes=['lunar_new_year_day'])
+```
+
+- `closure_status()`의 `holiday_codes=None`은 **명절 여부 미확인**을 뜻합니다.
+  명절 휴장 규칙이 있으면 `needs_calendar_resolution`, `is_closed=None`으로
+  확정을 보류합니다. 백엔드에서 명절 여부를 판정했으면 명절이 아닌 날은 `[]`을 넘깁니다.
+- `closed`는 정기 휴장 규칙에 일치한 경우, `no_scheduled_closure`는 해당
+  규정에 등록된 **정기 휴장 규칙에 해당하지 않는 경우**입니다.
+  `no_scheduled_closure`를 실제 예약 가능/확정과 동일시하면 안 됩니다.
+- 사용일에 유효한 규정기간이 없으면 `no_active_rule_set`을 반환합니다.
+- 임시 행사·시설 보수·별도 통제 등 수시 공지는 포함하지 않습니다.
+- 기존 요금 계산 `quote()`는 호환성을 위해 그대로 유지됩니다. 백엔드가
+  예약 가능 여부를 안내하기 전에 휴장 판정을 별도로 호출해야 합니다.

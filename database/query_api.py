@@ -24,6 +24,47 @@ def fetch(db,sql,params=()):
 def facilities(db):
     return fetch(db,'SELECT id,name,facility_type,district,address,booking_url FROM facilities ORDER BY name')
 
+def closure_rules(db,facility_id,use_date):
+    # 규정 적용기간 내의 정기 휴장 목록. 출처는 기존 rule_sets -> sources를 재사용.
+    use_date=normalize_use_date(use_date)
+    return fetch(db,'''SELECT c.closure_type AS type,c.closure_value AS value,c.note,
+       r.effective_from,r.effective_to,s.url AS source_url,s.checked_on
+       FROM closure_rules c JOIN rule_sets r ON r.id=c.rule_set_id
+       JOIN sources s ON s.id=r.source_id
+       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to
+       ORDER BY c.closure_type,c.closure_value''',(facility_id,use_date))
+
+
+def closure_status(db,facility_id,use_date,holiday_codes=None):
+    # 명절 날짜를 변환하지 않는다. holiday_codes는 백엔드의 검증된 날짜 데이터가 공급한다.
+    use_date=normalize_use_date(use_date)
+    if holiday_codes is not None:
+        if not isinstance(holiday_codes,(list,tuple,set)) or any(
+                not isinstance(x,str) or x not in ('lunar_new_year_day','chuseok_day')
+                for x in holiday_codes):
+            raise ValueError('holiday_codes는 지원하는 명절 코드 목록이어야 합니다')
+    active=fetch(db,'''SELECT r.id,s.url AS source_url FROM rule_sets r
+       JOIN sources s ON s.id=r.source_id
+       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to''',
+       (facility_id,use_date))
+    if not active:
+        return {'status':'no_active_rule_set','facility_id':facility_id,
+                'date':use_date,'is_closed':None,'matched_rules':[]}
+    rules=closure_rules(db,facility_id,use_date)
+    codes=set(holiday_codes or [])
+    matched=[x for x in rules if
+       (x['type']=='annual_date' and x['value']==use_date[5:]) or
+       (x['type']=='exact_date' and x['value']==use_date) or
+       (x['type']=='holiday_code' and x['value'] in codes)]
+    if matched: status,closed='closed',True
+    elif holiday_codes is None and any(x['type']=='holiday_code' for x in rules):
+        status,closed='needs_calendar_resolution',None
+    else: status,closed='no_scheduled_closure',False
+    return {'status':status,'facility_id':facility_id,'date':use_date,
+            'is_closed':closed,'matched_rules':matched,'source_url':active[0]['source_url'],
+            'note':'임시 휴장·행사·별도 공지는 반영되지 않았습니다. 실제 예약 가능 여부는 공식 예약 사이트에서 확인해야 합니다.'}
+
+
 def pricing_rules(db,facility_id,use_date,is_weekend_or_holiday):
     use_date=normalize_use_date(use_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('is_weekend_or_holiday는 bool 필수')

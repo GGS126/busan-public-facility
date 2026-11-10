@@ -20,6 +20,47 @@ with tempfile.TemporaryDirectory() as tmp:
   }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+ # 정기 휴장 규칙은 적용기간/출처와 연결되고, 휴장 코드가 명시적으로 저장된다.
+ with closing(sqlite3.connect(db)) as c:
+  rows=c.execute('SELECT r.facility_id,c.closure_type,c.closure_value FROM closure_rules c JOIN rule_sets r ON r.id=c.rule_set_id').fetchall()
+  found={}
+  for fac,kind,value in rows: found.setdefault(fac,set()).add((kind,value))
+  assert found == {
+   'busan_haeundae_arboretum_tennis': {('annual_date','01-01'),('holiday_code','lunar_new_year_day'),('holiday_code','chuseok_day')},
+   'busan_samrak_ecopark_tennis': {('holiday_code','lunar_new_year_day'),('holiday_code','chuseok_day')},
+  },found
+ ha='busan_haeundae_arboretum_tennis'
+ sa='busan_samrak_ecopark_tennis'
+ gu='busan_gudeok_stadium_tennis'
+ assert q.closure_status(db,ha,'2026-11-09')['status']=='needs_calendar_resolution'
+ assert q.closure_status(db,ha,'2026-12-31',[])['status']=='no_scheduled_closure'
+ assert q.closure_status(db,sa,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
+ assert q.closure_status(db,sa,'2027-02-07',[])['status']=='no_scheduled_closure'
+ assert q.closure_status(db,gu,'2026-11-09')['status']=='no_scheduled_closure'
+ assert len(q.closure_rules(db,ha,'2026-11-09'))==3
+ assert len(q.closure_rules(db,sa,'2026-11-09'))==2
+ assert len(q.closure_rules(db,gu,'2026-11-09'))==0
+ assert q.closure_status(db,ha,'2027-01-01')['status']=='no_active_rule_set'
+ # 휴장 규정 필수/형식/중복/규정기간 검증 및 적재 원본 보존
+ import copy
+ for modified,expected_message in [
+  (lambda d: d.pop('closure_rules'), 'closure_rules'),
+  (lambda d: d.update(closure_rules=[{'type':'holiday_code','value':'unknown','note':'명절'}]),'지원하지 않는 휴장 명절 코드'),
+  (lambda d: d.update(closure_rules=[{'type':'exact_date','value':'2027-01-01','note':'예시'}]),'규정 적용기간 밖'),
+  (lambda d: d.update(closure_rules=[{'type':'annual_date','value':'02-30','note':'오류'}]),'양력 반복일 형식 오류'),
+  (lambda d: d.update(closure_rules=d['closure_rules']+d['closure_rules'][:1]),'중복 휴장 규정'),
+ ]:
+  changed=copy.deepcopy(D)
+  modified(changed)
+  badfile=tmp/'invalid_closure.json'
+  badfile.write_text(json.dumps(changed,ensure_ascii=False),encoding='utf-8')
+  before=hashlib.sha256(db.read_bytes()).hexdigest()
+  try:load.load_many([badfile],db)
+  except ValueError as exc:
+   assert expected_message in str(exc),(expected_message,str(exc))
+  else:raise AssertionError('잘못된 휴장 데이터가 적재됨')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==before,'잘못된 JSON 때문에 DB 변경됨'
+ print('PASS: 정기 휴장 5개 구조화, 적용기간/출처 연결, 명절 미해석 보류, 날짜 판정, 오류 JSON 원본 보존')
  listed = {row['id']: row['district'] for row in q.facilities(db)}
  assert listed == {
   'busan_haeundae_arboretum_tennis': '해운대구',
