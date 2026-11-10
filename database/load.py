@@ -15,8 +15,8 @@ CATEGORY_NAMES = {
     'national_merit': '국가유공자 및 해당 유족·가족',
     'may18_merit': '5·18민주유공자 및 해당 유족·가족',
     'special_mission_merit': '특수임무유공자 및 해당 유족·가족',
-    'righteous_injury': '의사상자 및 해당 유족·가족',
-    'multi_child': '다자녀 가정', 'war_veteran': '참전유공자',
+    'righteous_injury': '의상자·의사자유족 및 의상자가족',
+    'multi_child': '다자녀가정에 속하는 사람', 'war_veteran': '참전유공자',
     'agent_orange': '고엽제 관련 대상자(환자 및 2세)',
     'pows': '등록 포로 및 억류지 출신 포로가족',
     'children_group': '체육행사 등에 참여하는 10명 이상 어린이',
@@ -299,6 +299,7 @@ def insert_refunds_and_reservation(con, rid, d):
 
 def load_fixed(data_path, db_path):
     d=validate(json.loads(Path(data_path).read_text(encoding='utf-8')))
+    validate_guardian_discounts(d['discounts'])
     db_path=Path(db_path)
     # 새로운 DB에만 schema 생성. 실제 적재는 한 번의 트랜잭션으로 진행.
     con=sqlite3.connect(db_path)
@@ -318,15 +319,29 @@ def load_fixed(data_path, db_path):
                 for code in GROUP_TO_CODES[item['id']]:
                     con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
-                        (id,rule_set_id,category_id,percent,discount_rounding_policy,basis,applies_to,excluded_from,
+                        (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
                          processing,documents,deadline,note,original_group_label)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                        (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),c['rounding_policy'],c['basis'],c['applies_to'],c['excluded_from'],
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),item.get('guardian_max_count'),item.get('guardian_condition'),item.get('guardian_evidence_note'),c['rounding_policy'],c['basis'],c['applies_to'],c['excluded_from'],
                          c['processing'],c['documents'],c['deadline'],c['note'],item['category']))
             insert_refunds_and_reservation(con, rid, d)
     finally:
         con.close()
 
+
+
+def validate_guardian_discounts(items):
+    """중증 장애인 보호자 규칙은 장애인 감면 항목에만 기록한다."""
+    for item in items:
+        count = item.get('guardian_max_count')
+        if item['id'] == 'disabled':
+            if type(count) is not int or count != 1:
+                raise ValueError('disabled.guardian_max_count는 공식 규정상 1이어야 합니다')
+            for field in ('guardian_condition', 'guardian_evidence_note'):
+                if not isinstance(item.get(field), str) or not item[field].strip():
+                    raise ValueError('disabled.' + field + ' 필수')
+        elif any(k in item for k in ('guardian_max_count','guardian_condition','guardian_evidence_note')):
+            raise ValueError('장애인 외 감면에 보호자 규칙을 지정할 수 없습니다')
 
 def validate_discount_rounding(common):
     # NULL: 공식 끝전 처리 기준 미확인. 추정값을 넣지 않는다.
@@ -357,6 +372,7 @@ def validate_duration_discounts(d):
     for field in ('documents', 'deadline', 'note'):
         if common.get(field) is not None and not isinstance(common[field], str):
             raise ValueError(f'discount_common.{field} 문자열 또는 null 필수')
+    validate_guardian_discounts(d.get('discounts_confirmed', []))
     for item in d.get('discounts_confirmed', []):
         for field in ('basis', 'applies_to', 'processing'):
             val = item.get(field, common[field])
@@ -377,10 +393,10 @@ def insert_duration_discounts(con, rid, d):
         con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',
                     (cat, CATEGORY_NAMES[cat]))
         con.execute("""INSERT INTO facility_discounts
-          (id,rule_set_id,category_id,percent,discount_rounding_policy,basis,applies_to,excluded_from,
+          (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
            processing,documents,deadline,note,original_group_label,verification_status)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-          (f'{rid}_{cat}', rid, cat, item['rate_percent'], common['rounding_policy'],
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (f'{rid}_{cat}', rid, cat, item['rate_percent'], item.get('guardian_max_count'), item.get('guardian_condition'), item.get('guardian_evidence_note'), common['rounding_policy'],
            item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
            excluded, item.get('processing', common['processing']),
            item.get('documents', common.get('documents')),

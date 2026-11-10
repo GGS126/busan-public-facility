@@ -135,3 +135,14 @@ result = query_api.closure_status(db_path, facility_id, '2026-11-09',
 명시적인 이용 허락으로 해석하지 않습니다. 확인 자료를 확보한 뒤에만 실제 라이선스 문구를 입력합니다.
 
 기존 DB에는 열이 없으므로 JSON 수정 후 `python database/build_db.py`로 **새로 생성**해야 합니다.
+
+## 중증 장애인 동반 보호자 감면
+
+해운대수목원(운동시설 공식 안내), 삼락생태공원(낙동강 생태공원 조례 제12조), 구덕운동장(부산광역시 체육시설 관리 및 운영 조례 감면 조항)은 모두 **장애 정도가 심한 등록장애인의 동반 보호자 1명**을 감면 대상에 포함합니다. 장애인 감면 항목에만 `guardian_max_count: 1`, `guardian_condition`, `guardian_evidence_note`를 저장합니다.
+
+- 실제 이용 인원 중 중증 장애인 본인과 동행 보호자 1명(최대)을 각각 감면 대상 인원으로 셉니다. **전체 참여 인원에는 보호자도 이미 포함**되어야 하며, 중복하여 사람 수를 늘리지 않습니다.
+- 중증 장애인이 아닌 등록장애인에게 보호자 감면을 자동 부여하지 않습니다.
+- 해운대·삼락은 개인별 감면 신청서와 증빙 제출, 구덕은 사용일 관제실 방문·장애인등록증 등 자격 증빙 및 확인서식 제출 규정을 따릅니다. 보호자에게 요구되는 별도 관계증명 서류의 정확한 유형은 확인되지 않아 미확인으로 둡니다.
+- `query_api.discounts()`가 보호자 규칙을 반환합니다. `discount_proration_check()`에 넘기는 `eligible_count`에는 **자격이 확인된 동반 보호자 1명**을 포함할 수 있지만, 개인별 자격·동행 확인과 API 입력 검증은 백엔드가 담당합니다. 원 미만 감면 끝전은 기존과 같이 `needs_review`입니다.
+
+공식 근거: https://www.busan.go.kr/green/gchwd0400 ; https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=1961769 ; https://www.law.go.kr/LSW/ordinInfoP.do?ordinSeq=1662641 (법규의 적용 조문·시점은 배포 시 최신 판본 재확인).

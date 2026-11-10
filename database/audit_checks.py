@@ -35,6 +35,27 @@ with tempfile.TemporaryDirectory() as tmp:
  for case in g_cases:
   if case['id'] in ('gudeok_discount','gudeok_companion_eligible_only','gudeok_holder_eligible_night'):
    assert case['status']=='confirmed' and case['refund_discount_won'] in (1000,3000) and case['net_won'] in (7000,5000,27000),case
+ # 중증 장애인 동반 보호자 최대 1명: 세 시설의 감면 규칙 조회 및 증빙 안내 검증
+ for fac in ('busan_haeundae_arboretum_tennis','busan_samrak_ecopark_tennis','busan_gudeok_stadium_tennis'):
+  rules=q.discounts(db,fac,'2026-11-09')
+  disabled=next(x for x in rules if x['category_id']=='disabled')
+  assert disabled['guardian_max_count']==1,disabled
+  assert '심한' in disabled['guardian_condition'] and '보호자 1명' in disabled['guardian_condition'],disabled
+  assert '미확인' in disabled['guardian_evidence_note'],disabled
+  assert all(x['guardian_max_count'] is None for x in rules if x['category_id']!='disabled'),fac
+ assert q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,2,'disabled')['discount_refund_won']==1500
+ import copy as guardian_copy
+ for wrong in (0,2,'1'):
+  invalid=guardian_copy.deepcopy(D)
+  next(x for x in invalid['discounts'] if x['id']=='disabled')['guardian_max_count']=wrong
+  invalid_file=tmp/'invalid_guardian_count.json'
+  invalid_file.write_text(json.dumps(invalid,ensure_ascii=False),encoding='utf-8')
+  previous_hash=hashlib.sha256(db.read_bytes()).hexdigest()
+  try: load.load_many([invalid_file], db)
+  except ValueError as exc: assert 'guardian_max_count' in str(exc),str(exc)
+  else: raise AssertionError('잘못된 보호자 정원 허용')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==previous_hash
+ print('PASS: 중증 장애인 동반 보호자 1명 포함 규칙 세 시설 저장·조회')
  print('PASS: 세 시설 인원별 비례 감면, 구덕 환급 수령인은 대표 예약자')
  # 세 시설 모두 공식 끝전 처리 기준 미확인: NULL 저장·조회 및 검증 사례 확인
  with closing(sqlite3.connect(db)) as c:

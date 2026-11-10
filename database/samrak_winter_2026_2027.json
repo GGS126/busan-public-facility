@@ -71,7 +71,10 @@
     },
     {
       "id": "disabled",
-      "category": "장애인"
+      "category": "장애인",
+      "guardian_max_count": 1,
+      "guardian_condition": "장애의 정도가 심한 등록장애인과 함께 해당 시설을 실제로 이용하는 보호자 1명에 한하여 감면 대상 인원에 포함",
+      "guardian_evidence_note": "장애인등록증 등 감면 자격 증빙 및 시설별 감면신청 절차 필요. 보호자 관계 증빙의 구체적인 서류 종류는 미확인."
     },
     {
       "id": "merit_families",
