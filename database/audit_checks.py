@@ -1,5 +1,6 @@
 import json, sqlite3, tempfile, pathlib, hashlib
 from contextlib import closing
+from unittest.mock import patch
 import load,query_api as q
 R=pathlib.Path(__file__).resolve().parent
 D=json.loads((R/'seed.json').read_text(encoding='utf-8'))
@@ -18,6 +19,20 @@ with tempfile.TemporaryDirectory() as tmp:
  for fac,start,end,week,light,expected in checks:
   actual=q.quote(db,fac,'2026-11-09',start,end,week,light)
   assert actual['status']=='priced' and actual['total_won']==expected,(fac,actual,expected)
+ # 회귀 테스트: quote()가 필수/포함/선택 조명 옵션을 반복 조회하지 않는다.
+ # 함수 직접 호출(optional_lighting_quote)은 기존처럼 독립적으로 동작해야 한다.
+ original_facility_options=q.facility_options
+ for fac,start,end,week,light,expected in checks:
+  with patch.object(q,'facility_options',wraps=original_facility_options) as mock_options:
+   result=q.quote(db,fac,'2026-11-09',start,end,week,light)
+   assert result['total_won']==expected,result
+   assert mock_options.call_count==1,(
+    f'{fac} {start}~{end}: 옵션 조회 {mock_options.call_count}회 (기대 1회)'
+   )
+ with patch.object(q,'facility_options',wraps=original_facility_options) as mock_options:
+  separate=q.optional_lighting_quote(db,'busan_haeundae_arboretum_tennis','2026-11-09',80)
+  assert separate['status']=='priced' and separate['optional_lighting_fee_won']==13200,separate
+  assert mock_options.call_count==1,'독립적인 옵션 조회 함수 동작 오류'
  # 공식 근거가 없는 1시간·90분 요금은 금액을 만들지 않고 확인 필요로 응답한다.
  for start,end in [('10:00','11:00'),('10:00','11:30')]:
   missing=q.quote(db,'busan_gudeok_stadium_tennis','2026-11-09',start,end,False)
@@ -197,6 +212,7 @@ with tempfile.TemporaryDirectory() as tmp:
  try:q.quote(db,d_fac,'2026-11-09','09:00','11:00',False,discount_category_ids=['unknown_discount'])
  except ValueError:pass
  else:raise AssertionError('등록되지 않은 감면 자격을 허용함')
+ print('PASS: quote() 옵션 조회 호출 1회(필수/포함/선택 조명), 독립 옵션 계산 유지')
  print('PASS: 복수 감면 60%+50%는 needs_review/금액 null/근거 출처 반환, 단일 자격 및 기존 계산 유지')
  print('PASS: JSON 시간 정책 최소/최대/단위 저장, 30분 시작, NULL 보존, 잘못된 값 차단')
  print('PASS: YYYYMMDD 날짜 조회·저장 정규화, 구분자 있는 날짜와 동일 결과, 잘못된 날짜 차단')

@@ -142,10 +142,12 @@ def option_charge(minutes,rule):
         return {'status':'priced','amount_won':price,'billed_minutes':minutes}
     raise ValueError('지원하지 않는 옵션 계산')
 
-def optional_lighting_quote(db,facility_id,use_date,lighting_minutes):
+def optional_lighting_quote(db,facility_id,use_date,lighting_minutes,options=None):
     if type(lighting_minutes) is not int or lighting_minutes<0:raise ValueError('조명 이용시간 오류')
     if not lighting_minutes:return {'status':'priced','lighting_minutes':0,'optional_lighting_fee_won':0}
-    rules=[r for r in facility_options(db,facility_id,use_date) if r['option_id']=='lighting' and r['application_type']=='optional']
+    if options is None:
+        options=facility_options(db,facility_id,use_date)
+    rules=[r for r in options if r['option_id']=='lighting' and r['application_type']=='optional']
     if not rules:return {'status':'optional_lighting_not_supported'}
     if len(rules)!=1:raise ValueError('중복 조명 옵션')
     result=option_charge(lighting_minutes,rules[0])
@@ -210,8 +212,10 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
         discount_review.update(start_time=start_time, end_time=end_time)
         return discount_review
     p=matches[0];light=p['mandatory_light_won']; light_minutes=0
+    # 견적 1회당 옵션 조회도 1회만 수행해 이후 계산에서 재사용한다.
+    facility_option_records=facility_options(db,facility_id,use_date)
     if typ=='flexible_interval':
-        records=[r for r in facility_options(db,facility_id,use_date) if r['option_id']=='lighting' and r['application_type']=='mandatory_when_applicable']
+        records=[r for r in facility_option_records if r['option_id']=='lighting' and r['application_type']=='mandatory_when_applicable']
         if len(records)>1:raise ValueError('조명 옵션 중복')
         if records:
             h=records[0];threshold=parse(h['applies_from']) if h['applies_from'] else 0
@@ -224,17 +228,17 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
     # 고정회차에 포함된 필수 옵션의 요금은 pricing_rules에 이미 존재한다.
     # 별도 옵션 규칙을 조회하더라도 같은 요금을 중복 합산하지 않는다.
     if typ=='fixed_slot' and p['mandatory_light_won']:
-        included=[r for r in facility_options(db,facility_id,use_date)
+        included=[r for r in facility_option_records
                   if r['option_id']=='lighting' and r['application_type']=='included_in_base_price'
                   and parse(r['applies_from'])<=start and end<=parse(r['applies_to'])]
         if not included:
             return {'status':'option_rule_inconsistent','reason':'필수 조명 포함 회차의 옵션 규칙이 일치하지 않음'}
-    optional=optional_lighting_quote(db,facility_id,use_date,optional_lighting_minutes)
+    optional=optional_lighting_quote(db,facility_id,use_date,optional_lighting_minutes,options=facility_option_records)
     if optional['status']!='priced':return optional
     if optional_lighting_minutes:
         if typ!='fixed_slot' or p['mandatory_light_won'] or optional_lighting_minutes>duration:
             return {'status':'invalid_optional_lighting','reason':'선택 조명은 필수 조명료가 포함되지 않은 고정 회차에서만 사용 가능'}
-        options=[r for r in facility_options(db,facility_id,use_date)
+        options=[r for r in facility_option_records
                  if r['option_id']=='lighting' and r['application_type']=='optional']
         if len(options)!=1:
             return {'status':'invalid_optional_lighting','reason':'선택 조명 규칙 없음'}
