@@ -28,14 +28,30 @@ with tempfile.TemporaryDirectory() as tmp:
  with closing(sqlite3.connect(db)) as c:
   assert c.execute("SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id='gudeok_tennis_winter_2026_2027' AND duration_minutes=60").fetchone()[0]==0
  before=hashlib.sha256(db.read_bytes()).hexdigest()
- for section,key,bad in [('source','checked_on','2026-13-55'),('reservation','online_open_days_before',-1),('facility','name',''),('rule_set','effective_from','2028-01-01')]:
+ # 잘못된 데이터가 반드시 기대한 검증 오류로 거부되는지 확인한다.
+ # 무관한 KeyError/SQLite 오류가 발생하면 검증 성공으로 처리하지 않는다.
+ invalid_cases = [
+  ('source', 'checked_on', '2026-13-55', 'source.checked_on 날짜 오류'),
+  ('reservation', 'online_open_days_before', -1, 'reservation.online_open_days_before 오류'),
+  ('facility', 'name', '', 'facility.name 누락'),
+  ('rule_set', 'effective_from', '2028-01-01', '규정 적용기간 순서 오류'),
+ ]
+ for section, key, bad, expected_error in invalid_cases:
   mutated=json.loads((R/'seed.json').read_text(encoding='utf-8'))
   mutated[section][key]=bad
-  badfile=tmp/'bad.json';badfile.write_text(json.dumps(mutated,ensure_ascii=False))
-  try:load.load_many([R/'samrak_winter_2026_2027.json',badfile],db)
-  except (ValueError, KeyError, sqlite3.Error):pass
-  else:raise AssertionError(f'잘못된 JSON 수락: {section}.{key}')
-  assert hashlib.sha256(db.read_bytes()).hexdigest()==before,'실패 후 DB 변경'
+  badfile=tmp/'bad.json'
+  badfile.write_text(json.dumps(mutated,ensure_ascii=False),encoding='utf-8')
+  try:
+   load.load_many([R/'samrak_winter_2026_2027.json',badfile],db)
+  except ValueError as exc:
+   assert str(exc)==expected_error, (
+    f'{section}.{key}: 기대한 검증 오류={expected_error!r}, 실제={str(exc)!r}'
+   )
+  else:
+   raise AssertionError(f'잘못된 JSON 수락: {section}.{key}')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==before, (
+   f'{section}.{key}: 실패 후 DB 변경'
+  )
  # 회귀 테스트: 같은 시간제 방식의 시설이 추가되어도 기본요금 규칙 ID는 충돌하지 않는다.
  # 서로 다른 2시간 주말요금의 1시간 값이 평일과 구분되어 저장되는지도 확인한다.
  base=json.loads((R/'gudeok_winter_2026_2027.json').read_text(encoding='utf-8'))
