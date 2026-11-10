@@ -17,7 +17,8 @@
     "title": "부산광역시 통합예약 - 삼락생태공원 테니스장 동절기",
     "checked_on": "2026-11-06",
     "verification_level": "user_transcribed_official",
-    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06)."
+    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06).",
+    "license": null
   },
   "rule_set": {
     "id": "samrak_tennis_winter_2026_2027",

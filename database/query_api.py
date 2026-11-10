@@ -24,6 +24,31 @@ def fetch(db,sql,params=()):
 def facilities(db):
     return fetch(db,'SELECT id,name,facility_type,district,address,booking_url FROM facilities ORDER BY name')
 
+def sources(db, facility_id=None, use_date=None):
+    """출처의 재이용 조건을 확인 상태와 함께 조회한다.
+
+    license=None이면 확인되지 않았다는 뜻이며 허락/금지를 단정하지 않는다.
+    facility_id 단독 검색 또는 facility_id+use_date의 적용규정 검색을 지원한다.
+    """
+    if use_date is not None and facility_id is None:
+        raise ValueError('이용일로 출처를 조회할 때 facility_id가 필요합니다')
+    where = []
+    params = []
+    if facility_id is not None:
+        where.append('r.facility_id=?')
+        params.append(facility_id)
+    if use_date is not None:
+        where.append('? BETWEEN r.effective_from AND r.effective_to')
+        params.append(normalize_use_date(use_date))
+    condition = ' WHERE ' + ' AND '.join(where) if where else ''
+    return fetch(db, """SELECT DISTINCT s.id AS source_id,s.url,s.title,s.checked_on,
+        s.verification_level,s.license,
+        CASE WHEN s.license IS NULL THEN 'unverified' ELSE 'confirmed' END AS license_status,
+        s.note
+        FROM sources s JOIN rule_sets r ON r.source_id=s.id"""
+        + condition + ' ORDER BY s.id', tuple(params))
+
+
 def closure_rules(db,facility_id,use_date):
     # 규정 적용기간 내의 정기 휴장 목록. 출처는 기존 rule_sets -> sources를 재사용.
     use_date=normalize_use_date(use_date)

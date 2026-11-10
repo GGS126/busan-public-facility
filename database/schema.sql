@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS facilities (
 CREATE TABLE IF NOT EXISTS sources (
  id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL,
  checked_on TEXT, verification_level TEXT NOT NULL CHECK(verification_level IN ('official_page_verified','user_transcribed_official')),
+ license TEXT CHECK(license IS NULL OR length(trim(license)) > 0),
  note TEXT
 );
 CREATE TABLE IF NOT EXISTS rule_sets (

@@ -143,6 +143,13 @@ def validate_shared(d):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f'{section}.{key} 누락')
     source, rule_set = d['source'], d['rule_set']
+    # 이용허락범위가 확인되지 않았다면 반드시 JSON null로 남긴다.
+    # 출처의 공식성(verification_level)은 저작권/재이용 허락 여부를 보장하지 않는다.
+    if 'license' not in source:
+        raise ValueError('source.license 필수 (미확인 시 null)')
+    license_value = source['license']
+    if license_value is not None and (not isinstance(license_value, str) or not license_value.strip()):
+        raise ValueError('source.license는 확인된 이용조건 문자열 또는 null이어야 합니다')
     for key, value in (('source.checked_on', source['checked_on']),
                        ('rule_set.effective_from', rule_set['effective_from']),
                        ('rule_set.effective_to', rule_set['effective_to'])):
@@ -258,11 +265,11 @@ def insert_shared_records(con, d):
         tuple(f.get(key) for key in ('id','name','facility_type','district','address','phone',
                                      'booking_url','open_time','close_time','holiday_note')))
     con.execute("""INSERT INTO sources
-        (id,url,title,checked_on,verification_level,note) VALUES(?,?,?,?,?,?)
+        (id,url,title,checked_on,verification_level,license,note) VALUES(?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET url=excluded.url,title=excluded.title,
         checked_on=excluded.checked_on,verification_level=excluded.verification_level,
-        note=excluded.note""",
-        tuple(s.get(key) for key in ('id','url','title','checked_on','verification_level','note')))
+        license=excluded.license,note=excluded.note""",
+        tuple(s.get(key) for key in ('id','url','title','checked_on','verification_level','license','note')))
     ensure_rule_set_period_available(con, f['id'], rid,
                                      r['effective_from'], r['effective_to'])
     con.execute('DELETE FROM rule_sets WHERE id=?', (rid,))

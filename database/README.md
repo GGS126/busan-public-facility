@@ -15,7 +15,7 @@
 | 테이블 | 저장 내용 |
 | --- | --- |
 | `facilities` | 시설명, 종목, 주소, 연락처, 운영시간, 예약 링크 |
-| `sources` | 규정의 원본 출처와 확인일 |
+| `sources` | 규정의 원본 출처, 확인일 및 확인된 이용허락범위(`license`) |
 | `rule_sets` | 시설별 요금·규정 적용기간; 다른 규정 테이블을 연결하는 기준 |
 | `pricing_rules` | 고정 회차의 시작·종료시간 및 요금, 자유 시간 선택 시설의 이용시간별 요금 |
 | `time_selection_policies` | `fixed_slot`(지정 회차)과 `flexible_interval`(자유 시작시간), 이용시간 제한 |
@@ -118,3 +118,18 @@ result = query_api.closure_status(db_path, facility_id, '2026-11-09',
 - 임시 행사·시설 보수·별도 통제 등 수시 공지는 포함하지 않습니다.
 - 기존 요금 계산 `quote()`는 호환성을 위해 그대로 유지됩니다. 백엔드가
   예약 가능 여부를 안내하기 전에 휴장 판정을 별도로 호출해야 합니다.
+
+## 출처 이용허락범위 (`sources.license`, NFR-006)
+
+원본 JSON의 `source.license`와 SQLite `sources.license`에 이용허락조건을 저장합니다.
+공식적으로 확인되지 않은 경우 **문자열 `"미확인"`을 넣지 않고 JSON `null` / SQLite `NULL`로 유지**합니다.
+현재 세 시설의 공식 출처 재이용 조건은 검증된 값이 없어 전부 `null`입니다.
+출처가 공식 페이지라는 사실은 데이터 재사용 허락이 있다는 뜻이 아닙니다.
+
+`query_api.sources(db_path)` 또는 `query_api.sources(db_path, facility_id, use_date)`로 조회하면
+`source_id`, `url`, `title`, `checked_on`, `verification_level`, `license`, `license_status`, `note`를 반환합니다.
+`license_status`는 `unverified`(NULL) 또는 `confirmed`(문자열 기재)입니다.
+미확인인 경우 API에서는 `license: null`과 `license_status: unverified`로 안내하고,
+명시적인 이용 허락으로 해석하지 않습니다. 확인 자료를 확보한 뒤에만 실제 라이선스 문구를 입력합니다.
+
+기존 DB에는 열이 없으므로 JSON 수정 후 `python database/build_db.py`로 **새로 생성**해야 합니다.

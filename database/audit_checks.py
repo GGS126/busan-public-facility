@@ -20,6 +20,43 @@ with tempfile.TemporaryDirectory() as tmp:
   }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+ # source.license는 검증된 이용조건이 없으므로 NULL이어야 한다.
+ with closing(sqlite3.connect(db)) as c:
+  licenses=c.execute('SELECT id,license FROM sources ORDER BY id').fetchall()
+  assert len(licenses)==3 and all(value is None for _,value in licenses),licenses
+  assert any(row[1]=='license' for row in c.execute('PRAGMA table_info(sources)'))
+ rows=q.sources(db)
+ assert len(rows)==3,rows
+ assert all(row['license'] is None and row['license_status']=='unverified' for row in rows),rows
+ assert len(q.sources(db,'busan_samrak_ecopark_tennis','2026-11-09'))==1
+ assert q.sources(db,'busan_samrak_ecopark_tennis','2026-11-09')[0]['license_status']=='unverified'
+ assert q.sources(db,'busan_samrak_ecopark_tennis','2028-11-09')==[]
+ import copy as license_copy
+ for mutation,message in [
+   (lambda d: d['source'].pop('license'), 'source.license 필수'),
+   (lambda d: d['source'].update(license=''), 'source.license는'),
+   (lambda d: d['source'].update(license='   '), 'source.license는'),
+   (lambda d: d['source'].update(license=123), 'source.license는'),
+ ]:
+  bad=license_copy.deepcopy(D)
+  mutation(bad)
+  path=tmp/'invalid_license.json'
+  path.write_text(json.dumps(bad,ensure_ascii=False),encoding='utf-8')
+  digest=hashlib.sha256(db.read_bytes()).hexdigest()
+  try:load.load_many([path],db)
+  except ValueError as exc: assert message in str(exc),str(exc)
+  else:raise AssertionError('잘못된 license 값을 수락함')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==digest
+ # 확인된 라이선스가 명시된 별도 데이터로 재생성하면 저장·조회 가능하다.
+ verified=license_copy.deepcopy(D)
+ verified['source']['license']='테스트용 이용조건 (공식 확인값 아님)'
+ validfile=tmp/'test_license.json'
+ validfile.write_text(json.dumps(verified,ensure_ascii=False),encoding='utf-8')
+ licensed_db=tmp/'license.sqlite3'
+ load.load_many([validfile],licensed_db)
+ info=q.sources(licensed_db,verified['facility']['id'],'2026-11-09')
+ assert len(info)==1 and info[0]['license']==verified['source']['license'] and info[0]['license_status']=='confirmed',info
+ print('PASS: 출처 3건 license=NULL, 상태 unverified, 시설/기간 조회, 검증된 값 저장, 잘못된 입력 거부 및 원본 보존')
  # 정기 휴장 규칙은 적용기간/출처와 연결되고, 휴장 코드가 명시적으로 저장된다.
  with closing(sqlite3.connect(db)) as c:
   rows=c.execute('SELECT r.facility_id,c.closure_type,c.closure_value FROM closure_rules c JOIN rule_sets r ON r.id=c.rule_set_id').fetchall()
