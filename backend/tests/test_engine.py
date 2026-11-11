@@ -209,6 +209,18 @@ def test_day_outside_calendar_calculated_when_rate_is_same_every_day():
     assert amounts(result)["base"] == 40000
 
 
+def test_day_outside_calendar_ignores_expired_holiday_rule():
+    rules = [
+        base_rule(rule_id="OLD_HOLIDAY", amount=30000, day_types=["holiday"], effective_to="2026-06-30"),
+        base_rule(rule_id="NEW", amount=20000),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert [item.rule_id for item in result.items] == ["NEW"]
+
+
 def test_holiday_outside_covered_range_rejected():
     with pytest.raises(ValueError, match="기간 밖의 공휴일"):
         calendar(holidays=[date(2028, 1, 1)])
