@@ -16,8 +16,15 @@ const timeOptions = Array.from({ length: 48 }, (_, index) => {
   return `${hour}:${minute}`
 })
 
+function withSelectedTime(time) {
+  if (!time || time === '24:00' || timeOptions.includes(time)) return timeOptions
+  return [...timeOptions, time].sort()
+}
+
 function SearchForm({
   sport,
+  aiSport,
+  aiDistrict,
   setSport,
   district,
   setDistrict,
@@ -66,6 +73,9 @@ function SearchForm({
             onChange={(e) => update(setSport, e.target.value)}
           >
             <option value="tennis">테니스</option>
+            {aiSport && aiSport.code !== 'tennis' && (
+              <option value={aiSport.code}>{aiSport.label}</option>
+            )}
           </select>
         </div>
 
@@ -80,6 +90,9 @@ function SearchForm({
             <option value="해운대구">해운대구</option>
             <option value="사상구">사상구</option>
             <option value="서구">서구</option>
+            {aiDistrict && !['전체', '해운대구', '사상구', '서구'].includes(aiDistrict) && (
+              <option value={aiDistrict}>{aiDistrict}</option>
+            )}
           </select>
         </div>
 
@@ -101,7 +114,7 @@ function SearchForm({
             onChange={(e) => update(setStartTime, e.target.value)}
           >
             <option value="">시작시간 선택</option>
-            {timeOptions.map((time) => (
+            {withSelectedTime(startTime).map((time) => (
               <option key={time} value={time}>
                 {time}
               </option>
@@ -117,7 +130,7 @@ function SearchForm({
             onChange={(e) => update(setEndTime, e.target.value)}
           >
             <option value="">종료시간 선택</option>
-            {timeOptions
+            {withSelectedTime(endTime)
               .filter((time) => !startTime || time > startTime)
               .concat('24:00')
               .map((time) => (

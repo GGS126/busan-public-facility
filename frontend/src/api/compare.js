@@ -8,12 +8,12 @@ const API_BASE_URL =
 const REQUEST_TIMEOUT = 10000
 
 // API 요청 공통 처리
-async function requestAPI(path, options = {}) {
+async function requestAPI(path, options = {}, timeout = REQUEST_TIMEOUT) {
   const controller = new AbortController()
 
   const timeoutId = setTimeout(() => {
     controller.abort()
-  }, REQUEST_TIMEOUT)
+  }, timeout)
 
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -108,4 +108,30 @@ export async function compareFacilities(request) {
     method: 'POST',
     body: JSON.stringify(request),
   })
+}
+
+export function getSearchOptions() {
+  return requestAPI('/api/facilities/options')
+}
+
+export function parseNaturalLanguage(query) {
+  return requestAPI('/api/query/parse', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  }, 45000)
+}
+
+export async function searchFacilities(conditions) {
+  const result = await requestAPI('/api/facilities/search', {
+    method: 'POST',
+    body: JSON.stringify({ conditions }),
+  })
+  return {
+    ...result,
+    results: result.results.map(facility => ({
+      ...facility,
+      id: facility.facility_id,
+      bookingUrl: facility.booking_url,
+    })),
+  }
 }
