@@ -1,4 +1,7 @@
 from datetime import datetime, timedelta
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,6 +52,28 @@ def test_options_endpoint_returns_sample_values():
             {"code": "multi_child", "label": "다자녀 가정"},
         ],
     }
+
+
+def test_sqlite_options_match_facility_search(monkeypatch, tmp_path):
+    build_script = Path(__file__).resolve().parents[2] / "database" / "build_db.py"
+    db = tmp_path / "facilities.sqlite3"
+    subprocess.run([sys.executable, str(build_script), "--db", str(db)], check=True)
+    monkeypatch.setattr(main, "DB_PATH", db)
+    day = (datetime.now(KST).date() + timedelta(days=1)).isoformat()
+    conditions = {"sport": "tennis", "date": day, "source": "direct"}
+    options = client.get("/api/facilities/options").json()
+    assert options["sports"] == [{"code": "tennis", "label": "테니스"}]
+    assert options["districts"] == ["사상구", "서구", "해운대구"]
+
+    response = client.post("/api/facilities/search", json={"conditions": conditions | {"districts": ["서구"]}})
+    assert response.status_code == 200
+    assert [facility["facility_id"] for facility in response.json()["results"]] == ["busan_gudeok_stadium_tennis"]
+
+    response = client.post("/api/facilities/search", json={"conditions": conditions})
+    assert response.status_code == 200
+    assert len(response.json()["results"]) == 3
+    response = client.post("/api/facilities/search", json={"conditions": conditions | {"start_time": "09:00"}})
+    assert response.status_code == 400
 
 
 def test_values_are_merged_without_duplicates_in_stable_order():
