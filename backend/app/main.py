@@ -23,6 +23,7 @@ from app.models import (
 from app.options import build_options
 from app.query_parser import parse_query
 from app.repository import load_rule_data
+from app.sqlite_compare import compare_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -198,11 +199,17 @@ def check_against_options(conditions: Conditions) -> None:
 
 @app.post("/api/compare", response_model=CompareResponse)
 def compare(request: CompareRequest) -> CompareResponse:
-    check_against_options(request.conditions)
-    selected = []
+    has_sqlite = DB_PATH.is_file()
+    if not has_sqlite or any(facility_id in facilities for facility_id in request.facility_ids):
+        check_against_options(request.conditions)
+    results = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)
-        if rules is None:
+        if rules is not None:
+            results.append(compare_facility(rules, request.conditions))
+            continue
+        result = compare_sqlite(DB_PATH, facility_id, request.conditions) if has_sqlite else None
+        if result is None:
             raise FacilityNotFound
-        selected.append(rules)
-    return CompareResponse(results=[compare_facility(rules, request.conditions) for rules in selected])
+        results.append(result)
+    return CompareResponse(results=results)
