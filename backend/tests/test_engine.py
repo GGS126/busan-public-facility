@@ -629,6 +629,8 @@ def test_conflicting_policies_need_review():
         (dict(selection="flexible", slots=[]), "allowed_minutes가 필요"),
         (dict(slots=[{"start_time": "09:00", "end_time": "09:00"}]), "종료 시간은 시작 시간보다"),
         (dict(open_time="08:00"), "함께 입력"),
+        (dict(open_time="22:00", close_time="08:00"), "운영시간의 종료 시간은 시작 시간보다"),
+        (dict(open_time="09:00", close_time="09:00"), "운영시간의 종료 시간은 시작 시간보다"),
     ],
 )
 def test_invalid_time_policy_rejected(overrides, message):

@@ -161,6 +161,8 @@ class TimePolicy(EffectivePeriod):
                 raise ValueError("회차의 종료 시간은 시작 시간보다 늦어야 합니다.")
         if (self.open_time is None) != (self.close_time is None):
             raise ValueError("open_time과 close_time은 함께 입력해야 합니다.")
+        if self.open_time is not None and to_minutes(self.close_time) <= to_minutes(self.open_time):
+            raise ValueError("운영시간의 종료 시간은 시작 시간보다 늦어야 합니다.")
         return self
 
 
