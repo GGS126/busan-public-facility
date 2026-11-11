@@ -1,4 +1,6 @@
 import logging
+import os
+from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -6,8 +8,12 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse, Conditions, OptionsResponse
+from app.gemini_extractor import GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.models import (
+    KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest, QueryParseResponse,
+)
 from app.options import build_options
+from app.query_parser import parse_query
 from app.repository import load_rule_data
 
 logger = logging.getLogger(__name__)
@@ -74,6 +80,52 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
 @app.get("/api/options", response_model=OptionsResponse)
 def options() -> OptionsResponse:
     return available_options
+
+
+@app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
+def parse_natural_language(request: QueryParseRequest) -> dict:
+    return parse_with_options(request, available_options)
+
+
+def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
+    def extract(query, today):
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            logger.warning("Gemini extraction failed: code=missing_api_key")
+            return None
+        try:
+            provider = GeminiExtractor(
+                key,
+                sport_codes={option.code: option.label for option in catalog.sports},
+                discount_codes={option.code: option.label for option in catalog.discount_types},
+                districts=catalog.districts,
+                model=os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.5-flash-lite",
+            )
+        except GeminiResponseError as error:
+            logger.warning("Gemini extraction failed: type=%s code=%s", type(error).__name__, error.code)
+            return None
+
+        for attempt in (1, 2):
+            try:
+                return provider(query, today)
+            except GeminiResponseError as error:
+                logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
+                               type(error).__name__, error.code, attempt)
+                if error.code not in {"invalid_output_json", "invalid_api_json", "unexpected_extraction_fields"}:
+                    break
+            except GeminiHTTPError as error:
+                logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
+                break
+            except Exception as error:
+                # Exception messages may include request text or credentials.
+                logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
+                break
+        return None
+
+    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
+    if result["status"] == "llm_failed":
+        result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
+    return result
 
 
 def check_against_options(conditions: Conditions) -> None:
