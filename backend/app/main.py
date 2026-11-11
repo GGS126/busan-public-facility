@@ -99,7 +99,7 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                 sport_codes={option.code: option.label for option in catalog.sports},
                 discount_codes={option.code: option.label for option in catalog.discount_types},
                 districts=catalog.districts,
-                model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip(),
+                model=os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.5-flash-lite",
             )
         except GeminiResponseError as error:
             logger.warning("Gemini extraction failed: type=%s code=%s", type(error).__name__, error.code)
@@ -111,6 +111,8 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             except GeminiResponseError as error:
                 logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
                                type(error).__name__, error.code, attempt)
+                if error.code not in {"invalid_output_json", "invalid_api_json", "unexpected_extraction_fields"}:
+                    break
             except GeminiHTTPError as error:
                 logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
                 break

@@ -5,6 +5,9 @@ import unicodedata
 from collections.abc import Callable, Mapping
 from datetime import date
 
+from pydantic import TypeAdapter, ValidationError
+
+from app.models import BandTime, ClockTime
 
 QUESTIONS = {
     "sport": "어떤 종목을 이용하시나요?",
@@ -17,9 +20,11 @@ QUESTIONS = {
 }
 REQUIRED_FIELDS = ("sport", "districts", "date", "start_time", "end_time")
 DATE_FORMAT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-CLOCK_FORMAT = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]")
+START_TIME = TypeAdapter(ClockTime)
+END_TIME = TypeAdapter(BandTime)
 SENSITIVE_PATTERN = re.compile(
     r"(?<!\d)(?:\d{6}[-.\s]?\d{7}|(?:\+82[-.\s]?|0)1[016789][- .]?\d{3,4}[- .]?\d{4})(?!\d)"
+    r"|(?<!\d)(?:0(?:2|[3-6][1-5])|\+82[- .]?(?:2|[3-6][1-5]))[- .]?\d{3,4}[- .]?\d{4}(?!\d)"
     r"|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
 )
 
@@ -32,6 +37,8 @@ def parse_query(
 ) -> dict:
     """Normalize extracted fields; `ok` still requires user confirmation in the UI."""
     query = unicodedata.normalize("NFKC", query).strip()
+    if len(query) > 500:
+        return {**_result("llm_failed", {}), "message": "이용 조건은 500자 이내로 입력해 주세요."}
     if not query:
         return _result("need_more", {}, list(REQUIRED_FIELDS))
     if SENSITIVE_PATTERN.search(query):
@@ -88,9 +95,11 @@ def _valid(field: str, value: object, today: date) -> bool:
     if field == "headcount":
         return type(value) is int and value > 0
     if field in {"start_time", "end_time"}:
-        return isinstance(value, str) and (
-            bool(CLOCK_FORMAT.fullmatch(value)) or (field == "end_time" and value == "24:00")
-        )
+        try:
+            (END_TIME if field == "end_time" else START_TIME).validate_python(value, strict=True)
+            return True
+        except ValidationError:
+            return False
     if not isinstance(value, str) or not DATE_FORMAT.fullmatch(value):
         return False
     try:

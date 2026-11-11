@@ -108,3 +108,41 @@ def test_api_keeps_partial_conditions_in_response(monkeypatch):
     assert result["conditions"]["date"] == tomorrow
     assert "discount_types" not in result["conditions"]
     assert result["missing_fields"] == ["discount_types"]
+
+
+@pytest.mark.parametrize("phone", ["051-123-4567", "02-1234-5678", "0311234567", "+82-51-123-4567"])
+def test_landline_is_blocked_before_extraction(phone):
+    extract = Mock()
+    result = parse_query(f"풋살 문의 {phone}", today=TODAY, extract=extract)
+    assert result["status"] == "llm_failed"
+    extract.assert_not_called()
+
+
+def test_expanded_normalized_query_is_blocked():
+    extract = Mock()
+    result = parse_query("\ufdfa" * 500, today=TODAY, extract=extract)
+    assert result["status"] == "llm_failed"
+    extract.assert_not_called()
+
+
+@pytest.mark.parametrize("model", ["", "   "])
+def test_empty_model_uses_default(monkeypatch, model):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GEMINI_MODEL", model)
+    factory = Mock(return_value=Mock(return_value=CONDITIONS))
+    monkeypatch.setattr(main, "GeminiExtractor", factory)
+    TestClient(main.app).post("/api/query/parse", json={"query": "풋살"})
+    assert factory.call_args.kwargs["model"] == "gemini-3.5-flash-lite"
+
+
+@pytest.mark.parametrize("code", [
+    "output_token_limit", "generation_did_not_finish", "candidate_missing_or_unexpected_count",
+    "unsupported_sport_code",
+])
+def test_non_format_errors_are_not_retried(monkeypatch, code):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    provider = Mock(side_effect=GeminiResponseError(code))
+    monkeypatch.setattr(main, "GeminiExtractor", Mock(return_value=provider))
+    response = TestClient(main.app).post("/api/query/parse", json={"query": "풋살"})
+    assert response.json()["status"] == "llm_failed"
+    provider.assert_called_once()
