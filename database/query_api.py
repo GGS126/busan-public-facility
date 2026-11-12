@@ -4,6 +4,10 @@ import datetime as dt
 import json
 import sqlite3
 from pathlib import Path
+try:
+    from . import load as _load
+except ImportError:
+    import load as _load
 ROOT=Path(__file__).resolve().parent
 
 def normalize_use_date(value):
@@ -65,7 +69,7 @@ def closure_status(db,facility_id,use_date,holiday_codes=None):
     use_date=normalize_use_date(use_date)
     if holiday_codes is not None:
         if not isinstance(holiday_codes,(list,tuple,set)) or any(
-                not isinstance(x,str) or x not in ('lunar_new_year_day','chuseok_day')
+                not isinstance(x,str) or x not in _load.CLOSURE_HOLIDAY_CODES
                 for x in holiday_codes):
             raise ValueError('holiday_codes는 지원하는 명절 코드 목록이어야 합니다')
     active=fetch(db,'''SELECT r.id,s.url AS source_url FROM rule_sets r
@@ -472,29 +476,77 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
 
 duration_quote=quote
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(description='공통 시설 요금 조회')
-    parser.add_argument('resource',choices=['facilities','pricing','slots','duration_prices','quote','duration_quote','optional_lighting','options','discounts','refunds','backend_time_policy'])
-    parser.add_argument('--facility');parser.add_argument('--date');parser.add_argument('--weekend',choices=['true','false'])
-    parser.add_argument('--start-time');parser.add_argument('--end-time')
-    parser.add_argument('--optional-lighting-minutes',type=int,default=0)
-    parser.add_argument('--discount-categories',help='감면 대상 ID를 쉼표로 구분 (예: independence_merit,disabled)')
-    parser.add_argument('--db',default=str(ROOT/'facilities.sqlite3'))
-    a=parser.parse_args()
-    if a.resource=='facilities':result=facilities(a.db)
+    parser = argparse.ArgumentParser(description='공통 시설 요금·규정 조회')
+    parser.add_argument('resource', choices=[
+        'facilities', 'pricing', 'slots', 'duration_prices', 'quote', 'duration_quote',
+        'optional_lighting', 'options', 'discounts', 'refunds', 'backend_time_policy',
+        'sources', 'closure_rules', 'closure_status', 'discount_proration_check'])
+    parser.add_argument('--facility', help='시설 ID')
+    parser.add_argument('--date', help='이용일 YYYY-MM-DD')
+    parser.add_argument('--weekend', choices=['true', 'false'])
+    parser.add_argument('--start-time')
+    parser.add_argument('--end-time')
+    parser.add_argument('--optional-lighting-minutes', type=int, default=0)
+    parser.add_argument('--discount-categories', help='감면 대상 ID를 쉼표로 구분')
+    parser.add_argument('--holiday-codes', help='이용일에 해당하는 명절 코드. 쉼표로 구분; 빈 문자열은 명절 아님을 뜻함')
+    parser.add_argument('--base-fee-won', type=int, help='감면 계산 대상 코트 기본요금')
+    parser.add_argument('--participant-count', type=int, help='전체 이용 인원')
+    parser.add_argument('--eligible-count', type=int, help='감면 대상 인원')
+    parser.add_argument('--category-id', help='검사할 감면 유형 ID')
+    parser.add_argument('--guardian-count', type=int, help='감면 대상 보호자 인원')
+    parser.add_argument('--severe-disabled-count', type=int, help='중증 장애인 본인 인원')
+    parser.add_argument('--db', default=str(ROOT / 'facilities.sqlite3'))
+    a = parser.parse_args()
+
+    if a.resource == 'facilities':
+        result = facilities(a.db)
+    elif a.resource == 'sources' and a.date is None:
+        result = sources(a.db, a.facility)
     else:
-        if not a.facility or not a.date:parser.error('--facility, --date 필요')
-        if a.resource in ('pricing','slots','quote','duration_quote') and a.weekend is None:parser.error('--weekend 필요')
-        is_weekend=a.weekend=='true'
-        if a.resource=='pricing':result=pricing_rules(a.db,a.facility,a.date,is_weekend)
-        elif a.resource=='slots':result=slots(a.db,a.facility,a.date,is_weekend)
-        elif a.resource=='duration_prices':result=duration_prices(a.db,a.facility,a.date)
-        elif a.resource=='backend_time_policy':result=backend_time_policy(a.db,a.facility,a.date)
-        elif a.resource=='options':result=facility_options(a.db,a.facility,a.date)
-        elif a.resource=='discounts':result=discounts(a.db,a.facility,a.date)
-        elif a.resource=='refunds':result=refund_rules(a.db,a.facility,a.date)
-        elif a.resource=='optional_lighting':result=optional_lighting_quote(a.db,a.facility,a.date,a.optional_lighting_minutes)
+        if not a.facility or not a.date:
+            parser.error('--facility, --date 필요')
+        if a.resource in ('pricing', 'slots', 'quote', 'duration_quote') and a.weekend is None:
+            parser.error('--weekend 필요')
+        is_weekend = a.weekend == 'true'
+        if a.resource == 'sources':
+            result = sources(a.db, a.facility, a.date)
+        elif a.resource == 'closure_rules':
+            result = closure_rules(a.db, a.facility, a.date)
+        elif a.resource == 'closure_status':
+            # None: 공휴일 자료 미제공. []: 확인 결과 해당 명절 코드 없음.
+            codes = None if a.holiday_codes is None else (
+                a.holiday_codes.split(',') if a.holiday_codes else [])
+            result = closure_status(a.db, a.facility, a.date, codes)
+        elif a.resource == 'discount_proration_check':
+            for key in ('base_fee_won', 'participant_count', 'eligible_count', 'category_id'):
+                if getattr(a, key) is None:
+                    parser.error('--' + key.replace('_', '-') + ' 필요')
+            result = discount_proration_check(
+                a.db, a.facility, a.date, a.base_fee_won,
+                a.participant_count, a.eligible_count, a.category_id,
+                guardian_count=a.guardian_count,
+                severe_disabled_count=a.severe_disabled_count)
+        elif a.resource == 'pricing':
+            result = pricing_rules(a.db, a.facility, a.date, is_weekend)
+        elif a.resource == 'slots':
+            result = slots(a.db, a.facility, a.date, is_weekend)
+        elif a.resource == 'duration_prices':
+            result = duration_prices(a.db, a.facility, a.date)
+        elif a.resource == 'backend_time_policy':
+            result = backend_time_policy(a.db, a.facility, a.date)
+        elif a.resource == 'options':
+            result = facility_options(a.db, a.facility, a.date)
+        elif a.resource == 'discounts':
+            result = discounts(a.db, a.facility, a.date)
+        elif a.resource == 'refunds':
+            result = refund_rules(a.db, a.facility, a.date)
+        elif a.resource == 'optional_lighting':
+            result = optional_lighting_quote(
+                a.db, a.facility, a.date, a.optional_lighting_minutes)
         else:
-            if not a.start_time or not a.end_time:parser.error('--start-time, --end-time 필요')
-            selected=a.discount_categories.split(',') if a.discount_categories else None
-            result=quote(a.db,a.facility,a.date,a.start_time,a.end_time,is_weekend,a.optional_lighting_minutes,selected)
-    print(json.dumps(result,ensure_ascii=False,indent=2))
+            if not a.start_time or not a.end_time:
+                parser.error('--start-time, --end-time 필요')
+            selected = a.discount_categories.split(',') if a.discount_categories else None
+            result = quote(a.db, a.facility, a.date, a.start_time, a.end_time,
+                           is_weekend, a.optional_lighting_minutes, selected)
+    print(json.dumps(result, ensure_ascii=False, indent=2))

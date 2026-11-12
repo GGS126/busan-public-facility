@@ -1,4 +1,4 @@
-import json, sqlite3, tempfile, pathlib, hashlib, shutil, os
+import json, sqlite3, tempfile, pathlib, hashlib, shutil, os, subprocess, sys
 from contextlib import closing
 from unittest.mock import patch
 import load,query_api as q
@@ -45,6 +45,33 @@ with tempfile.TemporaryDirectory() as tmp:
   assert c.execute('SELECT COUNT(*) FROM closure_rules').fetchone()[0]==5
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
  print('PASS: 기존 SQLite 새 컬럼/휴장 규칙/VIEW/감면대상 명칭 갱신')
+ # 새 조회 함수 네 가지를 실제 CLI 경로로 실행해 README의 명령과 일치시키는 회귀 테스트.
+ def cli(resource, *args):
+  proc=subprocess.run([sys.executable,str(R/'query_api.py'),resource,'--db',str(db),*args],
+                      text=True,encoding='utf-8',capture_output=True)
+  assert proc.returncode==0,(resource,proc.stderr)
+  return json.loads(proc.stdout)
+ f='busan_samrak_ecopark_tennis'
+ common=('--facility',f,'--date','2026-11-09')
+ assert len(cli('sources'))>=3
+ assert len(cli('sources','--facility',f))==1
+ assert len(cli('sources',*common))==1
+ rules=cli('closure_rules',*common)
+ assert any(x['type']=='holiday_code' for x in rules),rules
+ assert cli('closure_status',*common)['status']=='needs_calendar_resolution'
+ assert cli('closure_status',*common,'--holiday-codes','')['status']=='no_scheduled_closure'
+ assert cli('closure_status',*common,'--holiday-codes','lunar_new_year_day')['status']=='closed'
+ calc=cli('discount_proration_check',*common,'--base-fee-won','6000',
+          '--participant-count','4','--eligible-count','2','--category-id','multi_child')
+ assert calc['status']=='confirmed' and calc['discount_refund_won']==1500,calc
+ invalid=subprocess.run([sys.executable,str(R/'query_api.py'),'discount_proration_check',
+                         '--db',str(db),*common],capture_output=True,text=True,encoding='utf-8')
+ assert invalid.returncode!=0 and '--base-fee-won' in invalid.stderr,invalid.stderr
+ invalid_code=subprocess.run([sys.executable,str(R/'query_api.py'),'closure_status',
+                              '--db',str(db),*common,'--holiday-codes','unknown_holiday'],
+                              capture_output=True,text=True,encoding='utf-8')
+ assert invalid_code.returncode!=0 and 'holiday_codes' in invalid_code.stderr,invalid_code.stderr
+ print('PASS: 신규 CLI sources/closure_rules/closure_status/discount_proration_check 및 필수 인자 검증')
  # 공통 테스트 사례 스키마: 같은 항목은 같은 이름, 선택적 항목은 의미를 보존.
  test_fixtures={
   'test_cases.json':'busan_haeundae_arboretum_tennis',

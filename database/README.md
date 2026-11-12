@@ -271,3 +271,19 @@ python database/audit_checks.py
 
 
 **끝전 처리 정책 입력:** `discount_common.rounding_policy`는 공식 근거가 없는 경우 `null`로 유지합니다. 공식 근거가 확인된 경우에만 `round_half_up`(원 단위 사사오입), `floor_won`(원 미만 버림), `ceil_won`(원 미만 올림), `truncate_10_won`(10원 미만 버림), `truncate_100_won`(100원 미만 버림) 중 한 값을 입력할 수 있습니다. 인원별 비례 감면에서는 **1인당 감면액을 해당 단위로 처리한 뒤 감면 대상 인원수만큼 합산**합니다. 정책 이름을 적용하는 실제 시설의 근거 문서가 필요하며, 현재 세 테니스장은 모두 `null`로 유지합니다.
+
+### PR #21 리뷰 10번: 조회 함수 CLI 연결
+
+프로젝트 루트에서 DB를 생성한 다음 아래 명령으로 새 조회 함수도 CLI에서 호출할 수 있습니다.
+
+```powershell
+python database/query_api.py sources
+python database/query_api.py closure_rules --facility busan_samrak_ecopark_tennis --date 2026-11-09
+python database/query_api.py closure_status --facility busan_samrak_ecopark_tennis --date 2026-11-09 --holiday-codes ""
+python database/query_api.py discount_proration_check --facility busan_samrak_ecopark_tennis --date 2026-11-09 --base-fee-won 6000 --participant-count 4 --eligible-count 2 --category-id multi_child
+```
+
+- `sources`는 전체 출처 조회, `--facility`만 사용한 조회, 시설과 `--date`를 지정한 조회가 모두 가능합니다.
+- `closure_status`에서 `--holiday-codes`를 **생략**하면 그 날짜의 명절 여부를 확인할 정보가 없는 상태(`None`)이고, `--holiday-codes ""`는 공휴일 자료로 확인했으나 해당 명절 코드가 없는 상태(`[]`)입니다. 실제 명절 당일은 `--holiday-codes lunar_new_year_day`처럼 지정합니다.
+- `discount_proration_check`는 `--base-fee-won`, `--participant-count`, `--eligible-count`, `--category-id`가 필수이며, 장애인 감면의 보호자 조건 확인에는 `--guardian-count`와 `--severe-disabled-count`를 추가합니다.
+- 위 명령은 **정기 휴장일과 감면 규칙을 조회·검증**하는 것이며, 실시간 예약 가능 여부나 API의 예약 승인·차단을 보장하지 않습니다.
