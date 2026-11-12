@@ -354,12 +354,20 @@ def validate_guardian_discounts(items):
                 raise ValueError('disabled.guardian_max_count가 0/null이면 보호자 조건은 null이어야 합니다')
 
 
+# schema.sql의 facility_discounts.discount_rounding_policy CHECK 허용값과 일치.
+# 실제 공식 규정을 확인한 경우에만 시설 JSON에 값으로 등록한다.
+DISCOUNT_ROUNDING_POLICIES = frozenset((
+    'round_half_up', 'floor_won', 'ceil_won', 'truncate_10_won', 'truncate_100_won'
+))
+
+
 def validate_discount_rounding(common):
-    # NULL: 공식 끝전 처리 기준 미확인. 추정값을 넣지 않는다.
+    # None은 공식 끝전 처리 기준 미확인; 추정 정책을 자동으로 채우지 않는다.
     if 'rounding_policy' not in common:
         raise ValueError('discount_common.rounding_policy 필수 (미확인은 null)')
-    if common['rounding_policy'] is not None:
-        raise ValueError('discount_common.rounding_policy는 공식 근거 확인 전 null이어야 합니다')
+    policy = common['rounding_policy']
+    if policy is not None and (not isinstance(policy, str) or policy not in DISCOUNT_ROUNDING_POLICIES):
+        raise ValueError('discount_common.rounding_policy 허용되지 않은 정책')
 
 def validate_duration_discounts(d):
     """원본 JSON의 시설별 감면 정책을 검사하고, 추정 기본값을 만들지 않는다."""

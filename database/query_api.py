@@ -238,12 +238,30 @@ def discount_proration_check(db, facility_id, use_date, base_fee_won,
                 'net_court_fee_won':base_fee_won}
     # 감면이 이용자마다 다른 경우는 해당 자격의 합산 규칙을 별도로 확인해야 한다.
     refund_per_person = Fraction(base_fee_won * rule['percent'], participant_count * 100)
-    refund_total = refund_per_person * eligible_count
-    if refund_per_person.denominator != 1 or refund_total.denominator != 1:
+    policy = rule['discount_rounding_policy']
+    # 'per_eligible_person_equal_split'은 1인당 반환액을 먼저 계산하는 방식.
+    # 각 감면 대상자의 반환액을 원 단위로 처리한 후 인원수만큼 합산한다.
+    if refund_per_person.denominator == 1:
+        rounded_per_person = int(refund_per_person)
+    elif policy is None:
         return {**base,'status':'needs_review','discount_refund_won':None,
                 'net_court_fee_won':None,'review_items':[{'code':'discount_rounding_unverified',
                 'reason':'인원별 감면액에 원 미만의 끝전이 발생하지만 공식 처리 기준이 확인되지 않았습니다.'}]}
-    refund = int(refund_total)
+    elif policy == 'round_half_up':
+        rounded_per_person = (2 * refund_per_person.numerator + refund_per_person.denominator) // (2 * refund_per_person.denominator)
+    elif policy == 'floor_won':
+        rounded_per_person = refund_per_person.numerator // refund_per_person.denominator
+    elif policy == 'ceil_won':
+        rounded_per_person = -(-refund_per_person.numerator // refund_per_person.denominator)
+    elif policy in ('truncate_10_won', 'truncate_100_won'):
+        unit = 10 if policy == 'truncate_10_won' else 100
+        rounded_per_person = (refund_per_person.numerator // (refund_per_person.denominator * unit)) * unit
+    else:
+        # DB의 CHECK 제약과 별개로 알 수 없는 정책을 계산에 사용하는 것을 방지한다.
+        return {**base,'status':'needs_review','discount_refund_won':None,
+                'net_court_fee_won':None,'review_items':[{'code':'discount_rounding_unknown',
+                'reason':'DB의 감면 끝전 처리 정책을 해석할 수 없습니다.'}]}
+    refund = rounded_per_person * eligible_count
     return {**base,'status':'confirmed','discount_refund_won':refund,
             'net_court_fee_won':base_fee_won-refund}
 

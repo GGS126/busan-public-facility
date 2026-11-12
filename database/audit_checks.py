@@ -227,7 +227,7 @@ with tempfile.TemporaryDirectory() as tmp:
   expected=case['expected']
   assert expected['status']=='needs_review' and expected.get('discount_refund_won') is None,case
  import copy as rounding_copy
- for bad_value in ('round_up', 'floor_won', 0):
+ for bad_value in ('round_up', 'unknown_policy', 0, False):
   changed=rounding_copy.deepcopy(D)
   changed['discount_common']['rounding_policy']=bad_value
   badfile=tmp/'invalid_discount_rounding.json'
@@ -237,6 +237,27 @@ with tempfile.TemporaryDirectory() as tmp:
   except ValueError as exc:assert 'rounding_policy' in str(exc),str(exc)
   else:raise AssertionError('공식 근거 없는 끝전 처리 기준을 적재함')
   assert hashlib.sha256(db.read_bytes()).hexdigest()==before
+ # 스키마가 허용하는 5개 정책이 적재 가능하며 확인된 규정은 계산 분기에 도달해야 한다.
+ # 아래 값은 정책별 계산 로직 테스트용 가상 데이터이며 실제 시설의 공식 정책을 뜻하지 않는다.
+ allowed=('round_half_up','floor_won','ceil_won','truncate_10_won','truncate_100_won')
+ schema=(R/'schema.sql').read_text(encoding='utf-8')
+ for policy in allowed:
+  assert f"'{policy}'" in schema
+  changed=rounding_copy.deepcopy(D)
+  changed['discount_common']['rounding_policy']=policy
+  sample=tmp/f'rounding_{policy}.json'
+  sample.write_text(json.dumps(changed,ensure_ascii=False),encoding='utf-8')
+  isolated=tmp/f'rounding_{policy}.sqlite3'
+  load.load_many([sample],isolated)
+  with closing(sqlite3.connect(isolated)) as c:
+   stored=c.execute('SELECT DISTINCT discount_rounding_policy FROM facility_discounts').fetchall()
+   assert stored==[(policy,)],(policy,stored)
+  result=q.discount_proration_check(isolated,ha,'2026-11-09',8000,3,1,'disabled',guardian_count=0,severe_disabled_count=0)
+  expected={'round_half_up':1333,'floor_won':1333,'ceil_won':1334,
+            'truncate_10_won':1330,'truncate_100_won':1300}[policy]
+  assert result['status']=='confirmed' and result['discount_refund_won']==expected,(policy,result)
+  assert result['rounding_status']=='confirmed' and result['rounding_policy']==policy,(policy,result)
+ print('PASS: 허용된 5개 끝전 정책 적재/계산 및 미허용 정책 차단')
  print('PASS: 세 시설 감면 끝전 처리 NULL/미확인, 정수 사례 유지, 소수점 끝전 미확인 needs_review')
  # source.license는 검증된 이용조건이 없으므로 NULL이어야 한다.
  with closing(sqlite3.connect(db)) as c:
