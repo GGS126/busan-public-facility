@@ -317,7 +317,7 @@ def load_fixed(data_path, db_path):
             c=d['discount_common']
             for item in d['discounts']:
                 for code in GROUP_TO_CODES[item['id']]:
-                    con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',(code,CATEGORY_NAMES[code]))
+                    con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
                         (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
                          processing,documents,deadline,note,original_group_label)
@@ -390,7 +390,7 @@ def insert_duration_discounts(con, rid, d):
     excluded = ','.join(d['discount_excluded_fee_types']) or None
     for item in d.get('discounts_confirmed', []):
         cat = item['id']
-        con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',
+        con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',
                     (cat, CATEGORY_NAMES[cat]))
         con.execute("""INSERT INTO facility_discounts
           (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
@@ -483,6 +483,32 @@ def load(data_path, db_path=ROOT/'facilities.sqlite3'):
         raise ValueError('알 수 없는 자료 형식: slots 또는 pricing 중 하나만 필요')
 
 
+
+def upgrade_existing_schema(con):
+    """기존 SQLite를 새 구조로 올린다 (원본이 아닌 load_many 임시 복사본에서만 실행).
+
+    IF NOT EXISTS는 기존 테이블의 열이나 VIEW를 갱신하지 않으므로,
+    추가 컬럼을 명시적으로 보강하고 관련 VIEW를 재생성한다.
+    """
+    expected = {
+        'facilities': [('district', "TEXT NOT NULL DEFAULT ''")],
+        'sources': [('license', 'TEXT')],
+        'facility_discounts': [
+            ('guardian_max_count', 'INTEGER'), ('guardian_condition', 'TEXT'),
+            ('guardian_evidence_note', 'TEXT'), ('discount_rounding_policy', 'TEXT'),
+        ],
+    }
+    for table, fields in expected.items():
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            present = {r[1] for r in con.execute(f'PRAGMA table_info({table})')}
+            for column, sql_type in fields:
+                if column not in present:
+                    con.execute(f'ALTER TABLE {table} ADD COLUMN {column} {sql_type}')
+    # 오래된 VIEW는 CREATE VIEW IF NOT EXISTS로 교체되지 않는다.
+    for view in ('v_facility_discounts', 'v_slot_prices'):
+        con.execute(f'DROP VIEW IF EXISTS {view}')
+    con.executescript((ROOT/'schema.sql').read_text(encoding='utf-8'))
+
 def load_many(paths, db_path=ROOT/'facilities.sqlite3'):
     """모든 파일 선검사 후 임시 DB에서 갱신해 전체 성공 시에만 원본 교체."""
     import os, tempfile
@@ -497,6 +523,9 @@ def load_many(paths, db_path=ROOT/'facilities.sqlite3'):
             # Windows will not replace a DB file still held open by SQLite.
             with closing(sqlite3.connect(db_path)) as original, closing(sqlite3.connect(staged)) as draft:
                 original.backup(draft)
+        if db_path.exists():
+            with closing(sqlite3.connect(staged)) as con:
+                upgrade_existing_schema(con)
         for p in paths: load(p, staged)
         with closing(sqlite3.connect(staged)) as con:
             con.execute('PRAGMA foreign_keys=ON')

@@ -247,3 +247,16 @@ result = query_api.closure_status(db_path, facility_id, '2026-11-09',
 ```powershell
 python database/audit_checks.py
 ```
+
+
+### PR #21 리뷰 보완: 보호자 감면 및 기존 DB 적재
+
+- `discount_proration_check()`로 장애인 감면을 계산할 때는 `guardian_count`와
+  `severe_disabled_count`를 **명시적으로 전달**해야 합니다. `eligible_count`에는
+  감면 대상인 장애인 본인과 해당 보호자가 모두 포함됩니다.
+- 보호자 2명 이상 또는 중증 장애인 본인 없이 보호자를 감면 대상으로 입력하면
+  반환액을 계산하지 않고 `needs_review`를 반환합니다. 이 함수를 사용하는 백엔드
+  호출부에서도 새 인원을 구분하여 전달해야 합니다.
+- `load_many()`는 기존 SQLite 파일을 임시 복사한 후 구 스키마의 누락 컬럼을
+  보완하고 VIEW를 갱신한 다음 JSON을 다시 적재합니다. 잘못된 입력은 원본 DB를
+  교체하지 않습니다. 전체 데이터의 재생성은 기존처럼 `build_db.py`가 권장됩니다.

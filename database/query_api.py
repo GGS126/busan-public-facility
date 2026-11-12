@@ -183,7 +183,8 @@ def discounts(db,facility_id,use_date):
     ORDER BY category_name''',(facility_id,use_date))
 
 def discount_proration_check(db, facility_id, use_date, base_fee_won,
-                              participant_count, eligible_count, category_id):
+                              participant_count, eligible_count, category_id,
+                              guardian_count=None, severe_disabled_count=None):
     """DB 규정의 비례 감면 정합성 검사. 결제/API 오류 생성은 백엔드 책임.
 
     끝전/인원별 배분의 공식 규칙이 불명확하면 환급·최종 금액은 반환하지 않는다.
@@ -198,6 +199,21 @@ def discount_proration_check(db, facility_id, use_date, base_fee_won,
     if category_id not in rules:
         raise ValueError('등록되지 않은 감면 유형')
     rule = rules[category_id]
+    # 장애인 감면은 보호자 수를 별도로 확인해야 하며, 총 감면 인원만으로는
+    # 보호자 최대 1명 규정을 강제할 수 없다. 확인 불가 시 금액을 산출하지 않는다.
+    if category_id == 'disabled' and eligible_count > 0:
+        if (type(guardian_count) is not int or type(severe_disabled_count) is not int or
+            guardian_count < 0 or severe_disabled_count < 0 or
+            guardian_count > eligible_count or severe_disabled_count > eligible_count - guardian_count):
+            return {'status':'needs_review','discount_refund_won':None,
+                    'net_court_fee_won':None,'review_items':[{'code':'guardian_counts_required',
+                    'reason':'장애인 감면은 보호자 수와 중증 장애인 본인 수를 구분해 입력해야 합니다.'}]}
+        if guardian_count > (rule['guardian_max_count'] or 0) or (guardian_count and severe_disabled_count < 1):
+            return {'status':'needs_review','discount_refund_won':None,
+                    'net_court_fee_won':None,'review_items':[{'code':'guardian_limit_exceeded',
+                    'reason':'보호자는 중증 장애인 동반 시 최대 1명만 감면 대상입니다.'}]}
+    elif guardian_count not in (None, 0) or severe_disabled_count not in (None, 0):
+        raise ValueError('보호자 인원 입력은 장애인 감면에만 사용합니다')
     if eligible_count == 0:
         return {'status':'confirmed','discount_refund_won':0,'net_court_fee_won':base_fee_won}
     base = {'facility_id': facility_id, 'date': normalize_use_date(use_date),

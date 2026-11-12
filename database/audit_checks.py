@@ -20,6 +20,31 @@ with tempfile.TemporaryDirectory() as tmp:
   }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+ # 기존 스키마에 CREATE IF NOT EXISTS만 실행하면 누락 컬럼과 VIEW가 남는 회귀 확인.
+ legacy=tmp/'legacy.sqlite3'
+ shutil.copy2(db,legacy)
+ with closing(sqlite3.connect(legacy)) as c:
+  c.execute('DROP VIEW IF EXISTS v_facility_discounts')
+  c.execute('DROP VIEW IF EXISTS v_slot_prices')
+  for table,cols in [('facilities',['district']),('sources',['license']),
+                     ('facility_discounts',['guardian_max_count','guardian_condition',
+                                            'guardian_evidence_note','discount_rounding_policy'])]:
+   for col in cols:
+    c.execute(f'ALTER TABLE {table} DROP COLUMN {col}')
+  c.execute("UPDATE discount_categories SET name='이전 명칭' WHERE id='multi_child'")
+  c.execute('DROP TABLE closure_rules')
+  c.execute('CREATE VIEW v_facility_discounts AS SELECT 1 AS old_view')
+  c.commit()
+ load.load_many([R/x for x in files],legacy)
+ with closing(sqlite3.connect(legacy)) as c:
+  assert c.execute("SELECT COUNT(*) FROM facilities WHERE district<>''").fetchone()[0]==3
+  assert c.execute('SELECT license FROM sources LIMIT 1').fetchone()[0] is None
+  assert c.execute("SELECT COUNT(*) FROM facility_discounts WHERE category_id='disabled' AND guardian_max_count=1").fetchone()[0]==3
+  assert c.execute('SELECT category_name FROM v_facility_discounts LIMIT 1').fetchone()[0]
+  assert c.execute("SELECT name FROM discount_categories WHERE id='multi_child'").fetchone()[0]=='다자녀가정에 속하는 사람'
+  assert c.execute('SELECT COUNT(*) FROM closure_rules').fetchone()[0]==5
+  assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+ print('PASS: 기존 SQLite 새 컬럼/휴장 규칙/VIEW/감면대상 명칭 갱신')
  # 공통 테스트 사례 스키마: 같은 항목은 같은 이름, 선택적 항목은 의미를 보존.
  test_fixtures={
   'test_cases.json':'busan_haeundae_arboretum_tennis',
@@ -101,7 +126,22 @@ with tempfile.TemporaryDirectory() as tmp:
   assert '심한' in disabled['guardian_condition'] and '보호자 1명' in disabled['guardian_condition'],disabled
   assert '미확인' in disabled['guardian_evidence_note'],disabled
   assert all(x['guardian_max_count'] is None for x in rules if x['category_id']!='disabled'),fac
- assert q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,2,'disabled')['discount_refund_won']==1500
+ assert q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,2,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1500
+
+ # 보호자 수를 명시하지 않으면 오지급 위험이 있으므로 계산 보류.
+ missing_guardian = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,3,'disabled')
+ assert missing_guardian['status']=='needs_review' and missing_guardian['discount_refund_won'] is None
+ # 중증 장애인 1명 + 보호자 2명을 전부 할인하는 것을 차단.
+ excess = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,3,'disabled',guardian_count=2,severe_disabled_count=1)
+ assert excess['status']=='needs_review' and excess['review_items'][0]['code']=='guardian_limit_exceeded', excess
+ # 중증 장애인 1명과 보호자 1명: 정상 50% 개인별 감면.
+ valid = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,2,'disabled',guardian_count=1,severe_disabled_count=1)
+ assert valid['status']=='confirmed' and valid['discount_refund_won']==1500, valid
+ # 중증 장애인이 동반하지 않는 보호자는 감면 불가.
+ no_severe = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,1,'disabled',guardian_count=1,severe_disabled_count=0)
+ assert no_severe['status']=='needs_review' and no_severe['discount_refund_won'] is None
+ print('PASS: 보호자 1명 상한 및 중증 장애인 동반 조건 확인')
+
  import copy as guardian_copy
  for wrong in (0,2,'1'):
   invalid=guardian_copy.deepcopy(D)
@@ -123,14 +163,14 @@ with tempfile.TemporaryDirectory() as tmp:
   rules=q.discounts(db,fac,'2026-11-09')
   assert rules and all(x['discount_rounding_policy'] is None and x['rounding_status']=='unverified' for x in rules),fac
  ha='busan_haeundae_arboretum_tennis'; sa='busan_samrak_ecopark_tennis'; gu='busan_gudeok_stadium_tennis'
- assert q.discount_proration_check(db,ha,'2026-11-09',8000,4,2,'disabled')['discount_refund_won']==2000
- assert q.discount_proration_check(db,sa,'2026-11-09',6000,4,2,'disabled')['discount_refund_won']==1500
- assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,1,'disabled')['discount_refund_won']==1000
- assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,3,'disabled')['discount_refund_won']==3000
+ assert q.discount_proration_check(db,ha,'2026-11-09',8000,4,2,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==2000
+ assert q.discount_proration_check(db,sa,'2026-11-09',6000,4,2,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1500
+ assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,1,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1000
+ assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,3,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==3000
  for fac,fee,n,code in [(ha,8000,3,'discount_rounding_unverified'),
                          (sa,6000,7,'discount_rounding_unverified'),
                          (gu,8000,3,'discount_rounding_unverified')]:
-  result=q.discount_proration_check(db,fac,'2026-11-09',fee,n,1,'disabled')
+  result=q.discount_proration_check(db,fac,'2026-11-09',fee,n,1,'disabled', guardian_count=0, severe_disabled_count=0)
   assert result['status']=='needs_review' and result['discount_refund_won'] is None and result['net_court_fee_won'] is None,result
   assert result['review_items'][0]['code']==code,result
  for path,ident in [('test_cases.json','T_rounding_unverified'),
