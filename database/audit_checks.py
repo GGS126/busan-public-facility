@@ -141,6 +141,22 @@ with tempfile.TemporaryDirectory() as tmp:
  no_severe = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,1,'disabled',guardian_count=1,severe_disabled_count=0)
  assert no_severe['status']=='needs_review' and no_severe['discount_refund_won'] is None
  print('PASS: 보호자 1명 상한 및 중증 장애인 동반 조건 확인')
+ # PR #21 리뷰 5번: 감면 대상 0명도 동일한 응답 필드와 근거 규정 검사를 사용.
+ zero = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,0,'multi_child')
+ assert zero['status']=='confirmed' and zero['discount_refund_won']==0 and zero['net_court_fee_won']==6000,zero
+ for field in ('facility_id','date','source_url','checked_on','rounding_status',
+               'rounding_policy','base_fee_won','participant_count','eligible_count','discount_category_id'):
+  assert field in zero, (field,zero)
+ # 비례 감면 근거가 없는 규정은 감면 대상이 0명이라도 confirmed로 확정하면 안 된다.
+ incompatible = dict(next(r for r in q.discounts(db,'busan_samrak_ecopark_tennis','2026-11-09')
+                          if r['category_id']=='multi_child'))
+ incompatible['basis']='holder_whole_fee'
+ with patch.object(q,'discounts',return_value=[incompatible]):
+  zero_unknown = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,0,'multi_child')
+ assert zero_unknown['status']=='needs_review' and zero_unknown['discount_refund_won'] is None,zero_unknown
+ assert zero_unknown['review_items'][0]['code']=='discount_proration_unverified',zero_unknown
+ assert all(field in zero_unknown for field in ('facility_id','date','source_url','rounding_status')),zero_unknown
+ print('PASS: 감면 대상 0명 응답 필드 통일 및 비례 감면 근거 선검사')
 
  import copy as guardian_copy
  for wrong in (0,2,'1'):

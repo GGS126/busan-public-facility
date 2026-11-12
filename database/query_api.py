@@ -214,8 +214,6 @@ def discount_proration_check(db, facility_id, use_date, base_fee_won,
                     'reason':'보호자는 중증 장애인 동반 시 최대 1명만 감면 대상입니다.'}]}
     elif guardian_count not in (None, 0) or severe_disabled_count not in (None, 0):
         raise ValueError('보호자 인원 입력은 장애인 감면에만 사용합니다')
-    if eligible_count == 0:
-        return {'status':'confirmed','discount_refund_won':0,'net_court_fee_won':base_fee_won}
     base = {'facility_id': facility_id, 'date': normalize_use_date(use_date),
             'base_fee_won':base_fee_won, 'participant_count':participant_count,
             'eligible_count':eligible_count, 'discount_category_id':category_id,
@@ -226,6 +224,9 @@ def discount_proration_check(db, facility_id, use_date, base_fee_won,
         return {**base,'status':'needs_review','discount_refund_won':None,
                 'net_court_fee_won':None,'review_items':[{'code':'discount_proration_unverified',
                 'reason':'인원별 기본요금 배분 공식이 확인되지 않았습니다.'}]}
+    if eligible_count == 0:
+        return {**base, 'status':'confirmed', 'discount_refund_won':0,
+                'net_court_fee_won':base_fee_won}
     # 감면이 이용자마다 다른 경우는 해당 자격의 합산 규칙을 별도로 확인해야 한다.
     refund_per_person = Fraction(base_fee_won * rule['percent'], participant_count * 100)
     refund_total = refund_per_person * eligible_count
