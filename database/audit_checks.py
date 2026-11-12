@@ -213,6 +213,12 @@ with tempfile.TemporaryDirectory() as tmp:
  assert q.discount_proration_check(db,sa,'2026-11-09',6000,4,2,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1500
  assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,1,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1000
  assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,3,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==3000
+ # 9번 회귀: 총 감면액은 정수라도 1인당 금액에 끝전이 있으면 확정하지 않는다.
+ # 8,000원 / 3명 * 50% = 1인당 1,333.333...원, 3명 합계는 4,000원이지만
+ # 이 규칙은 사람별 감면액이 기준이므로 공식 끝전 정책이 없으면 needs_review.
+ result=q.discount_proration_check(db,gu,'2026-11-09',8000,3,3,'disabled', guardian_count=0, severe_disabled_count=0)
+ assert result['status']=='needs_review' and result['discount_refund_won'] is None,result
+ assert result['review_items'][0]['code']=='discount_rounding_unverified',result
  for fac,fee,n,code in [(ha,8000,3,'discount_rounding_unverified'),
                          (sa,6000,7,'discount_rounding_unverified'),
                          (gu,8000,3,'discount_rounding_unverified')]:
@@ -310,7 +316,17 @@ with tempfile.TemporaryDirectory() as tmp:
  gu='busan_gudeok_stadium_tennis'
  assert q.closure_status(db,ha,'2026-11-09')['status']=='needs_calendar_resolution'
  assert q.closure_status(db,ha,'2026-12-31',[])['status']=='no_scheduled_closure'
+ assert load.CLOSURE_HOLIDAY_CODES == frozenset(('lunar_new_year_day','chuseok_day'))
  assert q.closure_status(db,sa,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
+ # 조회 함수가 load의 상수를 직접 참조하므로 새로운 코드 추가 시 서로 어긋나지 않는다.
+ with patch.object(load, 'CLOSURE_HOLIDAY_CODES', load.CLOSURE_HOLIDAY_CODES | {'sample_future_holiday'}):
+  assert q.closure_status(db,sa,'2027-02-07',['sample_future_holiday'])['status']=='no_scheduled_closure'
+ try:
+  q.closure_status(db,sa,'2027-02-07',['unsupported_holiday'])
+  raise AssertionError('지원되지 않는 휴장 코드를 허용함')
+ except ValueError as exc:
+  assert 'holiday_codes' in str(exc)
+
  assert q.closure_status(db,sa,'2027-02-07',[])['status']=='no_scheduled_closure'
  assert q.closure_status(db,gu,'2026-11-09')['status']=='no_scheduled_closure'
  assert len(q.closure_rules(db,ha,'2026-11-09'))==3
