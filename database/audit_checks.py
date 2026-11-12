@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory() as tmp:
  print('PASS: 감면 대상 0명 응답 필드 통일 및 비례 감면 근거 선검사')
 
  import copy as guardian_copy
- for wrong in (0,2,'1'):
+ for wrong in (2, -1, '1', True):
   invalid=guardian_copy.deepcopy(D)
   next(x for x in invalid['discounts'] if x['id']=='disabled')['guardian_max_count']=wrong
   invalid_file=tmp/'invalid_guardian_count.json'
@@ -169,6 +169,36 @@ with tempfile.TemporaryDirectory() as tmp:
   except ValueError as exc: assert 'guardian_max_count' in str(exc),str(exc)
   else: raise AssertionError('잘못된 보호자 정원 허용')
   assert hashlib.sha256(db.read_bytes()).hexdigest()==previous_hash
+ # 리뷰 #6: 타 시설의 장애인 보호자 상한이 0 또는 미확인(NULL)이더라도
+ # 실제 JSON 그대로 적재되어야 하고 강제로 1명 규정이 만들어지면 안 된다.
+ for guardian_limit in (None, 0):
+  alternate=guardian_copy.deepcopy(D)
+  disabled_item=next(x for x in alternate['discounts'] if x['id']=='disabled')
+  disabled_item['guardian_max_count']=guardian_limit
+  disabled_item['guardian_condition']=None
+  disabled_item['guardian_evidence_note']=None
+  alternate_path=tmp/'alternate_guardian_policy.json'
+  alternate_path.write_text(json.dumps(alternate,ensure_ascii=False),encoding='utf-8')
+  alternate_db=tmp/'alternate_guardian.sqlite3'
+  if alternate_db.exists(): alternate_db.unlink()
+  load.load_many([alternate_path],alternate_db)
+  facility_id='busan_haeundae_arboretum_tennis'
+  rule=next(x for x in q.discounts(alternate_db,facility_id,'2026-11-09') if x['category_id']=='disabled')
+  assert rule['guardian_max_count']==guardian_limit and rule['guardian_condition'] is None,rule
+  ordinary=q.discount_proration_check(alternate_db,facility_id,'2026-11-09',8000,4,1,'disabled')
+  assert ordinary['status']=='confirmed' and ordinary['discount_refund_won']==1000,ordinary
+  guardian=q.discount_proration_check(alternate_db,facility_id,'2026-11-09',8000,4,2,'disabled',guardian_count=1,severe_disabled_count=1)
+  assert guardian['status']=='needs_review' and guardian['discount_refund_won'] is None,guardian
+  alternate_db.unlink()
+ # 보호자 상한 1인 시설은 조건이 빠진 JSON을 거부하고 DB를 보존한다.
+ invalid=guardian_copy.deepcopy(D)
+ next(x for x in invalid['discounts'] if x['id']=='disabled')['guardian_condition']=None
+ invalid_file=tmp/'invalid_guardian_condition.json'
+ invalid_file.write_text(json.dumps(invalid,ensure_ascii=False),encoding='utf-8')
+ try: load.load_many([invalid_file],db)
+ except ValueError as exc: assert 'guardian_condition' in str(exc),str(exc)
+ else: raise AssertionError('보호자 감면 조건 누락 허용')
+ print('PASS: 시설별 보호자 상한 0/NULL 지원 및 미확인 보호자 감면 계산 보류')
  print('PASS: 중증 장애인 동반 보호자 1명 포함 규칙 세 시설 저장·조회')
  print('PASS: 세 시설 인원별 비례 감면, 구덕 환급 수령인은 대표 예약자')
  # 세 시설 모두 공식 끝전 처리 기준 미확인: NULL 저장·조회 및 검증 사례 확인

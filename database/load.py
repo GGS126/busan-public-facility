@@ -331,17 +331,28 @@ def load_fixed(data_path, db_path):
 
 
 def validate_guardian_discounts(items):
-    """중증 장애인 보호자 규칙은 장애인 감면 항목에만 기록한다."""
+    """시설별 JSON의 확인된 보호자 규정만 적재한다 (미확인은 NULL)."""
+    guardian_fields = ('guardian_max_count', 'guardian_condition', 'guardian_evidence_note')
     for item in items:
         count = item.get('guardian_max_count')
-        if item['id'] == 'disabled':
-            if type(count) is not int or count != 1:
-                raise ValueError('disabled.guardian_max_count는 공식 규정상 1이어야 합니다')
-            for field in ('guardian_condition', 'guardian_evidence_note'):
-                if not isinstance(item.get(field), str) or not item[field].strip():
-                    raise ValueError('disabled.' + field + ' 필수')
-        elif any(k in item for k in ('guardian_max_count','guardian_condition','guardian_evidence_note')):
-            raise ValueError('장애인 외 감면에 보호자 규칙을 지정할 수 없습니다')
+        if item['id'] != 'disabled':
+            if any(item.get(field) is not None for field in guardian_fields):
+                raise ValueError('장애인 외 감면에 보호자 규칙을 지정할 수 없습니다')
+            continue
+        if count is not None and (type(count) is not int or count not in (0, 1)):
+            raise ValueError('disabled.guardian_max_count는 0, 1 또는 null이어야 합니다')
+        if count == 1:
+            # 동반 감면이 공식 확인된 시설은 조건 문구가 있어야 적용할 수 있다.
+            if not isinstance(item.get('guardian_condition'), str) or not item['guardian_condition'].strip():
+                raise ValueError('disabled.guardian_condition 필수 (보호자 감면 허용 시)')
+            evidence = item.get('guardian_evidence_note')
+            if evidence is not None and (not isinstance(evidence, str) or not evidence.strip()):
+                raise ValueError('disabled.guardian_evidence_note는 문자열 또는 null')
+        else:
+            # 불명확하거나 허용하지 않는 시설에 다른 시설의 조건을 묵시적으로 복사하지 않는다.
+            if any(item.get(field) is not None for field in ('guardian_condition', 'guardian_evidence_note')):
+                raise ValueError('disabled.guardian_max_count가 0/null이면 보호자 조건은 null이어야 합니다')
+
 
 def validate_discount_rounding(common):
     # NULL: 공식 끝전 처리 기준 미확인. 추정값을 넣지 않는다.

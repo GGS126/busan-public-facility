@@ -199,19 +199,28 @@ def discount_proration_check(db, facility_id, use_date, base_fee_won,
     if category_id not in rules:
         raise ValueError('등록되지 않은 감면 유형')
     rule = rules[category_id]
-    # 장애인 감면은 보호자 수를 별도로 확인해야 하며, 총 감면 인원만으로는
-    # 보호자 최대 1명 규정을 강제할 수 없다. 확인 불가 시 금액을 산출하지 않는다.
+    # 보호자 규정은 각 시설의 JSON에 확인된 상한이 있을 때만 적용한다.
+    # NULL은 미확인: 보호자 감면을 허용한다고 추측해서는 안 된다.
     if category_id == 'disabled' and eligible_count > 0:
-        if (type(guardian_count) is not int or type(severe_disabled_count) is not int or
-            guardian_count < 0 or severe_disabled_count < 0 or
-            guardian_count > eligible_count or severe_disabled_count > eligible_count - guardian_count):
+        if rule['guardian_max_count'] == 1:
+            if (type(guardian_count) is not int or type(severe_disabled_count) is not int or
+                guardian_count < 0 or severe_disabled_count < 0 or
+                guardian_count > eligible_count or severe_disabled_count > eligible_count - guardian_count):
+                return {'status':'needs_review','discount_refund_won':None,
+                        'net_court_fee_won':None,'review_items':[{'code':'guardian_counts_required',
+                        'reason':'보호자 감면 규정이 확인된 시설은 보호자 수와 중증 장애인 본인 수를 구분해 입력해야 합니다.'}]}
+            if guardian_count > 1 or (guardian_count and severe_disabled_count < 1):
+                return {'status':'needs_review','discount_refund_won':None,
+                        'net_court_fee_won':None,'review_items':[{'code':'guardian_limit_exceeded',
+                        'reason':'해당 시설의 보호자 감면은 중증 장애인 동반 시 최대 1명입니다.'}]}
+        elif guardian_count not in (None, 0):
             return {'status':'needs_review','discount_refund_won':None,
-                    'net_court_fee_won':None,'review_items':[{'code':'guardian_counts_required',
-                    'reason':'장애인 감면은 보호자 수와 중증 장애인 본인 수를 구분해 입력해야 합니다.'}]}
-        if guardian_count > (rule['guardian_max_count'] or 0) or (guardian_count and severe_disabled_count < 1):
-            return {'status':'needs_review','discount_refund_won':None,
-                    'net_court_fee_won':None,'review_items':[{'code':'guardian_limit_exceeded',
-                    'reason':'보호자는 중증 장애인 동반 시 최대 1명만 감면 대상입니다.'}]}
+                    'net_court_fee_won':None,'review_items':[{'code':'guardian_policy_unverified',
+                    'reason':'해당 시설에서 보호자 감면 허용 여부 또는 상한이 확인되지 않았습니다.'}]}
+        elif severe_disabled_count not in (None, 0):
+            # 장애인 본인 수만 제공되는 경우에는 감면 대상 총 인원에 포함돼야 한다.
+            if type(severe_disabled_count) is not int or not (0 <= severe_disabled_count <= eligible_count):
+                raise ValueError('중증 장애인 본인 인원 오류')
     elif guardian_count not in (None, 0) or severe_disabled_count not in (None, 0):
         raise ValueError('보호자 인원 입력은 장애인 감면에만 사용합니다')
     base = {'facility_id': facility_id, 'date': normalize_use_date(use_date),
