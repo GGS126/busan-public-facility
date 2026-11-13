@@ -112,7 +112,7 @@ function App() {
     }
 
     const facility = searchResults.find(item => item.id === facilityId)
-    const slots = getFacilitySlots(facilityId, date, facility?.time_options)
+    const slots = getFacilitySlots(facilityId, facility?.time_options)
 
     const matched = slots.find(
       ([start, end]) =>
@@ -366,7 +366,6 @@ function App() {
           loading={loading}
           facilityTimes={facilityTimes}
           onTimeChange={handleTimeChange}
-          date={date}
           error={compareError}
         />
 

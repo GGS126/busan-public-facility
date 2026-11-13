@@ -72,6 +72,11 @@ def test_sqlite_options_match_facility_search(monkeypatch, tmp_path):
     response = client.post("/api/facilities/search", json={"conditions": conditions})
     assert response.status_code == 200
     assert len(response.json()["results"]) == 3
+    response = client.post("/api/facilities/search", json={"conditions": conditions | {
+        "districts": ["사상구"], "date": "2099-01-01",
+    }})
+    assert response.status_code == 200
+    assert response.json()["results"][0]["time_options"] is None
     response = client.post("/api/facilities/search", json={"conditions": conditions | {"start_time": "09:00"}})
     assert response.status_code == 400
 
