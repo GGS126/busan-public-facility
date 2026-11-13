@@ -133,6 +133,39 @@ class Terms(BaseModel):
     source_id: str | None = None
 
 
+class Slot(BaseModel):
+    start_time: ClockTime
+    end_time: BandTime
+
+
+class TimePolicy(EffectivePeriod):
+    """예약할 수 있는 시간. 지정 회차만 받는 시설과 허용 이용시간 안에서 고르는 시설을 구분한다."""
+
+    policy_id: str
+    sport: str
+    selection: Literal["fixed_slot", "flexible"]
+    slots: list[Slot] = []
+    allowed_minutes: list[Annotated[int, Field(gt=0)]] = []
+    open_time: ClockTime | None = None
+    close_time: BandTime | None = None
+    source_id: str
+
+    @model_validator(mode="after")
+    def check_selection(self) -> "TimePolicy":
+        if self.selection == "fixed_slot" and not self.slots:
+            raise ValueError("지정 회차 시설은 slots가 필요합니다.")
+        if self.selection == "flexible" and not self.allowed_minutes:
+            raise ValueError("자유 선택 시설은 allowed_minutes가 필요합니다.")
+        for slot in self.slots:
+            if to_minutes(slot.end_time) <= to_minutes(slot.start_time):
+                raise ValueError("회차의 종료 시간은 시작 시간보다 늦어야 합니다.")
+        if (self.open_time is None) != (self.close_time is None):
+            raise ValueError("open_time과 close_time은 함께 입력해야 합니다.")
+        if self.open_time is not None and to_minutes(self.close_time) <= to_minutes(self.open_time):
+            raise ValueError("운영시간의 종료 시간은 시작 시간보다 늦어야 합니다.")
+        return self
+
+
 class FacilityRules(BaseModel):
     facility_id: str
     name: str
@@ -141,6 +174,8 @@ class FacilityRules(BaseModel):
     holidays: list[date] = []
     fee_rules: list[FeeRule] = []
     discount_rules: list[DiscountRule] = []
+    # 비어 있으면 이용시간 제한을 확인하지 않는다.
+    time_policies: list[TimePolicy] = []
     terms: Terms = Terms()
     sources: list[Source]
 
@@ -152,7 +187,7 @@ class FacilityRules(BaseModel):
     @model_validator(mode="after")
     def check_sources(self) -> "FacilityRules":
         known = {source.source_id for source in self.sources}
-        rules = [*self.fee_rules, *self.discount_rules]
+        rules = [*self.fee_rules, *self.discount_rules, *self.time_policies]
         used = {self.source_id, *(rule.source_id for rule in rules)}
         if self.terms.source_id is not None:
             used.add(self.terms.source_id)
@@ -217,14 +252,21 @@ class FeeItem(BaseModel):
 
 
 class ReviewItem(BaseModel):
-    code: Literal["rule_missing", "rule_conflict", "rule_not_in_effect"]
-    target: Literal["base", "lighting", "discount", "checklist"]
+    code: Literal[
+        "rule_missing",
+        "rule_conflict",
+        "rule_not_in_effect",
+        "slot_mismatch",
+        "duration_not_allowed",
+        "outside_hours",
+    ]
+    target: Literal["base", "lighting", "discount", "checklist", "time"]
     reason: str
     source_id: str
 
 
 class FeeResult(BaseModel):
-    status: Literal["calculated", "needs_review"]
+    status: Literal["calculated", "needs_review", "not_eligible"]
     items: list[FeeItem]
     total: int | None
     payment_due: int | None
