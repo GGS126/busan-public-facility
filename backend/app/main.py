@@ -1,4 +1,6 @@
 import logging
+import os
+from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -6,9 +8,22 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse, Conditions, OptionsResponse
+from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots
+from app.gemini_extractor import GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.models import (
+    KST,
+    CompareRequest,
+    CompareResponse,
+    Conditions,
+    FacilitySearchRequest,
+    OptionsResponse,
+    QueryParseRequest,
+    QueryParseResponse,
+)
 from app.options import build_options
+from app.query_parser import parse_query
 from app.repository import load_rule_data
+from app.sqlite_compare import compare_sqlite, facility_closure
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +91,97 @@ def options() -> OptionsResponse:
     return available_options
 
 
+@app.get("/api/facilities/options", response_model=OptionsResponse)
+def facility_search_options():
+    if not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
+    return read_catalog(DB_PATH)[1]
+
+
+@app.post("/api/facilities/search")
+def search_facilities(request: FacilitySearchRequest):
+    if not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
+    conditions = request.conditions
+    catalog_facilities, _ = read_catalog(DB_PATH)
+    candidates = [facility for facility in catalog_facilities if facility["sport"] == conditions.sport]
+    if not candidates:
+        return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
+
+    fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    results = []
+    for facility in candidates:
+        if conditions.districts and facility["district"] not in conditions.districts:
+            continue
+        slots = fixed_slots.get(facility["facility_id"])
+        closure = facility_closure(DB_PATH, facility["facility_id"], conditions.date.isoformat())
+        if closure["is_closed"]:
+            slots = None
+        time_status = "not_eligible" if closure["is_closed"] else "unknown"
+        if slots and conditions.start_time:
+            selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
+            time_status = "eligible" if selected in slots else "not_eligible"
+        results.append({
+            **facility,
+            "time_options": {"selection": "fixed_slot", "slots": slots} if slots else None,
+            "time_check": {"status": time_status},
+            "closure": closure,
+        })
+    order = {"eligible": 0, "unknown": 1, "not_eligible": 2}
+    results.sort(key=lambda facility: order[facility["time_check"]["status"]])
+    alternatives = None
+    if not results and conditions.districts:
+        alternatives = {"districts": sorted({facility["district"] for facility in candidates})}
+    return {"results": results, "alternatives": alternatives}
+
+
+@app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
+def parse_natural_language(request: QueryParseRequest) -> dict:
+    catalog = read_catalog(DB_PATH)[1] if DB_PATH.is_file() else available_options
+    return parse_with_options(request, catalog)
+
+
+def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
+    def extract(query, today):
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            logger.warning("Gemini extraction failed: code=missing_api_key")
+            return None
+        try:
+            provider = GeminiExtractor(
+                key,
+                sport_codes={option.code: option.label for option in catalog.sports},
+                discount_codes={option.code: option.label for option in catalog.discount_types},
+                districts=catalog.districts,
+                model=os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.5-flash-lite",
+            )
+        except GeminiResponseError as error:
+            logger.warning("Gemini extraction failed: type=%s code=%s", type(error).__name__, error.code)
+            return None
+
+        for attempt in (1, 2):
+            try:
+                return provider(query, today)
+            except GeminiResponseError as error:
+                logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
+                               type(error).__name__, error.code, attempt)
+                if error.code not in {"invalid_output_json", "invalid_api_json", "unexpected_extraction_fields"}:
+                    break
+            except GeminiHTTPError as error:
+                logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
+                break
+            except Exception as error:
+                # Exception messages may include request text or credentials.
+                logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
+                break
+        return None
+
+    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
+    if result["status"] == "llm_failed":
+        result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
+    return result
+
+
 def check_against_options(conditions: Conditions) -> None:
     """선택지에 없는 값은 입력 오류로 돌려보낸다. 시설에만 없는 값은 규칙 엔진이 확인 필요로 처리한다."""
     errors = []
@@ -97,11 +203,17 @@ def check_against_options(conditions: Conditions) -> None:
 
 @app.post("/api/compare", response_model=CompareResponse)
 def compare(request: CompareRequest) -> CompareResponse:
-    check_against_options(request.conditions)
-    selected = []
+    has_sqlite = DB_PATH.is_file()
+    if not has_sqlite or any(facility_id in facilities for facility_id in request.facility_ids):
+        check_against_options(request.conditions)
+    results = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)
-        if rules is None:
+        if rules is not None:
+            results.append(compare_facility(rules, request.conditions))
+            continue
+        result = compare_sqlite(DB_PATH, facility_id, request.conditions) if has_sqlite else None
+        if result is None:
             raise FacilityNotFound
-        selected.append(rules)
-    return CompareResponse(results=[compare_facility(rules, request.conditions) for rules in selected])
+        results.append(result)
+    return CompareResponse(results=results)

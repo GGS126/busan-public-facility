@@ -13,7 +13,6 @@ function FacilityList({
   loading,
   facilityTimes,
   onTimeChange,
-  date,
   error,
 }) {
   return (
@@ -46,7 +45,7 @@ function FacilityList({
           <div className="facility-grid">
             {facilities.map((facility) => {
               const selected = selectedIds.includes(facility.id)
-              const slots = getFacilitySlots(facility.id, date)
+              const slots = getFacilitySlots(facility.id, facility.time_options)
               const selectedTime = facilityTimes[facility.id] || ''
 
               return (
@@ -73,11 +72,21 @@ function FacilityList({
 
                   <h3>{facility.name}</h3>
                   <p>{facility.address}</p>
+                  {facility.closure?.is_closed && (
+                    <p>정기 휴장일입니다. {facility.closure.matched_rules.map(rule => rule.note).join(' / ')}</p>
+                  )}
+                  {facility.closure?.status === 'needs_calendar_resolution' && (
+                    <p>명절 휴장 여부는 공식 예약 안내에서 확인해 주세요.</p>
+                  )}
+                  {!facility.closure?.is_closed && facility.time_check?.status === 'not_eligible' && (
+                    <p>희망 시간과 일치하는 회차가 없습니다. 다른 회차를 선택해 주세요.</p>
+                  )}
 
                   <label className="facility-check">
                     <input
                       type="checkbox"
                       checked={selected}
+                      disabled={facility.closure?.is_closed === true}
                       onChange={() => onToggle(facility.id)}
                     />
                     비교 대상에 포함

@@ -1,6 +1,7 @@
 """규정 데이터와 요청·응답 형식. 규정의 모르는 값은 추정하지 않고 None으로 둔다."""
 
 from datetime import date, datetime, timedelta, timezone
+from datetime import date as CalendarDate
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -196,6 +197,55 @@ class OptionsResponse(BaseModel):
     sports: list[Option]
     districts: list[str]
     discount_types: list[Option]
+
+
+class QueryParseRequest(BaseModel):
+    query: str = Field(max_length=500)
+
+
+class ExtractedConditions(BaseModel):
+    sport: str | None = None
+    districts: list[str] | None = None
+    date: CalendarDate | None = None
+    start_time: ClockTime | None = None
+    end_time: BandTime | None = None
+    headcount: int | None = Field(default=None, ge=1)
+    discount_types: list[str] | None = None
+    source: Literal["llm"] | None = None
+
+
+class QueryParseResponse(BaseModel):
+    status: Literal["ok", "need_more", "llm_failed"]
+    conditions: ExtractedConditions
+    missing_fields: list[str]
+    questions: dict[str, str]
+    message: str | None = None
+
+
+class FacilitySearchConditions(BaseModel):
+    sport: str = Field(min_length=1)
+    districts: list[str] = Field(default_factory=list)
+    date: CalendarDate
+    start_time: ClockTime | None = None
+    end_time: BandTime | None = None
+    source: Literal["direct", "llm"]
+
+    @field_validator("date")
+    @classmethod
+    def not_in_past(cls, value: CalendarDate) -> CalendarDate:
+        return RequestConditions.not_in_past(value)
+
+    @model_validator(mode="after")
+    def check_times(self) -> "FacilitySearchConditions":
+        if (self.start_time is None) != (self.end_time is None):
+            raise ValueError("시작 시간과 종료 시간을 함께 입력해 주세요.")
+        if self.start_time and self.end_time and to_minutes(self.end_time) <= to_minutes(self.start_time):
+            raise ValueError("종료 시간은 시작 시간보다 늦어야 합니다.")
+        return self
+
+
+class FacilitySearchRequest(BaseModel):
+    conditions: FacilitySearchConditions
 
 
 # 계산 결과
