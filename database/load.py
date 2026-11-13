@@ -15,8 +15,8 @@ CATEGORY_NAMES = {
     'national_merit': '국가유공자 및 해당 유족·가족',
     'may18_merit': '5·18민주유공자 및 해당 유족·가족',
     'special_mission_merit': '특수임무유공자 및 해당 유족·가족',
-    'righteous_injury': '의사상자 및 해당 유족·가족',
-    'multi_child': '다자녀 가정', 'war_veteran': '참전유공자',
+    'righteous_injury': '의상자·의사자유족 및 의상자가족',
+    'multi_child': '다자녀가정에 속하는 사람', 'war_veteran': '참전유공자',
     'agent_orange': '고엽제 관련 대상자(환자 및 2세)',
     'pows': '등록 포로 및 억류지 출신 포로가족',
     'children_group': '체육행사 등에 참여하는 10명 이상 어린이',
@@ -86,13 +86,55 @@ def insert_options(con,rid,options):
           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
           (option_id,rid,o['id'],o['calculation_type'],o['application_type'],o['rounding_policy'],o.get('applies_from'),o.get('applies_to'),o.get('note'),o['hour_price'],o.get('extra_unit_minutes'),o.get('extra_unit_price')))
 
+CLOSURE_HOLIDAY_CODES = frozenset(('lunar_new_year_day', 'chuseok_day'))
+
+def validate_closure_rules(d):
+    rules = d.get('closure_rules')
+    if not isinstance(rules,list):
+        raise ValueError('closure_rules는 빈 목록을 포함해 반드시 목록이어야 합니다')
+    seen = set()
+    for item in rules:
+        if not isinstance(item,dict):
+            raise ValueError('휴장 규정 객체 형식 오류')
+        typ, val, note = item.get('type'), item.get('value'), item.get('note')
+        if not isinstance(val,str) or not val.strip() or not isinstance(note,str) or not note.strip():
+            raise ValueError('휴장 규정 값 또는 안내 누락')
+        if typ == 'annual_date':
+            try:
+                mm, dd = map(int,val.split('-'))
+                if val != f'{mm:02d}-{dd:02d}': raise ValueError()
+                dt.date(2024,mm,dd)
+            except (ValueError,TypeError) as exc:
+                raise ValueError('휴장 양력 반복일 형식 오류 (MM-DD)') from exc
+        elif typ == 'exact_date':
+            try:
+                if dt.date.fromisoformat(val).isoformat() != val: raise ValueError()
+            except ValueError as exc:
+                raise ValueError('휴장 날짜 형식 오류 (YYYY-MM-DD)') from exc
+            if not d['rule_set']['effective_from'] <= val <= d['rule_set']['effective_to']:
+                raise ValueError('휴장 날짜가 규정 적용기간 밖입니다')
+        elif typ == 'holiday_code':
+            if val not in CLOSURE_HOLIDAY_CODES:
+                raise ValueError('지원하지 않는 휴장 명절 코드: '+val)
+        else:
+            raise ValueError('휴장 규정 유형 오류')
+        if (typ,val) in seen: raise ValueError('중복 휴장 규정')
+        seen.add((typ,val))
+
+
+def insert_closure_rules(con,rid,d):
+    for i,item in enumerate(d['closure_rules'],1):
+        con.execute('INSERT INTO closure_rules (id,rule_set_id,closure_type,closure_value,note) VALUES(?,?,?,?,?)',
+                    (f'{rid}_closure_{i}',rid,item['type'],item['value'],item['note']))
+
+
 def validate_shared(d):
     """모든 시설 형식에 적용할 필수 데이터 및 날짜·환불·예약 검증."""
     for section in ('facility', 'source', 'rule_set', 'reservation'):
         if not isinstance(d.get(section), dict):
             raise ValueError(f'{section} 객체 누락 또는 형식 오류')
     for section, keys in {
-        'facility': ('id', 'name', 'facility_type', 'address', 'booking_url'),
+        'facility': ('id', 'name', 'facility_type', 'district', 'address', 'booking_url'),
         'source': ('id', 'url', 'title', 'checked_on', 'verification_level'),
         'rule_set': ('id', 'effective_from', 'effective_to', 'status'),
     }.items():
@@ -101,6 +143,13 @@ def validate_shared(d):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f'{section}.{key} 누락')
     source, rule_set = d['source'], d['rule_set']
+    # 이용허락범위가 확인되지 않았다면 반드시 JSON null로 남긴다.
+    # 출처의 공식성(verification_level)은 저작권/재이용 허락 여부를 보장하지 않는다.
+    if 'license' not in source:
+        raise ValueError('source.license 필수 (미확인 시 null)')
+    license_value = source['license']
+    if license_value is not None and (not isinstance(license_value, str) or not license_value.strip()):
+        raise ValueError('source.license는 확인된 이용조건 문자열 또는 null이어야 합니다')
     for key, value in (('source.checked_on', source['checked_on']),
                        ('rule_set.effective_from', rule_set['effective_from']),
                        ('rule_set.effective_to', rule_set['effective_to'])):
@@ -112,6 +161,7 @@ def validate_shared(d):
         d[section][field] = normalized
     if rule_set['effective_from'] > rule_set['effective_to']:
         raise ValueError('규정 적용기간 순서 오류')
+    validate_closure_rules(d)
     if source['verification_level'] not in ('official_page_verified', 'user_transcribed_official'):
         raise ValueError('출처 검증 분류 오류')
     if rule_set['status'] != 'confirmed':
@@ -164,6 +214,7 @@ def validate(d):
             if type(slot[k]) is not int or slot[k]<0: raise ValueError(f'회차 {slot["no"]}: {k} 요금 오류')
     validate_options(d['options'])
     common=d['discount_common']
+    validate_discount_rounding(common)
     if type(common.get('percent')) is not int or not 0<=common['percent']<=100: raise ValueError('감면율 오류')
     codes=[]
     for discount in d['discounts']:
@@ -206,20 +257,20 @@ def insert_shared_records(con, d):
     f, s, r = d['facility'], d['source'], d['rule_set']
     rid = r['id']
     con.execute("""INSERT INTO facilities
-        (id,name,facility_type,address,phone,booking_url,open_time,close_time,holiday_note)
-        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+        (id,name,facility_type,district,address,phone,booking_url,open_time,close_time,holiday_note)
+        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
         name=excluded.name, facility_type=excluded.facility_type,
-        address=excluded.address, phone=excluded.phone, booking_url=excluded.booking_url,
+        district=excluded.district, address=excluded.address, phone=excluded.phone, booking_url=excluded.booking_url,
         open_time=excluded.open_time, close_time=excluded.close_time,
         holiday_note=excluded.holiday_note""",
-        tuple(f.get(key) for key in ('id','name','facility_type','address','phone',
+        tuple(f.get(key) for key in ('id','name','facility_type','district','address','phone',
                                      'booking_url','open_time','close_time','holiday_note')))
     con.execute("""INSERT INTO sources
-        (id,url,title,checked_on,verification_level,note) VALUES(?,?,?,?,?,?)
+        (id,url,title,checked_on,verification_level,license,note) VALUES(?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET url=excluded.url,title=excluded.title,
         checked_on=excluded.checked_on,verification_level=excluded.verification_level,
-        note=excluded.note""",
-        tuple(s.get(key) for key in ('id','url','title','checked_on','verification_level','note')))
+        license=excluded.license,note=excluded.note""",
+        tuple(s.get(key) for key in ('id','url','title','checked_on','verification_level','license','note')))
     ensure_rule_set_period_available(con, f['id'], rid,
                                      r['effective_from'], r['effective_to'])
     con.execute('DELETE FROM rule_sets WHERE id=?', (rid,))
@@ -237,6 +288,7 @@ def insert_refunds_and_reservation(con, rid, d):
                     (f'{rid}_{item["id"]}', rid, item['reason'], item['min'],
                      item['max'], item['rate'], item['channel'], item['condition'],
                      'confirmed'))
+    insert_closure_rules(con,rid,d)
     booking = d['reservation']
     con.execute('INSERT INTO reservation_rules VALUES(?,?,?,?,?)',
                 (rid, booking['online_open_days_before'],
@@ -247,6 +299,7 @@ def insert_refunds_and_reservation(con, rid, d):
 
 def load_fixed(data_path, db_path):
     d=validate(json.loads(Path(data_path).read_text(encoding='utf-8')))
+    validate_guardian_discounts(d['discounts'])
     db_path=Path(db_path)
     # 새로운 DB에만 schema 생성. 실제 적재는 한 번의 트랜잭션으로 진행.
     con=sqlite3.connect(db_path)
@@ -264,23 +317,64 @@ def load_fixed(data_path, db_path):
             c=d['discount_common']
             for item in d['discounts']:
                 for code in GROUP_TO_CODES[item['id']]:
-                    con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',(code,CATEGORY_NAMES[code]))
+                    con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
-                        (id,rule_set_id,category_id,percent,basis,applies_to,excluded_from,
+                        (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
                          processing,documents,deadline,note,original_group_label)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-                        (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),c['basis'],c['applies_to'],c['excluded_from'],
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),item.get('guardian_max_count'),item.get('guardian_condition'),item.get('guardian_evidence_note'),c['rounding_policy'],c['basis'],c['applies_to'],c['excluded_from'],
                          c['processing'],c['documents'],c['deadline'],c['note'],item['category']))
             insert_refunds_and_reservation(con, rid, d)
     finally:
         con.close()
 
 
+
+def validate_guardian_discounts(items):
+    """시설별 JSON의 확인된 보호자 규정만 적재한다 (미확인은 NULL)."""
+    guardian_fields = ('guardian_max_count', 'guardian_condition', 'guardian_evidence_note')
+    for item in items:
+        count = item.get('guardian_max_count')
+        if item['id'] != 'disabled':
+            if any(item.get(field) is not None for field in guardian_fields):
+                raise ValueError('장애인 외 감면에 보호자 규칙을 지정할 수 없습니다')
+            continue
+        if count is not None and (type(count) is not int or count not in (0, 1)):
+            raise ValueError('disabled.guardian_max_count는 0, 1 또는 null이어야 합니다')
+        if count == 1:
+            # 동반 감면이 공식 확인된 시설은 조건 문구가 있어야 적용할 수 있다.
+            if not isinstance(item.get('guardian_condition'), str) or not item['guardian_condition'].strip():
+                raise ValueError('disabled.guardian_condition 필수 (보호자 감면 허용 시)')
+            evidence = item.get('guardian_evidence_note')
+            if evidence is not None and (not isinstance(evidence, str) or not evidence.strip()):
+                raise ValueError('disabled.guardian_evidence_note는 문자열 또는 null')
+        else:
+            # 불명확하거나 허용하지 않는 시설에 다른 시설의 조건을 묵시적으로 복사하지 않는다.
+            if any(item.get(field) is not None for field in ('guardian_condition', 'guardian_evidence_note')):
+                raise ValueError('disabled.guardian_max_count가 0/null이면 보호자 조건은 null이어야 합니다')
+
+
+# schema.sql의 facility_discounts.discount_rounding_policy CHECK 허용값과 일치.
+# 실제 공식 규정을 확인한 경우에만 시설 JSON에 값으로 등록한다.
+DISCOUNT_ROUNDING_POLICIES = frozenset((
+    'round_half_up', 'floor_won', 'ceil_won', 'truncate_10_won', 'truncate_100_won'
+))
+
+
+def validate_discount_rounding(common):
+    # None은 공식 끝전 처리 기준 미확인; 추정 정책을 자동으로 채우지 않는다.
+    if 'rounding_policy' not in common:
+        raise ValueError('discount_common.rounding_policy 필수 (미확인은 null)')
+    policy = common['rounding_policy']
+    if policy is not None and (not isinstance(policy, str) or policy not in DISCOUNT_ROUNDING_POLICIES):
+        raise ValueError('discount_common.rounding_policy 허용되지 않은 정책')
+
 def validate_duration_discounts(d):
     """원본 JSON의 시설별 감면 정책을 검사하고, 추정 기본값을 만들지 않는다."""
     common = d.get('discount_common')
     if not isinstance(common, dict):
         raise ValueError('discount_common: 감면 규정 데이터 누락')
+    validate_discount_rounding(common)
     for field in ('basis', 'applies_to', 'processing'):
         if not isinstance(common.get(field), str) or not common[field].strip():
             raise ValueError(f'discount_common.{field} 누락')
@@ -297,6 +391,7 @@ def validate_duration_discounts(d):
     for field in ('documents', 'deadline', 'note'):
         if common.get(field) is not None and not isinstance(common[field], str):
             raise ValueError(f'discount_common.{field} 문자열 또는 null 필수')
+    validate_guardian_discounts(d.get('discounts_confirmed', []))
     for item in d.get('discounts_confirmed', []):
         for field in ('basis', 'applies_to', 'processing'):
             val = item.get(field, common[field])
@@ -314,13 +409,13 @@ def insert_duration_discounts(con, rid, d):
     excluded = ','.join(d['discount_excluded_fee_types']) or None
     for item in d.get('discounts_confirmed', []):
         cat = item['id']
-        con.execute('INSERT OR IGNORE INTO discount_categories(id,name) VALUES(?,?)',
+        con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',
                     (cat, CATEGORY_NAMES[cat]))
         con.execute("""INSERT INTO facility_discounts
-          (id,rule_set_id,category_id,percent,basis,applies_to,excluded_from,
+          (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
            processing,documents,deadline,note,original_group_label,verification_status)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-          (f'{rid}_{cat}', rid, cat, item['rate_percent'],
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+          (f'{rid}_{cat}', rid, cat, item['rate_percent'], item.get('guardian_max_count'), item.get('guardian_condition'), item.get('guardian_evidence_note'), common['rounding_policy'],
            item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
            excluded, item.get('processing', common['processing']),
            item.get('documents', common.get('documents')),
@@ -407,6 +502,32 @@ def load(data_path, db_path=ROOT/'facilities.sqlite3'):
         raise ValueError('알 수 없는 자료 형식: slots 또는 pricing 중 하나만 필요')
 
 
+
+def upgrade_existing_schema(con):
+    """기존 SQLite를 새 구조로 올린다 (원본이 아닌 load_many 임시 복사본에서만 실행).
+
+    IF NOT EXISTS는 기존 테이블의 열이나 VIEW를 갱신하지 않으므로,
+    추가 컬럼을 명시적으로 보강하고 관련 VIEW를 재생성한다.
+    """
+    expected = {
+        'facilities': [('district', "TEXT NOT NULL DEFAULT ''")],
+        'sources': [('license', 'TEXT')],
+        'facility_discounts': [
+            ('guardian_max_count', 'INTEGER'), ('guardian_condition', 'TEXT'),
+            ('guardian_evidence_note', 'TEXT'), ('discount_rounding_policy', 'TEXT'),
+        ],
+    }
+    for table, fields in expected.items():
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            present = {r[1] for r in con.execute(f'PRAGMA table_info({table})')}
+            for column, sql_type in fields:
+                if column not in present:
+                    con.execute(f'ALTER TABLE {table} ADD COLUMN {column} {sql_type}')
+    # 오래된 VIEW는 CREATE VIEW IF NOT EXISTS로 교체되지 않는다.
+    for view in ('v_facility_discounts', 'v_slot_prices'):
+        con.execute(f'DROP VIEW IF EXISTS {view}')
+    con.executescript((ROOT/'schema.sql').read_text(encoding='utf-8'))
+
 def load_many(paths, db_path=ROOT/'facilities.sqlite3'):
     """모든 파일 선검사 후 임시 DB에서 갱신해 전체 성공 시에만 원본 교체."""
     import os, tempfile
@@ -421,6 +542,9 @@ def load_many(paths, db_path=ROOT/'facilities.sqlite3'):
             # Windows will not replace a DB file still held open by SQLite.
             with closing(sqlite3.connect(db_path)) as original, closing(sqlite3.connect(staged)) as draft:
                 original.backup(draft)
+        if db_path.exists():
+            with closing(sqlite3.connect(staged)) as con:
+                upgrade_existing_schema(con)
         for p in paths: load(p, staged)
         with closing(sqlite3.connect(staged)) as con:
             con.execute('PRAGMA foreign_keys=ON')
