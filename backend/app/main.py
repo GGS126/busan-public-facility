@@ -23,7 +23,7 @@ from app.models import (
 from app.options import build_options
 from app.query_parser import parse_query
 from app.repository import load_rule_data
-from app.sqlite_compare import compare_sqlite
+from app.sqlite_compare import compare_sqlite, facility_closure
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,10 @@ def search_facilities(request: FacilitySearchRequest):
         if conditions.districts and facility["district"] not in conditions.districts:
             continue
         slots = fixed_slots.get(facility["facility_id"])
-        time_status = "unknown"
+        closure = facility_closure(DB_PATH, facility["facility_id"], conditions.date.isoformat())
+        if closure["is_closed"]:
+            slots = None
+        time_status = "not_eligible" if closure["is_closed"] else "unknown"
         if slots and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
@@ -122,6 +125,7 @@ def search_facilities(request: FacilitySearchRequest):
             **facility,
             "time_options": {"selection": "fixed_slot", "slots": slots} if slots else None,
             "time_check": {"status": time_status},
+            "closure": closure,
         })
     order = {"eligible": 0, "unknown": 1, "not_eligible": 2}
     results.sort(key=lambda facility: order[facility["time_check"]["status"]])

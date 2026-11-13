@@ -21,6 +21,11 @@ def load_query_api(path: Path):
     return import_module(f"{package_name}.query_api")
 
 
+def facility_closure(path: Path, facility_id: str, day: str) -> dict:
+    query = load_query_api(DB_PATH.with_name("query_api.py"))
+    return query.closure_status(path, facility_id, day)
+
+
 def compare_sqlite(path: Path, facility_id: str, conditions: Conditions) -> CompareResult | None:
     query = load_query_api(DB_PATH.with_name("query_api.py"))
     facility = next((row for row in query.facilities(path) if row["id"] == facility_id), None)
@@ -57,7 +62,13 @@ def compare_sqlite(path: Path, facility_id: str, conditions: Conditions) -> Comp
 
     items = []
     reviews = []
-    if len(active_rule_ids) > 1:
+    closure = facility_closure(path, facility_id, day)
+    if closure["is_closed"]:
+        reviews.append(ReviewItem(
+            code="rule_not_in_effect", target="base", source_id=source_id,
+            reason="정기 휴장일입니다. " + " / ".join(rule["note"] for rule in closure["matched_rules"]),
+        ))
+    elif len(active_rule_ids) > 1:
         reviews.append(ReviewItem(code="rule_conflict", target="base", source_id=source_id,
                                   reason="적용 기간이 겹치는 요금 규정이 있습니다."))
     else:
