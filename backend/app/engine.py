@@ -14,6 +14,7 @@ from app.models import (
     FeeItem,
     FeeResult,
     FeeRule,
+    HolidayCalendar,
     ReviewItem,
     to_minutes,
 )
@@ -77,21 +78,51 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
     )
 
 
-def _day_types(day: date, holidays: list[date]) -> set[str]:
+def _day_type_candidates(day: date, calendar: HolidayCalendar | None) -> list[set[str]]:
+    """이용일의 요일 구분. 공휴일 목록에 없는 기간이면 공휴일인 경우와 아닌 경우를 모두 돌려준다."""
     weekend = day.weekday() >= 5
-    if day in holidays:
-        return {"holiday", "weekend"} if weekend else {"holiday"}
-    return {"weekend"} if weekend else {"weekday"}
+    plain = {"weekend"} if weekend else {"weekday"}
+    holiday = {"holiday", "weekend"} if weekend else {"holiday"}
+    if calendar is None or not calendar.covers(day):
+        return [plain, holiday]
+    return [holiday] if calendar.is_holiday(day) else [plain]
 
 
 def _active_fee_rules(rules: FacilityRules, conditions: Conditions, fee_type: str) -> list[FeeRule]:
     """이 이용에 적용되는 유효한 규정을 고른다.
 
+    공휴일인지 알 수 없는 날은 공휴일인 경우와 아닌 경우를 모두 따져 보고,
+    두 경우의 결과가 다를 때만 확인 필요로 보낸다.
+    """
+    outcomes: list[list[FeeRule] | NeedsReview] = []
+    for day_types in _day_type_candidates(conditions.date, rules.holiday_calendar):
+        try:
+            outcomes.append(_select_fee_rules(rules, conditions, fee_type, day_types))
+        except NeedsReview as review:
+            outcomes.append(review)
+
+    def key(outcome):
+        if isinstance(outcome, NeedsReview):
+            return (outcome.code, outcome.reason, outcome.source_id)
+        return outcome
+
+    # 만료된 규정처럼 결과에 영향이 없는 차이로는 확인 필요를 띄우지 않는다.
+    if any(key(outcome) != key(outcomes[0]) for outcome in outcomes):
+        raise NeedsReview("rule_missing", "이용일이 공휴일인지 확인할 수 없습니다.")
+    if isinstance(outcomes[0], NeedsReview):
+        raise outcomes[0]
+    return outcomes[0]
+
+
+def _select_fee_rules(
+    rules: FacilityRules, conditions: Conditions, fee_type: str, day_types: set[str]
+) -> list[FeeRule]:
+    """요일 구분이 정해진 날에 적용되는 유효한 규정을 고른다.
+
     요일이나 시간대가 None인 규정은 적용 여부를 알 수 없으므로 확인 필요로 보낸다.
     이용일에 유효하지 않은 규정은 유효한 규정이 그 시간을 대신하지 못할 때만 확인 필요로 보낸다.
     """
     start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
-    day_types = _day_types(conditions.date, rules.holidays)
     relevant = [
         r
         for r in rules.fee_rules

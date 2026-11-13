@@ -10,7 +10,6 @@
       "name": "예시 체육관",
       "district": "해운대구",
       "source_id": "S-01",
-      "holidays": [],
       "fee_rules": [
         {
           "rule_id": "R-F001-01",

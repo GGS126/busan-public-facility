@@ -133,12 +133,40 @@ class Terms(BaseModel):
     source_id: str | None = None
 
 
+class Holiday(BaseModel):
+    date: date
+    name: str
+
+
+class HolidayCalendar(BaseModel):
+    """관공서 공휴일 목록. 기간 밖의 날짜는 공휴일인지 알 수 없는 날로 본다."""
+
+    covered_from: date
+    covered_to: date
+    holidays: list[Holiday]
+    source: Source
+
+    def covers(self, day: date) -> bool:
+        return self.covered_from <= day <= self.covered_to
+
+    def is_holiday(self, day: date) -> bool:
+        return any(holiday.date == day for holiday in self.holidays)
+
+    @model_validator(mode="after")
+    def check_range(self) -> "HolidayCalendar":
+        outside = [h.date.isoformat() for h in self.holidays if not self.covers(h.date)]
+        if outside:
+            raise ValueError(f"기간 밖의 공휴일: {outside}")
+        return self
+
+
 class FacilityRules(BaseModel):
     facility_id: str
     name: str
     district: str | None = None
     source_id: str
-    holidays: list[date] = []
+    # 공통 공휴일 목록을 저장소에서 붙인다. 없으면 모든 날짜의 공휴일 여부를 알 수 없다.
+    holiday_calendar: HolidayCalendar | None = None
     fee_rules: list[FeeRule] = []
     discount_rules: list[DiscountRule] = []
     terms: Terms = Terms()
