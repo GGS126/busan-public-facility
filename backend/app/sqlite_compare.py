@@ -1,6 +1,8 @@
 """Adapt the SQLite quote to the comparison response used by the web UI."""
 
+import sys
 from functools import cache
+from importlib import import_module
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
@@ -10,12 +12,13 @@ from app.models import CompareResult, Conditions, FeeItem, FeeResult, ReviewItem
 
 @cache
 def load_query_api(path: Path):
-    spec = spec_from_file_location("facility_query_api", path)
+    package_name = "_facility_database"
+    spec = spec_from_file_location(package_name, path.parent / "__init__.py")
     if spec is None or spec.loader is None:
         raise ImportError("SQLite query module is unavailable")
-    query = module_from_spec(spec)
-    spec.loader.exec_module(query)
-    return query
+    package = module_from_spec(spec)
+    sys.modules.setdefault(package_name, package)
+    return import_module(f"{package_name}.query_api")
 
 
 def compare_sqlite(path: Path, facility_id: str, conditions: Conditions) -> CompareResult | None:
@@ -26,7 +29,7 @@ def compare_sqlite(path: Path, facility_id: str, conditions: Conditions) -> Comp
 
     day = conditions.date.isoformat()
     rules = query.fetch(path, """
-        SELECT r.id, s.id AS source_id, s.url, s.checked_on, rr.online_open_days_before,
+        SELECT s.*, r.id AS rule_set_id, rr.online_open_days_before,
                rr.online_close_days_before, rr.normal_cancel_online_min_days_before
         FROM rule_sets r JOIN sources s ON s.id = r.source_id
         LEFT JOIN reservation_rules rr ON rr.rule_set_id = r.id
@@ -34,16 +37,16 @@ def compare_sqlite(path: Path, facility_id: str, conditions: Conditions) -> Comp
         ORDER BY (? BETWEEN r.effective_from AND r.effective_to) DESC, r.effective_from DESC
     """, (facility_id, day))
     rule = rules[0] if rules else None
-    source_id = rule["source_id"] if rule else facility_id
+    source_id = rule["id"] if rule else facility_id
     sources = []
     if rule and rule["checked_on"]:
         sources.append(Source(source_id=source_id, url=rule["url"],
-                              checked_at=rule["checked_on"], license="이용조건 확인 필요"))
+                              checked_at=rule["checked_on"], license=rule.get("license") or "이용조건 확인 필요"))
 
     prices = query.pricing_rules(path, facility_id, day, False)
     active_rule_ids = {price["rule_set_id"] for price in prices}
     terms = Terms()
-    if len(active_rule_ids) == 1 and rule and rule["id"] in active_rule_ids:
+    if len(active_rule_ids) == 1 and rule and rule["rule_set_id"] in active_rule_ids:
         if rule["online_open_days_before"] is not None:
             terms = Terms(
                 booking_open=f'이용일 {rule["online_open_days_before"]}일 전부터 {rule["online_close_days_before"]}일 전까지',
