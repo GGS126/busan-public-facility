@@ -13,7 +13,6 @@ function FacilityList({
   loading,
   facilityTimes,
   onTimeChange,
-  date,
   error,
 }) {
   return (
@@ -46,7 +45,7 @@ function FacilityList({
           <div className="facility-grid">
             {facilities.map((facility) => {
               const selected = selectedIds.includes(facility.id)
-              const slots = getFacilitySlots(facility.id, date, facility.time_options)
+              const slots = getFacilitySlots(facility.id, facility.time_options)
               const selectedTime = facilityTimes[facility.id] || ''
 
               return (

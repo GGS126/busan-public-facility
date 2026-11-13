@@ -8,7 +8,8 @@
     "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
     "open_time": "08:00",
     "close_time": "22:00",
-    "holiday_note": "연중무휴(정기 휴무일 없음)"
+    "holiday_note": "연중무휴(정기 휴무일 없음)",
+    "district": "서구"
   },
   "source": {
     "id": "busan_reserve_472_2026winter",
@@ -16,7 +17,8 @@
     "title": "부산광역시 통합예약 - 구덕운동장 테니스장",
     "checked_on": "2026-11-06",
     "verification_level": "user_transcribed_official",
-    "note": "부산광역시 통합예약 구덕운동장 테니스장 예약·요금·감면·환불 안내 및 시설 규정. 2026-11-06 확인."
+    "note": "부산광역시 통합예약 구덕운동장 테니스장 예약·요금·감면·환불 안내 및 시설 규정. 2026-11-06 확인.",
+    "license": null
   },
   "rule_set": {
     "id": "gudeok_tennis_winter_2026_2027",
@@ -101,7 +103,10 @@
     {
       "id": "disabled",
       "rate_percent": 50,
-      "source_label": "장애인(중증 장애인 보호자 1인 포함)"
+      "source_label": "장애인(중증 장애인 보호자 1인 포함)",
+      "guardian_max_count": 1,
+      "guardian_condition": "장애의 정도가 심한 등록장애인과 함께 해당 시설을 실제로 이용하는 보호자 1명에 한하여 감면 대상 인원에 포함",
+      "guardian_evidence_note": "장애인등록증 등 감면 자격 증빙 및 시설별 감면신청 절차 필요. 보호자 관계 증빙의 구체적인 서류 종류는 미확인."
     },
     {
       "id": "multi_child",
@@ -117,7 +122,7 @@
   "discount_excluded_fee_types": [
     "lighting_fee"
   ],
-  "discount_calculation_policy": "representative_full_court",
+  "discount_calculation_policy": "per_eligible_person_equal_split",
   "options": [
     {
       "id": "lighting",
@@ -134,11 +139,13 @@
     }
   ],
   "discount_common": {
-    "basis": "representative_full_court",
+    "basis": "per_eligible_person_equal_split",
+    "rounding_policy": null,
     "applies_to": "base_court_fee_only",
     "processing": "pay_full_then_refund",
-    "documents": null,
+    "documents": "사용일 당일 구장 이용 전 또는 후 관제실에서 감면 대상 이용자별 증빙자료 확인 및 감경대상자 확인서 제출. 감면액은 대표 예약자에게 반환.",
     "deadline": null,
-    "note": "예약 대표자 본인이 감면 자격을 증빙한 경우에만 해당 대상자의 감면율을 코트 기본 이용료에 적용. 동반자 자격만으로는 감면하지 않으며 조명료는 제외."
-  }
+    "note": "코트 기본요금을 실제 이용 인원으로 균등 배분하고 감면 대상자로 확인된 이용자의 몫에만 해당 감면율을 적용. 예약자에게 감면액을 반환하며 조명료는 제외. 공식 안내에서 감면 대상 이용자별 적용 및 대표자 환급을 확인했고, 인원별 비례 계산 방식은 이용자 확인에 따라 반영. 원 미만 끝전 처리 기준은 미확인으로 유지."
+  },
+  "closure_rules": []
 }

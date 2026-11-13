@@ -8,7 +8,8 @@
     "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=531&progrmSn=619",
     "open_time": "07:00",
     "close_time": "22:00",
-    "holiday_note": "1월 1일, 설날 당일, 추석 당일 휴원"
+    "holiday_note": "1월 1일, 설날 당일, 추석 당일 휴원",
+    "district": "해운대구"
   },
   "source": {
     "id": "busan_reserve_619_2026h2",
@@ -16,7 +17,8 @@
     "title": "부산광역시 통합예약 - 2026년 하반기 해운대수목원 테니스장",
     "checked_on": "2026-11-06",
     "verification_level": "user_transcribed_official",
-    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 규정(2026-11-06)."
+    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 규정(2026-11-06).",
+    "license": null
   },
   "rule_set": {
     "id": "haeundae_tennis_2026h2",
@@ -107,7 +109,10 @@
     {
       "id": "disabled",
       "category": "「장애인복지법」에 따라 등록된 장애인(장애의 정도가 심한 장애인의 경우 보호자 1명을 포함한다)",
-      "percent": 50
+      "percent": 50,
+      "guardian_max_count": 1,
+      "guardian_condition": "장애의 정도가 심한 등록장애인과 함께 해당 시설을 실제로 이용하는 보호자 1명에 한하여 감면 대상 인원에 포함",
+      "guardian_evidence_note": "장애인등록증 등 감면 자격 증빙 및 시설별 감면신청 절차 필요. 보호자 관계 증빙의 구체적인 서류 종류는 미확인."
     },
     {
       "id": "independence_merit",
@@ -158,12 +163,13 @@
   "discount_common": {
     "percent": 50,
     "basis": "per_eligible_person_equal_split",
+    "rounding_policy": null,
     "applies_to": "base_court_fee_only",
     "excluded_from": "lighting_fee",
     "processing": "pay_full_then_refund",
     "documents": "반환신청서에 감면대상 이용자별 이름, 증빙서류 제출. 다자녀 가족사랑카드(모바일 포함), 없으면 등본 또는 가족관계증명서. 다자녀 가족의 경우 증빙 1부 인정 가능.",
     "deadline": "경기장 이용시간 전 이메일 제출",
-    "note": "코트 전체 일괄 감면 아님. 이용 인원수로 기본요금을 균등분할한 뒤 해당 대상자의 감면율(독립유공자 60%, 기타 표기 대상 50%)을 적용하여 반환. 중증 장애인 보호자 1명 포함. 조명료 제외. 이메일 winnst70@korea.kr; 팩스 불가. 반환금은 월 단위 처리."
+    "note": "공식 안내 확인: 코트당 일괄 할인하지 않고 감면 대상 이용자별로 계산. 이용 인원수로 기본요금을 균등분할한 뒤 해당 대상자의 감면율(독립유공자 60%, 기타 표기 대상 50%)을 적용하여 반환. 중증 장애인 보호자 1명 포함. 조명료 제외. 이메일 winnst70@korea.kr; 팩스 불가. 반환금은 월 단위 처리."
   },
   "refunds": [
     {
@@ -244,6 +250,23 @@
       "hour_price": 10000,
       "extra_unit_minutes": null,
       "extra_unit_price": null
+    }
+  ],
+  "closure_rules": [
+    {
+      "type": "annual_date",
+      "value": "01-01",
+      "note": "양력 1월 1일 휴원"
+    },
+    {
+      "type": "holiday_code",
+      "value": "lunar_new_year_day",
+      "note": "설날 당일 휴원"
+    },
+    {
+      "type": "holiday_code",
+      "value": "chuseok_day",
+      "note": "추석 당일 휴원"
     }
   ]
 }

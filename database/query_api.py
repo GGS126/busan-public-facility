@@ -4,6 +4,10 @@ import datetime as dt
 import json
 import sqlite3
 from pathlib import Path
+try:
+    from . import load as _load
+except ImportError:
+    import load as _load
 ROOT=Path(__file__).resolve().parent
 
 def normalize_use_date(value):
@@ -22,7 +26,135 @@ def fetch(db,sql,params=()):
     finally: con.close()
 
 def facilities(db):
-    return fetch(db,'SELECT id,name,facility_type,address,booking_url FROM facilities ORDER BY name')
+    return fetch(db,'SELECT id,name,facility_type,district,address,booking_url FROM facilities ORDER BY name')
+
+def sources(db, facility_id=None, use_date=None):
+    """출처의 재이용 조건을 확인 상태와 함께 조회한다.
+
+    license=None이면 확인되지 않았다는 뜻이며 허락/금지를 단정하지 않는다.
+    facility_id 단독 검색 또는 facility_id+use_date의 적용규정 검색을 지원한다.
+    """
+    if use_date is not None and facility_id is None:
+        raise ValueError('이용일로 출처를 조회할 때 facility_id가 필요합니다')
+    where = []
+    params = []
+    if facility_id is not None:
+        where.append('r.facility_id=?')
+        params.append(facility_id)
+    if use_date is not None:
+        where.append('? BETWEEN r.effective_from AND r.effective_to')
+        params.append(normalize_use_date(use_date))
+    condition = ' WHERE ' + ' AND '.join(where) if where else ''
+    return fetch(db, """SELECT DISTINCT s.id AS source_id,s.url,s.title,s.checked_on,
+        s.verification_level,s.license,
+        CASE WHEN s.license IS NULL THEN 'unverified' ELSE 'confirmed' END AS license_status,
+        s.note
+        FROM sources s JOIN rule_sets r ON r.source_id=s.id"""
+        + condition + ' ORDER BY s.id', tuple(params))
+
+
+def closure_rules(db,facility_id,use_date):
+    # 규정 적용기간 내의 정기 휴장 목록. 출처는 기존 rule_sets -> sources를 재사용.
+    use_date=normalize_use_date(use_date)
+    return fetch(db,'''SELECT c.closure_type AS type,c.closure_value AS value,c.note,
+       r.effective_from,r.effective_to,s.url AS source_url,s.checked_on
+       FROM closure_rules c JOIN rule_sets r ON r.id=c.rule_set_id
+       JOIN sources s ON s.id=r.source_id
+       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to
+       ORDER BY c.closure_type,c.closure_value''',(facility_id,use_date))
+
+
+def closure_status(db,facility_id,use_date,holiday_codes=None):
+    # 명절 날짜를 변환하지 않는다. holiday_codes는 백엔드의 검증된 날짜 데이터가 공급한다.
+    use_date=normalize_use_date(use_date)
+    if holiday_codes is not None:
+        if not isinstance(holiday_codes,(list,tuple,set)) or any(
+                not isinstance(x,str) or x not in _load.CLOSURE_HOLIDAY_CODES
+                for x in holiday_codes):
+            raise ValueError('holiday_codes는 지원하는 명절 코드 목록이어야 합니다')
+    active=fetch(db,'''SELECT r.id,s.url AS source_url FROM rule_sets r
+       JOIN sources s ON s.id=r.source_id
+       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to''',
+       (facility_id,use_date))
+    if not active:
+        return {'status':'no_active_rule_set','facility_id':facility_id,
+                'date':use_date,'is_closed':None,'matched_rules':[]}
+    rules=closure_rules(db,facility_id,use_date)
+    codes=set(holiday_codes or [])
+    matched=[x for x in rules if
+       (x['type']=='annual_date' and x['value']==use_date[5:]) or
+       (x['type']=='exact_date' and x['value']==use_date) or
+       (x['type']=='holiday_code' and x['value'] in codes)]
+    if matched: status,closed='closed',True
+    elif holiday_codes is None and any(x['type']=='holiday_code' for x in rules):
+        status,closed='needs_calendar_resolution',None
+    else: status,closed='no_scheduled_closure',False
+    return {'status':status,'facility_id':facility_id,'date':use_date,
+            'is_closed':closed,'matched_rules':matched,'source_url':active[0]['source_url'],
+            'note':'임시 휴장·행사·별도 공지는 반영되지 않았습니다. 실제 예약 가능 여부는 공식 예약 사이트에서 확인해야 합니다.'}
+
+
+def backend_time_policy(db, facility_id, use_date):
+    """PR #19 TimePolicy와의 안전한 호환성 점검 및 변환 자료.
+
+    확정되지 않은 허용 시간 목록을 임의 생성하지 않는다. compatible=True일 때만
+    policy를 백엔드의 TimePolicy 모델에 전달할 수 있다.
+    """
+    use_date = normalize_use_date(use_date)
+    rows = fetch(db, """SELECT r.id AS rule_set_id,r.effective_from,r.effective_to,
+           f.facility_type,f.open_time,f.close_time,
+           t.selection_type,t.available_start_time,t.available_end_time,
+           t.min_minutes,t.max_minutes,t.step_minutes,t.daily_limit_minutes,t.note,
+           s.id AS source_id,s.url AS source_url
+       FROM rule_sets r JOIN facilities f ON f.id=r.facility_id
+       JOIN time_selection_policies t ON t.rule_set_id=r.id
+       JOIN sources s ON s.id=r.source_id
+       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to
+       ORDER BY r.id""", (facility_id, use_date))
+    base = {'facility_id': facility_id, 'date': use_date}
+    if not rows:
+        return {**base, 'status': 'no_active_rule_set', 'compatible': False,
+                'policy': None, 'review_items': [{'code':'rule_missing',
+                'reason':'해당 이용일에 적용되는 이용시간 규정이 없습니다.'}]}
+    if len(rows) != 1:
+        return {**base, 'status':'needs_review','compatible':False,'policy':None,
+                'review_items':[{'code':'rule_conflict',
+                'reason':'동일 날짜에 유효한 이용시간 규정이 여러 개입니다.'}]}
+    x = rows[0]
+    common = {'policy_id': x['rule_set_id'] + '_time',
+              'sport': x['facility_type'], 'effective_from':x['effective_from'],
+              'effective_to':x['effective_to'], 'source_id':x['source_id']}
+    if x['selection_type'] == 'fixed_slot':
+        slots = fetch(db, """SELECT start_time,end_time FROM pricing_rules
+            WHERE rule_set_id=? AND selection_type='fixed_slot'
+            ORDER BY slot_no""", (x['rule_set_id'],))
+        if not slots:
+            return {**base, 'status':'needs_review','compatible':False,'policy':None,
+                    'review_items':[{'code':'slot_missing','reason':'지정 회차 정보가 없습니다.'}]}
+        policy = {**common,'selection':'fixed_slot','slots':slots,
+                  'allowed_minutes':[], 'open_time':x['open_time'],
+                  'close_time':x['close_time']}
+        return {**base,'status':'compatible','compatible':True,
+                'policy':policy,'source_url':x['source_url'],'review_items':[]}
+    if x['selection_type'] == 'flexible_interval':
+        # 120분 기준 요금이 있다는 사실만으로 60분·120분만 허용한다고 단정할 수 없다.
+        # max_minutes=120, step_minutes=NULL 등으로는 정확한 allowed_minutes를 복원할 수 없다.
+        return {**base,'status':'needs_review','compatible':False,'policy':None,
+                'source_url':x['source_url'],
+                'known_constraints':{'selection':'flexible',
+                    'open_time':x['available_start_time'] or x['open_time'],
+                    'close_time':x['available_end_time'] or x['close_time'],
+                    'min_minutes':x['min_minutes'],'max_minutes':x['max_minutes'],
+                    'step_minutes':x['step_minutes'],
+                    'daily_limit_minutes':x['daily_limit_minutes'],
+                    'priced_duration_minutes':[x['duration_minutes'] for x in fetch(db,
+                        "SELECT DISTINCT duration_minutes FROM pricing_rules WHERE rule_set_id=? ORDER BY duration_minutes",
+                        (x['rule_set_id'],))]},
+                'review_items':[{'code':'allowed_minutes_unverified',
+                    'reason':'PR #19의 flexible 형식은 허용 이용시간 목록(allowed_minutes)이 필수이나, 공식 자료에서 정확한 목록이 확인되지 않았습니다. 2시간 요금과 최대 2시간 제한을 근거로 60분/120분만 허용한다고 추정하지 않습니다.'}]}
+    return {**base,'status':'needs_review','compatible':False,'policy':None,
+            'review_items':[{'code':'selection_unknown','reason':'알 수 없는 이용시간 선택 형식입니다.'}]}
+
 
 def pricing_rules(db,facility_id,use_date,is_weekend_or_holiday):
     use_date=normalize_use_date(use_date)
@@ -47,10 +179,96 @@ def duration_prices(db,facility_id,use_date):
 
 def discounts(db,facility_id,use_date):
     use_date=normalize_use_date(use_date)
-    return fetch(db,'''SELECT category_id,category_name,percent,basis,applies_to,excluded_from,
+    return fetch(db,'''SELECT category_id,category_name,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,
+    CASE WHEN discount_rounding_policy IS NULL THEN 'unverified' ELSE 'confirmed' END AS rounding_status,
+    basis,applies_to,excluded_from,
     processing,deadline,documents,source_url,checked_on
     FROM v_facility_discounts WHERE facility_id=? AND ? BETWEEN effective_from AND effective_to
     ORDER BY category_name''',(facility_id,use_date))
+
+def discount_proration_check(db, facility_id, use_date, base_fee_won,
+                              participant_count, eligible_count, category_id,
+                              guardian_count=None, severe_disabled_count=None):
+    """DB 규정의 비례 감면 정합성 검사. 결제/API 오류 생성은 백엔드 책임.
+
+    끝전/인원별 배분의 공식 규칙이 불명확하면 환급·최종 금액은 반환하지 않는다.
+    """
+    from fractions import Fraction
+    if type(base_fee_won) is not int or base_fee_won < 0:
+        raise ValueError('기본요금은 0 이상의 정수여야 합니다')
+    if (type(participant_count) is not int or participant_count <= 0 or
+        type(eligible_count) is not int or not (0 <= eligible_count <= participant_count)):
+        raise ValueError('참여인원 및 감면 대상 인원 오류')
+    rules = {r['category_id']:r for r in discounts(db, facility_id, use_date)}
+    if category_id not in rules:
+        raise ValueError('등록되지 않은 감면 유형')
+    rule = rules[category_id]
+    # 보호자 규정은 각 시설의 JSON에 확인된 상한이 있을 때만 적용한다.
+    # NULL은 미확인: 보호자 감면을 허용한다고 추측해서는 안 된다.
+    if category_id == 'disabled' and eligible_count > 0:
+        if rule['guardian_max_count'] == 1:
+            if (type(guardian_count) is not int or type(severe_disabled_count) is not int or
+                guardian_count < 0 or severe_disabled_count < 0 or
+                guardian_count > eligible_count or severe_disabled_count > eligible_count - guardian_count):
+                return {'status':'needs_review','discount_refund_won':None,
+                        'net_court_fee_won':None,'review_items':[{'code':'guardian_counts_required',
+                        'reason':'보호자 감면 규정이 확인된 시설은 보호자 수와 중증 장애인 본인 수를 구분해 입력해야 합니다.'}]}
+            if guardian_count > 1 or (guardian_count and severe_disabled_count < 1):
+                return {'status':'needs_review','discount_refund_won':None,
+                        'net_court_fee_won':None,'review_items':[{'code':'guardian_limit_exceeded',
+                        'reason':'해당 시설의 보호자 감면은 중증 장애인 동반 시 최대 1명입니다.'}]}
+        elif guardian_count not in (None, 0):
+            return {'status':'needs_review','discount_refund_won':None,
+                    'net_court_fee_won':None,'review_items':[{'code':'guardian_policy_unverified',
+                    'reason':'해당 시설에서 보호자 감면 허용 여부 또는 상한이 확인되지 않았습니다.'}]}
+        elif severe_disabled_count not in (None, 0):
+            # 장애인 본인 수만 제공되는 경우에는 감면 대상 총 인원에 포함돼야 한다.
+            if type(severe_disabled_count) is not int or not (0 <= severe_disabled_count <= eligible_count):
+                raise ValueError('중증 장애인 본인 인원 오류')
+    elif guardian_count not in (None, 0) or severe_disabled_count not in (None, 0):
+        raise ValueError('보호자 인원 입력은 장애인 감면에만 사용합니다')
+    base = {'facility_id': facility_id, 'date': normalize_use_date(use_date),
+            'base_fee_won':base_fee_won, 'participant_count':participant_count,
+            'eligible_count':eligible_count, 'discount_category_id':category_id,
+            'rounding_policy':rule['discount_rounding_policy'],
+            'rounding_status':rule['rounding_status'],
+            'source_url':rule['source_url'], 'checked_on':rule['checked_on']}
+    if rule['basis'] != 'per_eligible_person_equal_split':
+        return {**base,'status':'needs_review','discount_refund_won':None,
+                'net_court_fee_won':None,'review_items':[{'code':'discount_proration_unverified',
+                'reason':'인원별 기본요금 배분 공식이 확인되지 않았습니다.'}]}
+    if eligible_count == 0:
+        return {**base, 'status':'confirmed', 'discount_refund_won':0,
+                'net_court_fee_won':base_fee_won}
+    # 감면이 이용자마다 다른 경우는 해당 자격의 합산 규칙을 별도로 확인해야 한다.
+    refund_per_person = Fraction(base_fee_won * rule['percent'], participant_count * 100)
+    policy = rule['discount_rounding_policy']
+    # 'per_eligible_person_equal_split'은 1인당 반환액을 먼저 계산하는 방식.
+    # 각 감면 대상자의 반환액을 원 단위로 처리한 후 인원수만큼 합산한다.
+    if policy is None and refund_per_person.denominator == 1:
+        # 공식 절사 정책이 없을 때만 정수 금액을 그대로 사용한다.
+        rounded_per_person = int(refund_per_person)
+    elif policy is None:
+        return {**base,'status':'needs_review','discount_refund_won':None,
+                'net_court_fee_won':None,'review_items':[{'code':'discount_rounding_unverified',
+                'reason':'인원별 감면액에 원 미만의 끝전이 발생하지만 공식 처리 기준이 확인되지 않았습니다.'}]}
+    elif policy == 'round_half_up':
+        rounded_per_person = (2 * refund_per_person.numerator + refund_per_person.denominator) // (2 * refund_per_person.denominator)
+    elif policy == 'floor_won':
+        rounded_per_person = refund_per_person.numerator // refund_per_person.denominator
+    elif policy == 'ceil_won':
+        rounded_per_person = -(-refund_per_person.numerator // refund_per_person.denominator)
+    elif policy in ('truncate_10_won', 'truncate_100_won'):
+        unit = 10 if policy == 'truncate_10_won' else 100
+        rounded_per_person = (refund_per_person.numerator // (refund_per_person.denominator * unit)) * unit
+    else:
+        # DB의 CHECK 제약과 별개로 알 수 없는 정책을 계산에 사용하는 것을 방지한다.
+        return {**base,'status':'needs_review','discount_refund_won':None,
+                'net_court_fee_won':None,'review_items':[{'code':'discount_rounding_unknown',
+                'reason':'DB의 감면 끝전 처리 정책을 해석할 수 없습니다.'}]}
+    refund = rounded_per_person * eligible_count
+    return {**base,'status':'confirmed','discount_refund_won':refund,
+            'net_court_fee_won':base_fee_won-refund}
 
 def discount_selection_review(db, facility_id, use_date, category_ids):
     """중복 적용 근거가 없는 복수 감면은 금액을 산출하지 않는다.
@@ -259,28 +477,77 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
 
 duration_quote=quote
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(description='공통 시설 요금 조회')
-    parser.add_argument('resource',choices=['facilities','pricing','slots','duration_prices','quote','duration_quote','optional_lighting','options','discounts','refunds'])
-    parser.add_argument('--facility');parser.add_argument('--date');parser.add_argument('--weekend',choices=['true','false'])
-    parser.add_argument('--start-time');parser.add_argument('--end-time')
-    parser.add_argument('--optional-lighting-minutes',type=int,default=0)
-    parser.add_argument('--discount-categories',help='감면 대상 ID를 쉼표로 구분 (예: independence_merit,disabled)')
-    parser.add_argument('--db',default=str(ROOT/'facilities.sqlite3'))
-    a=parser.parse_args()
-    if a.resource=='facilities':result=facilities(a.db)
+    parser = argparse.ArgumentParser(description='공통 시설 요금·규정 조회')
+    parser.add_argument('resource', choices=[
+        'facilities', 'pricing', 'slots', 'duration_prices', 'quote', 'duration_quote',
+        'optional_lighting', 'options', 'discounts', 'refunds', 'backend_time_policy',
+        'sources', 'closure_rules', 'closure_status', 'discount_proration_check'])
+    parser.add_argument('--facility', help='시설 ID')
+    parser.add_argument('--date', help='이용일 YYYY-MM-DD')
+    parser.add_argument('--weekend', choices=['true', 'false'])
+    parser.add_argument('--start-time')
+    parser.add_argument('--end-time')
+    parser.add_argument('--optional-lighting-minutes', type=int, default=0)
+    parser.add_argument('--discount-categories', help='감면 대상 ID를 쉼표로 구분')
+    parser.add_argument('--holiday-codes', help='이용일에 해당하는 명절 코드. 쉼표로 구분; 빈 문자열은 명절 아님을 뜻함')
+    parser.add_argument('--base-fee-won', type=int, help='감면 계산 대상 코트 기본요금')
+    parser.add_argument('--participant-count', type=int, help='전체 이용 인원')
+    parser.add_argument('--eligible-count', type=int, help='감면 대상 인원')
+    parser.add_argument('--category-id', help='검사할 감면 유형 ID')
+    parser.add_argument('--guardian-count', type=int, help='감면 대상 보호자 인원')
+    parser.add_argument('--severe-disabled-count', type=int, help='중증 장애인 본인 인원')
+    parser.add_argument('--db', default=str(ROOT / 'facilities.sqlite3'))
+    a = parser.parse_args()
+
+    if a.resource == 'facilities':
+        result = facilities(a.db)
+    elif a.resource == 'sources' and a.date is None:
+        result = sources(a.db, a.facility)
     else:
-        if not a.facility or not a.date:parser.error('--facility, --date 필요')
-        if a.resource in ('pricing','slots','quote','duration_quote') and a.weekend is None:parser.error('--weekend 필요')
-        is_weekend=a.weekend=='true'
-        if a.resource=='pricing':result=pricing_rules(a.db,a.facility,a.date,is_weekend)
-        elif a.resource=='slots':result=slots(a.db,a.facility,a.date,is_weekend)
-        elif a.resource=='duration_prices':result=duration_prices(a.db,a.facility,a.date)
-        elif a.resource=='options':result=facility_options(a.db,a.facility,a.date)
-        elif a.resource=='discounts':result=discounts(a.db,a.facility,a.date)
-        elif a.resource=='refunds':result=refund_rules(a.db,a.facility,a.date)
-        elif a.resource=='optional_lighting':result=optional_lighting_quote(a.db,a.facility,a.date,a.optional_lighting_minutes)
+        if not a.facility or not a.date:
+            parser.error('--facility, --date 필요')
+        if a.resource in ('pricing', 'slots', 'quote', 'duration_quote') and a.weekend is None:
+            parser.error('--weekend 필요')
+        is_weekend = a.weekend == 'true'
+        if a.resource == 'sources':
+            result = sources(a.db, a.facility, a.date)
+        elif a.resource == 'closure_rules':
+            result = closure_rules(a.db, a.facility, a.date)
+        elif a.resource == 'closure_status':
+            # None: 공휴일 자료 미제공. []: 확인 결과 해당 명절 코드 없음.
+            codes = None if a.holiday_codes is None else (
+                a.holiday_codes.split(',') if a.holiday_codes else [])
+            result = closure_status(a.db, a.facility, a.date, codes)
+        elif a.resource == 'discount_proration_check':
+            for key in ('base_fee_won', 'participant_count', 'eligible_count', 'category_id'):
+                if getattr(a, key) is None:
+                    parser.error('--' + key.replace('_', '-') + ' 필요')
+            result = discount_proration_check(
+                a.db, a.facility, a.date, a.base_fee_won,
+                a.participant_count, a.eligible_count, a.category_id,
+                guardian_count=a.guardian_count,
+                severe_disabled_count=a.severe_disabled_count)
+        elif a.resource == 'pricing':
+            result = pricing_rules(a.db, a.facility, a.date, is_weekend)
+        elif a.resource == 'slots':
+            result = slots(a.db, a.facility, a.date, is_weekend)
+        elif a.resource == 'duration_prices':
+            result = duration_prices(a.db, a.facility, a.date)
+        elif a.resource == 'backend_time_policy':
+            result = backend_time_policy(a.db, a.facility, a.date)
+        elif a.resource == 'options':
+            result = facility_options(a.db, a.facility, a.date)
+        elif a.resource == 'discounts':
+            result = discounts(a.db, a.facility, a.date)
+        elif a.resource == 'refunds':
+            result = refund_rules(a.db, a.facility, a.date)
+        elif a.resource == 'optional_lighting':
+            result = optional_lighting_quote(
+                a.db, a.facility, a.date, a.optional_lighting_minutes)
         else:
-            if not a.start_time or not a.end_time:parser.error('--start-time, --end-time 필요')
-            selected=a.discount_categories.split(',') if a.discount_categories else None
-            result=quote(a.db,a.facility,a.date,a.start_time,a.end_time,is_weekend,a.optional_lighting_minutes,selected)
-    print(json.dumps(result,ensure_ascii=False,indent=2))
+            if not a.start_time or not a.end_time:
+                parser.error('--start-time, --end-time 필요')
+            selected = a.discount_categories.split(',') if a.discount_categories else None
+            result = quote(a.db, a.facility, a.date, a.start_time, a.end_time,
+                           is_weekend, a.optional_lighting_minutes, selected)
+    print(json.dumps(result, ensure_ascii=False, indent=2))

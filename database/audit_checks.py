@@ -1,4 +1,4 @@
-import json, sqlite3, tempfile, pathlib, hashlib, shutil, os
+import json, sqlite3, tempfile, pathlib, hashlib, shutil, os, subprocess, sys
 from contextlib import closing
 from unittest.mock import patch
 import load,query_api as q
@@ -13,8 +13,403 @@ with tempfile.TemporaryDirectory() as tmp:
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
   assert c.execute('select count(*) from facilities').fetchone()[0]==3
+  assert dict(c.execute('SELECT id,district FROM facilities').fetchall()) == {
+   'busan_haeundae_arboretum_tennis': '해운대구',
+   'busan_samrak_ecopark_tennis': '사상구',
+   'busan_gudeok_stadium_tennis': '서구',
+  }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+ # 기존 스키마에 CREATE IF NOT EXISTS만 실행하면 누락 컬럼과 VIEW가 남는 회귀 확인.
+ legacy=tmp/'legacy.sqlite3'
+ shutil.copy2(db,legacy)
+ with closing(sqlite3.connect(legacy)) as c:
+  c.execute('DROP VIEW IF EXISTS v_facility_discounts')
+  c.execute('DROP VIEW IF EXISTS v_slot_prices')
+  for table,cols in [('facilities',['district']),('sources',['license']),
+                     ('facility_discounts',['guardian_max_count','guardian_condition',
+                                            'guardian_evidence_note','discount_rounding_policy'])]:
+   for col in cols:
+    c.execute(f'ALTER TABLE {table} DROP COLUMN {col}')
+  c.execute("UPDATE discount_categories SET name='이전 명칭' WHERE id='multi_child'")
+  c.execute('DROP TABLE closure_rules')
+  c.execute('CREATE VIEW v_facility_discounts AS SELECT 1 AS old_view')
+  c.commit()
+ load.load_many([R/x for x in files],legacy)
+ with closing(sqlite3.connect(legacy)) as c:
+  assert c.execute("SELECT COUNT(*) FROM facilities WHERE district<>''").fetchone()[0]==3
+  assert c.execute('SELECT license FROM sources LIMIT 1').fetchone()[0] is None
+  assert c.execute("SELECT COUNT(*) FROM facility_discounts WHERE category_id='disabled' AND guardian_max_count=1").fetchone()[0]==3
+  assert c.execute('SELECT category_name FROM v_facility_discounts LIMIT 1').fetchone()[0]
+  assert c.execute("SELECT name FROM discount_categories WHERE id='multi_child'").fetchone()[0]=='다자녀가정에 속하는 사람'
+  assert c.execute('SELECT COUNT(*) FROM closure_rules').fetchone()[0]==5
+  assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+ print('PASS: 기존 SQLite 새 컬럼/휴장 규칙/VIEW/감면대상 명칭 갱신')
+ # 새 조회 함수 네 가지를 실제 CLI 경로로 실행해 README의 명령과 일치시키는 회귀 테스트.
+ def cli(resource, *args):
+  proc=subprocess.run([sys.executable,str(R/'query_api.py'),resource,'--db',str(db),*args],
+                      text=True,encoding='utf-8',capture_output=True)
+  assert proc.returncode==0,(resource,proc.stderr)
+  return json.loads(proc.stdout)
+ f='busan_samrak_ecopark_tennis'
+ common=('--facility',f,'--date','2026-11-09')
+ assert len(cli('sources'))>=3
+ assert len(cli('sources','--facility',f))==1
+ assert len(cli('sources',*common))==1
+ rules=cli('closure_rules',*common)
+ assert any(x['type']=='holiday_code' for x in rules),rules
+ assert cli('closure_status',*common)['status']=='needs_calendar_resolution'
+ assert cli('closure_status',*common,'--holiday-codes','')['status']=='no_scheduled_closure'
+ assert cli('closure_status',*common,'--holiday-codes','lunar_new_year_day')['status']=='closed'
+ calc=cli('discount_proration_check',*common,'--base-fee-won','6000',
+          '--participant-count','4','--eligible-count','2','--category-id','multi_child')
+ assert calc['status']=='confirmed' and calc['discount_refund_won']==1500,calc
+ invalid=subprocess.run([sys.executable,str(R/'query_api.py'),'discount_proration_check',
+                         '--db',str(db),*common],capture_output=True,text=True,encoding='utf-8')
+ assert invalid.returncode!=0 and '--base-fee-won' in invalid.stderr,invalid.stderr
+ invalid_code=subprocess.run([sys.executable,str(R/'query_api.py'),'closure_status',
+                              '--db',str(db),*common,'--holiday-codes','unknown_holiday'],
+                              capture_output=True,text=True,encoding='utf-8')
+ assert invalid_code.returncode!=0 and 'holiday_codes' in invalid_code.stderr,invalid_code.stderr
+ print('PASS: 신규 CLI sources/closure_rules/closure_status/discount_proration_check 및 필수 인자 검증')
+ # 공통 테스트 사례 스키마: 같은 항목은 같은 이름, 선택적 항목은 의미를 보존.
+ test_fixtures={
+  'test_cases.json':'busan_haeundae_arboretum_tennis',
+  'samrak_test_cases.json':'busan_samrak_ecopark_tennis',
+  'gudeok_test_cases.json':'busan_gudeok_stadium_tennis',
+ }
+ expected_names={'status','review_code','initial_payment_won','base_court_won','mandatory_lighting_won',
+  'lighting_won','optional_lighting_on_site_won','discount_refund_won','final_expected_cost_won',
+  'total_fee_won','refund_percent','refund_won','final_cost_won'}
+ input_names={'facility_id','slot','start','end','duration_minutes','is_weekend_or_holiday','is_weekend',
+  'is_holiday','use_date','party_size','eligible_count','eligible_companion_count',
+  'reservation_holder_eligible','base_court_won','lighting_won','lighting_minutes',
+  'optional_lighting_minutes','initial_paid_won','days_before','reason','discount_category','percent'}
+ total_cases=0
+ for file,facility in test_fixtures.items():
+  payload=json.loads((R/file).read_text(encoding='utf-8'))
+  assert payload['facility_id']==facility and payload['format_version']=='2.0',file
+  ids=set()
+  for item in payload['cases']:
+   total_cases+=1
+   assert item['id'] not in ids,(file,item['id'])
+   ids.add(item['id'])
+   assert 'inputs' in item and 'expected' in item,(file,item)
+   assert item['inputs']['facility_id']==facility,(file,item)
+   assert not (set(item['inputs'])-input_names),(file,item)
+   assert not (set(item['expected'])-expected_names),(file,item)
+   assert not {'initial_court_payment_won','refund_discount_won','net_won','total_won','participant_count','base_won'} & set(item),(file,item)
+   inp=item['inputs']
+   if 'is_weekend' in inp and 'is_holiday' in inp:
+    assert inp['is_weekend_or_holiday']==(inp['is_weekend'] or inp['is_holiday']),(file,item)
+   if item['expected'].get('status')=='needs_review':
+    assert item['expected'].get('discount_refund_won') is None,(file,item)
+ assert total_cases==35,total_cases
+ print('PASS: 계산 검증 JSON 35건 공통 입력/기대값 스키마 및 값 보존')
+ # PR #19 TimePolicy 호환성: 고정 회차는 정확히 변환, 구덕은 허용시간 미확인 보존.
+ for facility, expected_slots, period in [
+   ('busan_haeundae_arboretum_tennis',8,('2026-07-01','2026-12-31')),
+   ('busan_samrak_ecopark_tennis',4,('2026-10-01','2027-03-31'))]:
+  result=q.backend_time_policy(db,facility,'2026-11-09')
+  assert result['status']=='compatible' and result['compatible'] and not result['review_items'],result
+  policy=result['policy']
+  assert policy['selection']=='fixed_slot' and len(policy['slots'])==expected_slots,policy
+  assert (policy['effective_from'],policy['effective_to'])==period,policy
+  assert policy['source_id'] and policy['sport']=='tennis',policy
+  assert all(slot['start_time']<slot['end_time'] for slot in policy['slots']),policy
+  assert policy['open_time'] <= min(x['start_time'] for x in policy['slots']),policy
+  assert policy['close_time'] >= max(x['end_time'] for x in policy['slots']),policy
+ g=q.backend_time_policy(db,'busan_gudeok_stadium_tennis','2026-11-09')
+ assert g['status']=='needs_review' and not g['compatible'] and g['policy'] is None,g
+ assert g['review_items'][0]['code']=='allowed_minutes_unverified',g
+ assert g['known_constraints']['selection']=='flexible',g
+ assert g['known_constraints']['open_time']=='08:00' and g['known_constraints']['close_time']=='22:00',g
+ assert g['known_constraints']['max_minutes']==120 and g['known_constraints']['daily_limit_minutes']==120,g
+ assert g['known_constraints']['min_minutes'] is None and g['known_constraints']['step_minutes'] is None,g
+ assert g['known_constraints']['priced_duration_minutes']==[120],g
+ missing=q.backend_time_policy(db,'busan_haeundae_arboretum_tennis','2027-01-01')
+ assert missing['status']=='no_active_rule_set' and missing['policy'] is None,missing
+ print('PASS: PR #19 이용시간 변환(해운대 8회차/삼락 4회차), 구덕 허용시간 미확인 안전 보류')
+ # 감면 적용 대상과 환급 수령인 구분: 해운대는 확인된 인원 비례, 구덕은 대상 이용자별 감면·대표자 환급.
+ with closing(sqlite3.connect(db)) as c:
+  hae=c.execute("SELECT DISTINCT basis FROM v_facility_discounts WHERE facility_id=?", ('busan_haeundae_arboretum_tennis',)).fetchall()
+  gud=c.execute("SELECT DISTINCT basis,note,processing FROM facility_discounts WHERE rule_set_id=?", ('gudeok_tennis_winter_2026_2027',)).fetchall()
+  assert hae==[('per_eligible_person_equal_split',)],hae
+  sam=c.execute("SELECT DISTINCT basis,note FROM facility_discounts WHERE rule_set_id=?", ('samrak_tennis_winter_2026_2027',)).fetchall()
+  assert len(sam)==1 and sam[0][0]=='per_eligible_person_equal_split',sam
+  assert '총 1,500원 반환' in sam[0][1],sam
+  assert '끝전 처리 기준은 미확인' in sam[0][1],sam
+  assert len(gud)==1 and gud[0][0]=='per_eligible_person_equal_split' and '대표' in gud[0][1] and gud[0][2]=='pay_full_then_refund',gud
+  assert c.execute("SELECT COUNT(*) FROM facility_discounts WHERE rule_set_id=?", ('gudeok_tennis_winter_2026_2027',)).fetchone()[0]==8
+ g_cases=json.loads((R/'gudeok_test_cases.json').read_text(encoding='utf-8'))['cases']
+ for case in g_cases:
+  if case['id'] in ('gudeok_discount','gudeok_companion_eligible_only','gudeok_holder_eligible_night'):
+   assert case['expected']['status']=='confirmed' and case['expected']['discount_refund_won'] in (1000,3000) and case['expected']['final_expected_cost_won'] in (7000,5000,27000),case
+ # 중증 장애인 동반 보호자 최대 1명: 세 시설의 감면 규칙 조회 및 증빙 안내 검증
+ for fac in ('busan_haeundae_arboretum_tennis','busan_samrak_ecopark_tennis','busan_gudeok_stadium_tennis'):
+  rules=q.discounts(db,fac,'2026-11-09')
+  disabled=next(x for x in rules if x['category_id']=='disabled')
+  assert disabled['guardian_max_count']==1,disabled
+  assert '심한' in disabled['guardian_condition'] and '보호자 1명' in disabled['guardian_condition'],disabled
+  assert '미확인' in disabled['guardian_evidence_note'],disabled
+  assert all(x['guardian_max_count'] is None for x in rules if x['category_id']!='disabled'),fac
+ assert q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,2,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1500
+
+ # 보호자 수를 명시하지 않으면 오지급 위험이 있으므로 계산 보류.
+ missing_guardian = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,3,'disabled')
+ assert missing_guardian['status']=='needs_review' and missing_guardian['discount_refund_won'] is None
+ # 중증 장애인 1명 + 보호자 2명을 전부 할인하는 것을 차단.
+ excess = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,3,'disabled',guardian_count=2,severe_disabled_count=1)
+ assert excess['status']=='needs_review' and excess['review_items'][0]['code']=='guardian_limit_exceeded', excess
+ # 중증 장애인 1명과 보호자 1명: 정상 50% 개인별 감면.
+ valid = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,2,'disabled',guardian_count=1,severe_disabled_count=1)
+ assert valid['status']=='confirmed' and valid['discount_refund_won']==1500, valid
+ # 중증 장애인이 동반하지 않는 보호자는 감면 불가.
+ no_severe = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,1,'disabled',guardian_count=1,severe_disabled_count=0)
+ assert no_severe['status']=='needs_review' and no_severe['discount_refund_won'] is None
+ print('PASS: 보호자 1명 상한 및 중증 장애인 동반 조건 확인')
+ # PR #21 리뷰 5번: 감면 대상 0명도 동일한 응답 필드와 근거 규정 검사를 사용.
+ zero = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,0,'multi_child')
+ assert zero['status']=='confirmed' and zero['discount_refund_won']==0 and zero['net_court_fee_won']==6000,zero
+ for field in ('facility_id','date','source_url','checked_on','rounding_status',
+               'rounding_policy','base_fee_won','participant_count','eligible_count','discount_category_id'):
+  assert field in zero, (field,zero)
+ # 비례 감면 근거가 없는 규정은 감면 대상이 0명이라도 confirmed로 확정하면 안 된다.
+ incompatible = dict(next(r for r in q.discounts(db,'busan_samrak_ecopark_tennis','2026-11-09')
+                          if r['category_id']=='multi_child'))
+ incompatible['basis']='holder_whole_fee'
+ with patch.object(q,'discounts',return_value=[incompatible]):
+  zero_unknown = q.discount_proration_check(db,'busan_samrak_ecopark_tennis','2026-11-09',6000,4,0,'multi_child')
+ assert zero_unknown['status']=='needs_review' and zero_unknown['discount_refund_won'] is None,zero_unknown
+ assert zero_unknown['review_items'][0]['code']=='discount_proration_unverified',zero_unknown
+ assert all(field in zero_unknown for field in ('facility_id','date','source_url','rounding_status')),zero_unknown
+ print('PASS: 감면 대상 0명 응답 필드 통일 및 비례 감면 근거 선검사')
+
+ import copy as guardian_copy
+ for wrong in (2, -1, '1', True):
+  invalid=guardian_copy.deepcopy(D)
+  next(x for x in invalid['discounts'] if x['id']=='disabled')['guardian_max_count']=wrong
+  invalid_file=tmp/'invalid_guardian_count.json'
+  invalid_file.write_text(json.dumps(invalid,ensure_ascii=False),encoding='utf-8')
+  previous_hash=hashlib.sha256(db.read_bytes()).hexdigest()
+  try: load.load_many([invalid_file], db)
+  except ValueError as exc: assert 'guardian_max_count' in str(exc),str(exc)
+  else: raise AssertionError('잘못된 보호자 정원 허용')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==previous_hash
+ # 리뷰 #6: 타 시설의 장애인 보호자 상한이 0 또는 미확인(NULL)이더라도
+ # 실제 JSON 그대로 적재되어야 하고 강제로 1명 규정이 만들어지면 안 된다.
+ for guardian_limit in (None, 0):
+  alternate=guardian_copy.deepcopy(D)
+  disabled_item=next(x for x in alternate['discounts'] if x['id']=='disabled')
+  disabled_item['guardian_max_count']=guardian_limit
+  disabled_item['guardian_condition']=None
+  disabled_item['guardian_evidence_note']=None
+  alternate_path=tmp/'alternate_guardian_policy.json'
+  alternate_path.write_text(json.dumps(alternate,ensure_ascii=False),encoding='utf-8')
+  alternate_db=tmp/'alternate_guardian.sqlite3'
+  if alternate_db.exists(): alternate_db.unlink()
+  load.load_many([alternate_path],alternate_db)
+  facility_id='busan_haeundae_arboretum_tennis'
+  rule=next(x for x in q.discounts(alternate_db,facility_id,'2026-11-09') if x['category_id']=='disabled')
+  assert rule['guardian_max_count']==guardian_limit and rule['guardian_condition'] is None,rule
+  ordinary=q.discount_proration_check(alternate_db,facility_id,'2026-11-09',8000,4,1,'disabled')
+  assert ordinary['status']=='confirmed' and ordinary['discount_refund_won']==1000,ordinary
+  guardian=q.discount_proration_check(alternate_db,facility_id,'2026-11-09',8000,4,2,'disabled',guardian_count=1,severe_disabled_count=1)
+  assert guardian['status']=='needs_review' and guardian['discount_refund_won'] is None,guardian
+  alternate_db.unlink()
+ # 보호자 상한 1인 시설은 조건이 빠진 JSON을 거부하고 DB를 보존한다.
+ invalid=guardian_copy.deepcopy(D)
+ next(x for x in invalid['discounts'] if x['id']=='disabled')['guardian_condition']=None
+ invalid_file=tmp/'invalid_guardian_condition.json'
+ invalid_file.write_text(json.dumps(invalid,ensure_ascii=False),encoding='utf-8')
+ try: load.load_many([invalid_file],db)
+ except ValueError as exc: assert 'guardian_condition' in str(exc),str(exc)
+ else: raise AssertionError('보호자 감면 조건 누락 허용')
+ print('PASS: 시설별 보호자 상한 0/NULL 지원 및 미확인 보호자 감면 계산 보류')
+ print('PASS: 중증 장애인 동반 보호자 1명 포함 규칙 세 시설 저장·조회')
+ print('PASS: 세 시설 인원별 비례 감면, 구덕 환급 수령인은 대표 예약자')
+ # 세 시설 모두 공식 끝전 처리 기준 미확인: NULL 저장·조회 및 검증 사례 확인
+ with closing(sqlite3.connect(db)) as c:
+  rows=c.execute('SELECT r.facility_id, d.discount_rounding_policy FROM facility_discounts d JOIN rule_sets r ON r.id=d.rule_set_id').fetchall()
+  assert len(rows)==31 and all(policy is None for _, policy in rows),rows
+ for fac in ('busan_haeundae_arboretum_tennis','busan_samrak_ecopark_tennis','busan_gudeok_stadium_tennis'):
+  rules=q.discounts(db,fac,'2026-11-09')
+  assert rules and all(x['discount_rounding_policy'] is None and x['rounding_status']=='unverified' for x in rules),fac
+ ha='busan_haeundae_arboretum_tennis'; sa='busan_samrak_ecopark_tennis'; gu='busan_gudeok_stadium_tennis'
+ assert q.discount_proration_check(db,ha,'2026-11-09',8000,4,2,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==2000
+ assert q.discount_proration_check(db,sa,'2026-11-09',6000,4,2,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1500
+ assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,1,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==1000
+ assert q.discount_proration_check(db,gu,'2026-11-09',8000,4,3,'disabled', guardian_count=0, severe_disabled_count=0)['discount_refund_won']==3000
+ # 9번 회귀: 총 감면액은 정수라도 1인당 금액에 끝전이 있으면 확정하지 않는다.
+ # 8,000원 / 3명 * 50% = 1인당 1,333.333...원, 3명 합계는 4,000원이지만
+ # 이 규칙은 사람별 감면액이 기준이므로 공식 끝전 정책이 없으면 needs_review.
+ result=q.discount_proration_check(db,gu,'2026-11-09',8000,3,3,'disabled', guardian_count=0, severe_disabled_count=0)
+ assert result['status']=='needs_review' and result['discount_refund_won'] is None,result
+ assert result['review_items'][0]['code']=='discount_rounding_unverified',result
+ for fac,fee,n,code in [(ha,8000,3,'discount_rounding_unverified'),
+                         (sa,6000,7,'discount_rounding_unverified'),
+                         (gu,8000,3,'discount_rounding_unverified')]:
+  result=q.discount_proration_check(db,fac,'2026-11-09',fee,n,1,'disabled', guardian_count=0, severe_disabled_count=0)
+  assert result['status']=='needs_review' and result['discount_refund_won'] is None and result['net_court_fee_won'] is None,result
+  assert result['review_items'][0]['code']==code,result
+ for path,ident in [('test_cases.json','T_rounding_unverified'),
+                    ('samrak_test_cases.json','S_rounding_unverified'),
+                    ('gudeok_test_cases.json','gudeok_rounding_unverified')]:
+  cases=json.loads((R/path).read_text(encoding='utf-8'))['cases']
+  case=next(x for x in cases if x['id']==ident)
+  expected=case['expected']
+  assert expected['status']=='needs_review' and expected.get('discount_refund_won') is None,case
+ import copy as rounding_copy
+ for bad_value in ('round_up', 'unknown_policy', 0, False):
+  changed=rounding_copy.deepcopy(D)
+  changed['discount_common']['rounding_policy']=bad_value
+  badfile=tmp/'invalid_discount_rounding.json'
+  badfile.write_text(json.dumps(changed,ensure_ascii=False),encoding='utf-8')
+  before=hashlib.sha256(db.read_bytes()).hexdigest()
+  try:load.load_many([badfile],db)
+  except ValueError as exc:assert 'rounding_policy' in str(exc),str(exc)
+  else:raise AssertionError('공식 근거 없는 끝전 처리 기준을 적재함')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==before
+ # 스키마가 허용하는 5개 정책이 적재 가능하며 확인된 규정은 계산 분기에 도달해야 한다.
+ # 아래 값은 정책별 계산 로직 테스트용 가상 데이터이며 실제 시설의 공식 정책을 뜻하지 않는다.
+ allowed=('round_half_up','floor_won','ceil_won','truncate_10_won','truncate_100_won')
+ schema=(R/'schema.sql').read_text(encoding='utf-8')
+ for policy in allowed:
+  assert f"'{policy}'" in schema
+  changed=rounding_copy.deepcopy(D)
+  changed['discount_common']['rounding_policy']=policy
+  sample=tmp/f'rounding_{policy}.json'
+  sample.write_text(json.dumps(changed,ensure_ascii=False),encoding='utf-8')
+  isolated=tmp/f'rounding_{policy}.sqlite3'
+  load.load_many([sample],isolated)
+  with closing(sqlite3.connect(isolated)) as c:
+   stored=c.execute('SELECT DISTINCT discount_rounding_policy FROM facility_discounts').fetchall()
+   assert stored==[(policy,)],(policy,stored)
+  result=q.discount_proration_check(isolated,ha,'2026-11-09',8000,3,1,'disabled',guardian_count=0,severe_disabled_count=0)
+  expected={'round_half_up':1333,'floor_won':1333,'ceil_won':1334,
+            'truncate_10_won':1330,'truncate_100_won':1300}[policy]
+  assert result['status']=='confirmed' and result['discount_refund_won']==expected,(policy,result)
+  assert result['rounding_status']=='confirmed' and result['rounding_policy']==policy,(policy,result)
+  # 정수 4,005원도 10원/100원 미만 버림 정책을 반드시 적용해야 한다.
+  integer_result=q.discount_proration_check(
+      isolated,ha,'2026-11-09',8010,1,1,'disabled',
+      guardian_count=0,severe_disabled_count=0)
+  integer_expected={'round_half_up':4005,'floor_won':4005,'ceil_won':4005,
+                    'truncate_10_won':4000,'truncate_100_won':4000}[policy]
+  assert integer_result['status']=='confirmed' and integer_result['discount_refund_won']==integer_expected,(policy,integer_result)
+  assert integer_result['net_court_fee_won']==8010-integer_expected,(policy,integer_result)
+  # 100원 미만 버림은 4,095원에도 적용돼야 한다.
+  if policy=='truncate_100_won':
+   result_4095=q.discount_proration_check(
+       isolated,ha,'2026-11-09',8190,1,1,'disabled',
+       guardian_count=0,severe_disabled_count=0)
+   assert result_4095['discount_refund_won']==4000,result_4095
+ print('PASS: 허용된 5개 끝전 정책 적재/계산 및 미허용 정책 차단')
+ print('PASS: 세 시설 감면 끝전 처리 NULL/미확인, 정수 사례 유지, 소수점 끝전 미확인 needs_review')
+ # source.license는 검증된 이용조건이 없으므로 NULL이어야 한다.
+ with closing(sqlite3.connect(db)) as c:
+  licenses=c.execute('SELECT id,license FROM sources ORDER BY id').fetchall()
+  assert len(licenses)==3 and all(value is None for _,value in licenses),licenses
+  assert any(row[1]=='license' for row in c.execute('PRAGMA table_info(sources)'))
+ rows=q.sources(db)
+ assert len(rows)==3,rows
+ assert all(row['license'] is None and row['license_status']=='unverified' for row in rows),rows
+ assert len(q.sources(db,'busan_samrak_ecopark_tennis','2026-11-09'))==1
+ assert q.sources(db,'busan_samrak_ecopark_tennis','2026-11-09')[0]['license_status']=='unverified'
+ assert q.sources(db,'busan_samrak_ecopark_tennis','2028-11-09')==[]
+ import copy as license_copy
+ for mutation,message in [
+   (lambda d: d['source'].pop('license'), 'source.license 필수'),
+   (lambda d: d['source'].update(license=''), 'source.license는'),
+   (lambda d: d['source'].update(license='   '), 'source.license는'),
+   (lambda d: d['source'].update(license=123), 'source.license는'),
+ ]:
+  bad=license_copy.deepcopy(D)
+  mutation(bad)
+  path=tmp/'invalid_license.json'
+  path.write_text(json.dumps(bad,ensure_ascii=False),encoding='utf-8')
+  digest=hashlib.sha256(db.read_bytes()).hexdigest()
+  try:load.load_many([path],db)
+  except ValueError as exc: assert message in str(exc),str(exc)
+  else:raise AssertionError('잘못된 license 값을 수락함')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==digest
+ # 확인된 라이선스가 명시된 별도 데이터로 재생성하면 저장·조회 가능하다.
+ verified=license_copy.deepcopy(D)
+ verified['source']['license']='테스트용 이용조건 (공식 확인값 아님)'
+ validfile=tmp/'test_license.json'
+ validfile.write_text(json.dumps(verified,ensure_ascii=False),encoding='utf-8')
+ licensed_db=tmp/'license.sqlite3'
+ load.load_many([validfile],licensed_db)
+ info=q.sources(licensed_db,verified['facility']['id'],'2026-11-09')
+ assert len(info)==1 and info[0]['license']==verified['source']['license'] and info[0]['license_status']=='confirmed',info
+ print('PASS: 출처 3건 license=NULL, 상태 unverified, 시설/기간 조회, 검증된 값 저장, 잘못된 입력 거부 및 원본 보존')
+ # 정기 휴장 규칙은 적용기간/출처와 연결되고, 휴장 코드가 명시적으로 저장된다.
+ with closing(sqlite3.connect(db)) as c:
+  rows=c.execute('SELECT r.facility_id,c.closure_type,c.closure_value FROM closure_rules c JOIN rule_sets r ON r.id=c.rule_set_id').fetchall()
+  found={}
+  for fac,kind,value in rows: found.setdefault(fac,set()).add((kind,value))
+  assert found == {
+   'busan_haeundae_arboretum_tennis': {('annual_date','01-01'),('holiday_code','lunar_new_year_day'),('holiday_code','chuseok_day')},
+   'busan_samrak_ecopark_tennis': {('holiday_code','lunar_new_year_day'),('holiday_code','chuseok_day')},
+  },found
+ ha='busan_haeundae_arboretum_tennis'
+ sa='busan_samrak_ecopark_tennis'
+ gu='busan_gudeok_stadium_tennis'
+ assert q.closure_status(db,ha,'2026-11-09')['status']=='needs_calendar_resolution'
+ assert q.closure_status(db,ha,'2026-12-31',[])['status']=='no_scheduled_closure'
+ assert load.CLOSURE_HOLIDAY_CODES == frozenset(('lunar_new_year_day','chuseok_day'))
+ assert q.closure_status(db,sa,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
+ # 조회 함수가 load의 상수를 직접 참조하므로 새로운 코드 추가 시 서로 어긋나지 않는다.
+ with patch.object(load, 'CLOSURE_HOLIDAY_CODES', load.CLOSURE_HOLIDAY_CODES | {'sample_future_holiday'}):
+  assert q.closure_status(db,sa,'2027-02-07',['sample_future_holiday'])['status']=='no_scheduled_closure'
+ try:
+  q.closure_status(db,sa,'2027-02-07',['unsupported_holiday'])
+  raise AssertionError('지원되지 않는 휴장 코드를 허용함')
+ except ValueError as exc:
+  assert 'holiday_codes' in str(exc)
+
+ assert q.closure_status(db,sa,'2027-02-07',[])['status']=='no_scheduled_closure'
+ assert q.closure_status(db,gu,'2026-11-09')['status']=='no_scheduled_closure'
+ assert len(q.closure_rules(db,ha,'2026-11-09'))==3
+ assert len(q.closure_rules(db,sa,'2026-11-09'))==2
+ assert len(q.closure_rules(db,gu,'2026-11-09'))==0
+ assert q.closure_status(db,ha,'2027-01-01')['status']=='no_active_rule_set'
+ # 휴장 규정 필수/형식/중복/규정기간 검증 및 적재 원본 보존
+ import copy
+ for modified,expected_message in [
+  (lambda d: d.pop('closure_rules'), 'closure_rules'),
+  (lambda d: d.update(closure_rules=[{'type':'holiday_code','value':'unknown','note':'명절'}]),'지원하지 않는 휴장 명절 코드'),
+  (lambda d: d.update(closure_rules=[{'type':'exact_date','value':'2027-01-01','note':'예시'}]),'규정 적용기간 밖'),
+  (lambda d: d.update(closure_rules=[{'type':'annual_date','value':'02-30','note':'오류'}]),'양력 반복일 형식 오류'),
+  (lambda d: d.update(closure_rules=d['closure_rules']+d['closure_rules'][:1]),'중복 휴장 규정'),
+ ]:
+  changed=copy.deepcopy(D)
+  modified(changed)
+  badfile=tmp/'invalid_closure.json'
+  badfile.write_text(json.dumps(changed,ensure_ascii=False),encoding='utf-8')
+  before=hashlib.sha256(db.read_bytes()).hexdigest()
+  try:load.load_many([badfile],db)
+  except ValueError as exc:
+   assert expected_message in str(exc),(expected_message,str(exc))
+  else:raise AssertionError('잘못된 휴장 데이터가 적재됨')
+  assert hashlib.sha256(db.read_bytes()).hexdigest()==before,'잘못된 JSON 때문에 DB 변경됨'
+ print('PASS: 정기 휴장 5개 구조화, 적용기간/출처 연결, 명절 미해석 보류, 날짜 판정, 오류 JSON 원본 보존')
+ listed = {row['id']: row['district'] for row in q.facilities(db)}
+ assert listed == {
+  'busan_haeundae_arboretum_tennis': '해운대구',
+  'busan_samrak_ecopark_tennis': '사상구',
+  'busan_gudeok_stadium_tennis': '서구',
+ }, '시설 조회 district 결과 오류'
+ # 삼락 공식 이용안내: 평일 6,000원 / 주말 및 공휴일 9,000원 (2026-11-10 확인).
+ sa='busan_samrak_ecopark_tennis'; holiday='2026-12-25'  # 금요일 공휴일
+ holiday_price=q.quote(db,sa,holiday,'08:00','10:00',True)
+ weekday_price=q.quote(db,sa,'2026-12-24','08:00','10:00',False)
+ assert holiday_price['status']=='priced' and holiday_price['total_won']==9000,holiday_price
+ assert weekday_price['status']=='priced' and weekday_price['total_won']==6000,weekday_price
+ holiday_case=next(c for c in json.loads((R/'samrak_test_cases.json').read_text(encoding='utf-8'))['cases'] if c['id']=='S_holiday_9000_confirmed')
+ assert holiday_case['inputs']['is_holiday'] is True and holiday_case['inputs']['is_weekend'] is False
+ assert holiday_case['expected']['initial_payment_won']==holiday_price['total_won']
+ print('PASS: 삼락 평일 6,000원, 공휴일 9,000원 (운영기관 공식 요금표)')
  checks=[('busan_haeundae_arboretum_tennis','09:00','11:00',False,0,8000),('busan_haeundae_arboretum_tennis','20:00','22:00',False,0,28000),('busan_haeundae_arboretum_tennis','18:00','20:00',False,80,21200),('busan_samrak_ecopark_tennis','08:00','10:00',False,70,26000),('busan_samrak_ecopark_tennis','08:00','10:00',True,0,9000),('busan_gudeok_stadium_tennis','17:00','19:00',False,0,18000),('busan_gudeok_stadium_tennis','18:00','20:00',False,0,28000)]
  for fac,start,end,week,light,expected in checks:
   actual=q.quote(db,fac,'2026-11-09',start,end,week,light)
@@ -46,6 +441,7 @@ with tempfile.TemporaryDirectory() as tmp:
  # 잘못된 데이터가 반드시 기대한 검증 오류로 거부되는지 확인한다.
  # 무관한 KeyError/SQLite 오류가 발생하면 검증 성공으로 처리하지 않는다.
  invalid_cases = [
+  ('facility', 'district', '', 'facility.district 누락'),
   ('source', 'checked_on', '2026-13-55', 'source.checked_on 날짜 오류'),
   ('reservation', 'online_open_days_before', -1, 'reservation.online_open_days_before 오류'),
   ('facility', 'name', '', 'facility.name 누락'),
@@ -261,4 +657,5 @@ with tempfile.TemporaryDirectory() as tmp:
  print('PASS: YYYYMMDD 날짜 조회·저장 정규화, 구분자 있는 날짜와 동일 결과, 잘못된 날짜 차단')
  print('PASS: 규정 ID 변경 시 기간 중복 차단(고정회차/시간제), 동일 ID 갱신, 인접 기간, 원본 DB 보존')
  print('PASS: 시간제 시설 2곳 추가 시 PK 충돌 없음, 평일/주말 1시간 요금 분리 확인')
+ print('PASS: 시설별 district 3곳 저장·조회 및 빈 값 입력 차단')
  print('PASS: JSON 3개 재적재, DB 무결성, 확인된 요금 계산 7건 및 미확인 요금 2건 확인 필요, 잘못된 JSON 4건 차단 및 DB 원본 보존')
