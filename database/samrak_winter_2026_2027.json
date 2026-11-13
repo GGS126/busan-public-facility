@@ -8,15 +8,17 @@
     "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=395",
     "open_time": "08:00",
     "close_time": "17:00",
-    "holiday_note": "설 당일, 추석 당일 휴장"
+    "holiday_note": "설 당일, 추석 당일 휴장",
+    "district": "사상구"
   },
   "source": {
     "id": "busan_reserve_395_winter_2026",
     "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=395",
     "title": "부산광역시 통합예약 - 삼락생태공원 테니스장 동절기",
-    "checked_on": "2026-11-06",
+    "checked_on": "2026-11-10",
     "verification_level": "user_transcribed_official",
-    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06)."
+    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06). 공휴일 요금은 낙동강관리본부 공식 이용안내(https://www.busan.go.kr/nakdong/ndreservation, 2026-11-10 확인)의 테니스장 1면/2시간 평일 6,000원, 주말 및 공휴일 9,000원 표를 추가 근거로 확인.",
+    "license": null
   },
   "rule_set": {
     "id": "samrak_tennis_winter_2026_2027",
@@ -69,7 +71,10 @@
     },
     {
       "id": "disabled",
-      "category": "장애인"
+      "category": "장애인",
+      "guardian_max_count": 1,
+      "guardian_condition": "장애의 정도가 심한 등록장애인과 함께 해당 시설을 실제로 이용하는 보호자 1명에 한하여 감면 대상 인원에 포함",
+      "guardian_evidence_note": "장애인등록증 등 감면 자격 증빙 및 시설별 감면신청 절차 필요. 보호자 관계 증빙의 구체적인 서류 종류는 미확인."
     },
     {
       "id": "merit_families",
@@ -99,12 +104,13 @@
   "discount_common": {
     "percent": 50,
     "basis": "per_eligible_person_equal_split",
+    "rounding_policy": null,
     "applies_to": "base_court_fee_only",
     "excluded_from": "lighting_fee",
     "processing": "pay_full_then_refund",
     "documents": "대상자별 이름과 증빙서류를 반환신청 게시판에 제출. 다자녀 가족사랑카드·모바일카드·차량스티커, 없으면 등본 또는 가족관계증명서. 다자녀 가족은 1부로 대체 가능.",
     "deadline": "경기장 이용시간 전 반환신청 게시판 접수",
-    "note": "코트 전체에 일괄 할인하지 않고 감면자 개인의 균등분할 몫에 50% 적용. 부산광역시 낙동강 생태공원 보전 및 운영에 관한 조례 제12조 참조."
+    "note": "공식 예약 안내 확인: 할인율은 코트당 적용하지 않고 감면 대상 이용자에게 개별 적용. 평일 6,000원, 4명 중 2명 감면 시 6,000÷4×50%=750원/인, 총 1,500원 반환. 소수점이 발생하는 끝전 처리 기준은 미확인. 부산광역시 낙동강 생태공원 보전 및 운영에 관한 조례 제12조 참조."
   },
   "refunds": [
     {
@@ -181,6 +187,18 @@
       "hour_price": 10000,
       "extra_unit_minutes": null,
       "extra_unit_price": null
+    }
+  ],
+  "closure_rules": [
+    {
+      "type": "holiday_code",
+      "value": "lunar_new_year_day",
+      "note": "설날 당일 휴장"
+    },
+    {
+      "type": "holiday_code",
+      "value": "chuseok_day",
+      "note": "추석 당일 휴장"
     }
   ]
 }

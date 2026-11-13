@@ -5,6 +5,7 @@
       "id": "T01",
       "description": "평일 2시간 기본",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 1,
         "is_weekend_or_holiday": false,
         "party_size": 4,
@@ -12,7 +13,7 @@
         "optional_lighting_minutes": 0
       },
       "expected": {
-        "initial_court_payment_won": 8000,
+        "initial_payment_won": 8000,
         "optional_lighting_on_site_won": 0,
         "discount_refund_won": 0,
         "final_expected_cost_won": 8000
@@ -22,6 +23,7 @@
       "id": "T02",
       "description": "주말 2시간 기본",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 1,
         "is_weekend_or_holiday": true,
         "party_size": 4,
@@ -29,7 +31,7 @@
         "optional_lighting_minutes": 0
       },
       "expected": {
-        "initial_court_payment_won": 12000,
+        "initial_payment_won": 12000,
         "optional_lighting_on_site_won": 0,
         "discount_refund_won": 0,
         "final_expected_cost_won": 12000
@@ -39,6 +41,7 @@
       "id": "T03",
       "description": "평일 13~14시 1시간 회차",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 4,
         "is_weekend_or_holiday": false,
         "party_size": 2,
@@ -46,7 +49,7 @@
         "optional_lighting_minutes": 0
       },
       "expected": {
-        "initial_court_payment_won": 4000,
+        "initial_payment_won": 4000,
         "optional_lighting_on_site_won": 0,
         "discount_refund_won": 0,
         "final_expected_cost_won": 4000
@@ -56,6 +59,7 @@
       "id": "T04",
       "description": "평일 야간 20~22시 의무 조명 포함",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 8,
         "is_weekend_or_holiday": false,
         "party_size": 4,
@@ -63,7 +67,7 @@
         "optional_lighting_minutes": 0
       },
       "expected": {
-        "initial_court_payment_won": 28000,
+        "initial_payment_won": 28000,
         "base_court_won": 8000,
         "mandatory_lighting_won": 20000,
         "discount_refund_won": 0,
@@ -74,6 +78,7 @@
       "id": "T05",
       "description": "주말 야간 20~22시 의무 조명 포함",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 8,
         "is_weekend_or_holiday": true,
         "party_size": 4,
@@ -81,7 +86,7 @@
         "optional_lighting_minutes": 0
       },
       "expected": {
-        "initial_court_payment_won": 32000,
+        "initial_payment_won": 32000,
         "base_court_won": 12000,
         "mandatory_lighting_won": 20000,
         "discount_refund_won": 0,
@@ -92,6 +97,7 @@
       "id": "T06",
       "description": "평일 4명 중 2명 감면, 선결제 후 환급",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 1,
         "is_weekend_or_holiday": false,
         "party_size": 4,
@@ -99,7 +105,7 @@
         "optional_lighting_minutes": 0
       },
       "expected": {
-        "initial_court_payment_won": 8000,
+        "initial_payment_won": 8000,
         "discount_refund_won": 2000,
         "final_expected_cost_won": 6000
       }
@@ -108,6 +114,7 @@
       "id": "T07",
       "description": "평일 야간 4명 중 2명 감면, 조명료 제외",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 8,
         "is_weekend_or_holiday": false,
         "party_size": 4,
@@ -115,7 +122,7 @@
         "optional_lighting_minutes": 0
       },
       "expected": {
-        "initial_court_payment_won": 28000,
+        "initial_payment_won": 28000,
         "discount_refund_won": 2000,
         "final_expected_cost_won": 26000
       }
@@ -124,6 +131,7 @@
       "id": "T08",
       "description": "선택 조명 1시간 20분 현장 결제, 평일 18~20시",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "slot": 7,
         "is_weekend_or_holiday": false,
         "party_size": 4,
@@ -131,7 +139,7 @@
         "optional_lighting_minutes": 80
       },
       "expected": {
-        "initial_court_payment_won": 8000,
+        "initial_payment_won": 8000,
         "optional_lighting_on_site_won": 13200,
         "discount_refund_won": 0,
         "final_expected_cost_won": 21200
@@ -141,6 +149,7 @@
       "id": "T09",
       "description": "사용일 3일 전 사용자 취소",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "initial_paid_won": 8000,
         "days_before": 3,
         "reason": "user_cancel"
@@ -155,6 +164,7 @@
       "id": "T10",
       "description": "사용일 2일 전 사용자 취소",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "initial_paid_won": 8000,
         "days_before": 2,
         "reason": "user_cancel"
@@ -169,6 +179,7 @@
       "id": "T11",
       "description": "사용일 1일 전 사용자 취소",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "initial_paid_won": 8000,
         "days_before": 1,
         "reason": "user_cancel"
@@ -183,6 +194,7 @@
       "id": "T12",
       "description": "사용일 당일 사용자 취소",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "initial_paid_won": 8000,
         "days_before": 0,
         "reason": "user_cancel"
@@ -197,6 +209,7 @@
       "id": "H_OPTION_30",
       "description": "해운대 선택 조명 30분 (60분 미만 단위 요금)",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "lighting_minutes": 30
       },
       "expected": {
@@ -207,11 +220,31 @@
       "id": "H_OPTION_60",
       "description": "해운대 선택 조명 60분",
       "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
         "lighting_minutes": 60
       },
       "expected": {
         "optional_lighting_on_site_won": 10000
       }
+    },
+    {
+      "id": "T_rounding_unverified",
+      "description": "감면 대상자 1명: 원 미만 끝전 기준 미확인",
+      "inputs": {
+        "facility_id": "busan_haeundae_arboretum_tennis",
+        "party_size": 3,
+        "eligible_count": 1,
+        "discount_category": "disabled",
+        "base_court_won": 8000
+      },
+      "expected": {
+        "status": "needs_review",
+        "discount_refund_won": null,
+        "final_expected_cost_won": null,
+        "review_code": "discount_rounding_unverified"
+      }
     }
-  ]
+  ],
+  "format_version": "2.0",
+  "facility_id": "busan_haeundae_arboretum_tennis"
 }

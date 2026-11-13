@@ -1,6 +1,7 @@
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS facilities (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, facility_type TEXT NOT NULL,
+ district TEXT NOT NULL CHECK(length(trim(district)) > 0),
  address TEXT NOT NULL, phone TEXT, booking_url TEXT NOT NULL,
  open_time TEXT, close_time TEXT,
  holiday_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -8,6 +9,7 @@ CREATE TABLE IF NOT EXISTS facilities (
 CREATE TABLE IF NOT EXISTS sources (
  id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL,
  checked_on TEXT, verification_level TEXT NOT NULL CHECK(verification_level IN ('official_page_verified','user_transcribed_official')),
+ license TEXT CHECK(license IS NULL OR length(trim(license)) > 0),
  note TEXT
 );
 CREATE TABLE IF NOT EXISTS rule_sets (
@@ -25,6 +27,9 @@ CREATE TABLE IF NOT EXISTS facility_discounts (
  rule_set_id TEXT NOT NULL REFERENCES rule_sets(id) ON DELETE CASCADE,
  category_id TEXT NOT NULL REFERENCES discount_categories(id),
  percent INTEGER NOT NULL CHECK(percent BETWEEN 0 AND 100),
+ guardian_max_count INTEGER CHECK(guardian_max_count BETWEEN 0 AND 1),
+ guardian_condition TEXT, guardian_evidence_note TEXT,
+ discount_rounding_policy TEXT CHECK(discount_rounding_policy IN ('round_half_up', 'floor_won', 'ceil_won', 'truncate_10_won', 'truncate_100_won') OR discount_rounding_policy IS NULL),
  basis TEXT NOT NULL, applies_to TEXT NOT NULL, excluded_from TEXT,
  processing TEXT NOT NULL, documents TEXT, deadline TEXT,
  note TEXT, original_group_label TEXT NOT NULL,
@@ -44,12 +49,22 @@ CREATE TABLE IF NOT EXISTS reservation_rules (
  normal_cancel_online_min_days_before INTEGER NOT NULL,
  closure_note TEXT
 );
+-- 정기 휴장: 양력 반복일/특정 날짜/명절 코드, 소속 규정기간 및 출처 연결
+CREATE TABLE IF NOT EXISTS closure_rules (
+ id TEXT PRIMARY KEY,
+ rule_set_id TEXT NOT NULL REFERENCES rule_sets(id) ON DELETE CASCADE,
+ closure_type TEXT NOT NULL CHECK(closure_type IN ('annual_date','exact_date','holiday_code')),
+ closure_value TEXT NOT NULL CHECK(length(trim(closure_value)) > 0),
+ note TEXT NOT NULL CHECK(length(trim(note)) > 0),
+ UNIQUE(rule_set_id,closure_type,closure_value)
+);
+CREATE INDEX IF NOT EXISTS ix_closure_ruleset ON closure_rules(rule_set_id);
 CREATE INDEX IF NOT EXISTS ix_rules_date ON rule_sets(facility_id,effective_from,effective_to);
 
 CREATE VIEW IF NOT EXISTS v_facility_discounts AS
  SELECT f.id AS facility_id, f.name AS facility_name, r.id AS rule_set_id,
  r.effective_from,r.effective_to,c.id AS category_id,c.name AS category_name,
- d.percent,d.basis,d.applies_to,d.excluded_from,d.processing,d.deadline,
+ d.percent,d.guardian_max_count,d.guardian_condition,d.guardian_evidence_note,d.discount_rounding_policy,d.basis,d.applies_to,d.excluded_from,d.processing,d.deadline,
  d.documents,d.note,d.original_group_label,s.url AS source_url,s.checked_on
  FROM facility_discounts d JOIN discount_categories c ON d.category_id=c.id
  JOIN rule_sets r ON r.id=d.rule_set_id JOIN facilities f ON f.id=r.facility_id
