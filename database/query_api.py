@@ -245,7 +245,8 @@ def discount_proration_check(db, facility_id, use_date, base_fee_won,
     policy = rule['discount_rounding_policy']
     # 'per_eligible_person_equal_split'은 1인당 반환액을 먼저 계산하는 방식.
     # 각 감면 대상자의 반환액을 원 단위로 처리한 후 인원수만큼 합산한다.
-    if refund_per_person.denominator == 1:
+    if policy is None and refund_per_person.denominator == 1:
+        # 공식 절사 정책이 없을 때만 정수 금액을 그대로 사용한다.
         rounded_per_person = int(refund_per_person)
     elif policy is None:
         return {**base,'status':'needs_review','discount_refund_won':None,

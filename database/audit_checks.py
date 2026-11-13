@@ -290,6 +290,20 @@ with tempfile.TemporaryDirectory() as tmp:
             'truncate_10_won':1330,'truncate_100_won':1300}[policy]
   assert result['status']=='confirmed' and result['discount_refund_won']==expected,(policy,result)
   assert result['rounding_status']=='confirmed' and result['rounding_policy']==policy,(policy,result)
+  # 정수 4,005원도 10원/100원 미만 버림 정책을 반드시 적용해야 한다.
+  integer_result=q.discount_proration_check(
+      isolated,ha,'2026-11-09',8010,1,1,'disabled',
+      guardian_count=0,severe_disabled_count=0)
+  integer_expected={'round_half_up':4005,'floor_won':4005,'ceil_won':4005,
+                    'truncate_10_won':4000,'truncate_100_won':4000}[policy]
+  assert integer_result['status']=='confirmed' and integer_result['discount_refund_won']==integer_expected,(policy,integer_result)
+  assert integer_result['net_court_fee_won']==8010-integer_expected,(policy,integer_result)
+  # 100원 미만 버림은 4,095원에도 적용돼야 한다.
+  if policy=='truncate_100_won':
+   result_4095=q.discount_proration_check(
+       isolated,ha,'2026-11-09',8190,1,1,'disabled',
+       guardian_count=0,severe_disabled_count=0)
+   assert result_4095['discount_refund_won']==4000,result_4095
  print('PASS: 허용된 5개 끝전 정책 적재/계산 및 미허용 정책 차단')
  print('PASS: 세 시설 감면 끝전 처리 NULL/미확인, 정수 사례 유지, 소수점 끝전 미확인 needs_review')
  # source.license는 검증된 이용조건이 없으므로 NULL이어야 한다.
