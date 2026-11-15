@@ -14,6 +14,7 @@ from app.models import (
     FeeItem,
     FeeResult,
     FeeRule,
+    HolidayCalendar,
     ReviewItem,
     to_minutes,
 )
@@ -30,6 +31,61 @@ class NeedsReview(Exception):
 
 
 def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
+    """공휴일인지 알 수 없는 날은 공휴일인 경우와 아닌 경우를 모두 계산한다.
+
+    두 경우의 금액이 같으면 그 금액을 보여 주고, 다르거나 계산하지 못하면 확인 필요로 보낸다.
+    """
+    unavailable = _check_time(rules, conditions)
+    if unavailable is not None:
+        return unavailable
+
+    results = [
+        _calculate(rules, conditions, day_types)
+        for day_types in _day_type_candidates(conditions.date, rules.holiday_calendar)
+    ]
+    first = results[0]
+    if all(_amount_key(result) == _amount_key(first) for result in results):
+        return first
+    return FeeResult(
+        status="needs_review",
+        items=[],
+        total=None,
+        payment_due=None,
+        expected_refund=None,
+        net_cost_after_refund=None,
+        review_items=[
+            ReviewItem(
+                code="rule_missing",
+                target=_differing_target(results),
+                reason="이용일이 공휴일인지 확인할 수 없습니다.",
+                source_id=rules.source_id,
+            )
+        ],
+    )
+
+
+def _amount_key(result: FeeResult) -> tuple:
+    """이용자에게 보이는 금액과 확인 필요 사유. 근거 규정이 달라도 금액이 같으면 같은 결과로 본다."""
+    if result.status != "calculated":
+        return (result.status, tuple((r.code, r.target, r.reason, r.source_id) for r in result.review_items))
+    sums = {}
+    for item in result.items:
+        sums[item.type] = sums.get(item.type, 0) + item.amount
+    return (result.status, tuple(sorted(sums.items())), result.payment_due, result.expected_refund)
+
+
+def _differing_target(results: list[FeeResult]) -> str:
+    def section(result: FeeResult, target: str) -> tuple:
+        reviews = sorted(r.code for r in result.review_items if r.target == target)
+        return (sum(item.amount for item in result.items if item.type == target), reviews)
+
+    for target in ("base", "lighting", "discount"):
+        if any(section(result, target) != section(results[0], target) for result in results):
+            return target
+    return "base"
+
+
+def _calculate(rules: FacilityRules, conditions: Conditions, day_types: set[str]) -> FeeResult:
     items: list[FeeItem] = []
     reviews: list[ReviewItem] = []
 
@@ -49,8 +105,8 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
             )
             return False
 
-    base_ok = attempt("base", lambda: _base_items(rules, conditions))
-    lighting_ok = attempt("lighting", lambda: _lighting_items(rules, conditions))
+    base_ok = attempt("base", lambda: _base_items(rules, conditions, day_types))
+    lighting_ok = attempt("lighting", lambda: _lighting_items(rules, conditions, day_types))
     attempt("discount", lambda: _discount_items(rules, conditions, items, base_ok, lighting_ok))
 
     if reviews:
@@ -77,21 +133,70 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
     )
 
 
-def _day_types(day: date, holidays: list[date]) -> set[str]:
+def _check_time(rules: FacilityRules, conditions: Conditions) -> FeeResult | None:
+    """규정상 예약할 수 없는 시간이면 요금을 계산하지 않고 사유를 돌려준다.
+
+    이용일에 유효한 이용시간 규정이 없으면 제한을 확인하지 않고, 요금 규정이 있는지로 판단한다.
+    """
+    policies = [
+        p for p in rules.time_policies if p.sport == conditions.sport and p.in_effect(conditions.date)
+    ]
+    if not policies:
+        return None
+    if len(policies) > 1:
+        return _not_calculated("needs_review", "rule_conflict", "이용시간 규정이 충돌합니다.", policies[0].source_id)
+
+    policy = policies[0]
+    start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
+    if policy.open_time is not None and (
+        start < to_minutes(policy.open_time) or end > to_minutes(policy.close_time)
+    ):
+        reason = f"운영시간({policy.open_time}~{policy.close_time}) 안에서 선택해 주세요."
+        return _not_calculated("not_eligible", "outside_hours", reason, policy.source_id)
+    if policy.selection == "fixed_slot":
+        slots = [(slot.start_time, slot.end_time) for slot in policy.slots]
+        if (conditions.start_time, conditions.end_time) not in slots:
+            choices = ", ".join(f"{slot_start}~{slot_end}" for slot_start, slot_end in slots)
+            reason = f"정해진 회차로만 예약할 수 있습니다. 가능한 회차: {choices}"
+            return _not_calculated("not_eligible", "slot_mismatch", reason, policy.source_id)
+    elif end - start not in policy.allowed_minutes:
+        choices = ", ".join(f"{minutes}분" for minutes in policy.allowed_minutes)
+        reason = f"이용 시간은 {choices} 중에서 선택할 수 있습니다."
+        return _not_calculated("not_eligible", "duration_not_allowed", reason, policy.source_id)
+    return None
+
+
+def _not_calculated(status: str, code: str, reason: str, source_id: str) -> FeeResult:
+    return FeeResult(
+        status=status,
+        items=[],
+        total=None,
+        payment_due=None,
+        expected_refund=None,
+        net_cost_after_refund=None,
+        review_items=[ReviewItem(code=code, target="time", reason=reason, source_id=source_id)],
+    )
+
+
+def _day_type_candidates(day: date, calendar: HolidayCalendar | None) -> list[set[str]]:
+    """이용일의 요일 구분. 공휴일 목록에 없는 기간이면 공휴일인 경우와 아닌 경우를 모두 돌려준다."""
     weekend = day.weekday() >= 5
-    if day in holidays:
-        return {"holiday", "weekend"} if weekend else {"holiday"}
-    return {"weekend"} if weekend else {"weekday"}
+    plain = {"weekend"} if weekend else {"weekday"}
+    holiday = {"holiday", "weekend"} if weekend else {"holiday"}
+    if calendar is None or not calendar.covers(day):
+        return [plain, holiday]
+    return [holiday] if calendar.is_holiday(day) else [plain]
 
 
-def _active_fee_rules(rules: FacilityRules, conditions: Conditions, fee_type: str) -> list[FeeRule]:
+def _active_fee_rules(
+    rules: FacilityRules, conditions: Conditions, fee_type: str, day_types: set[str]
+) -> list[FeeRule]:
     """이 이용에 적용되는 유효한 규정을 고른다.
 
     요일이나 시간대가 None인 규정은 적용 여부를 알 수 없으므로 확인 필요로 보낸다.
     이용일에 유효하지 않은 규정은 유효한 규정이 그 시간을 대신하지 못할 때만 확인 필요로 보낸다.
     """
     start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
-    day_types = _day_types(conditions.date, rules.holidays)
     relevant = [
         r
         for r in rules.fee_rules
@@ -142,8 +247,8 @@ def _require_unit(rule: FeeRule) -> int:
     return rule.unit_minutes
 
 
-def _base_items(rules: FacilityRules, conditions: Conditions) -> list[FeeItem]:
-    active = _active_fee_rules(rules, conditions, "base")
+def _base_items(rules: FacilityRules, conditions: Conditions, day_types: set[str]) -> list[FeeItem]:
+    active = _active_fee_rules(rules, conditions, "base", day_types)
     start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
     totals: dict[str, int] = {}
     by_id = {rule.rule_id: rule for rule in active}
@@ -170,9 +275,9 @@ def _base_items(rules: FacilityRules, conditions: Conditions) -> list[FeeItem]:
     ]
 
 
-def _lighting_items(rules: FacilityRules, conditions: Conditions) -> list[FeeItem]:
+def _lighting_items(rules: FacilityRules, conditions: Conditions, day_types: set[str]) -> list[FeeItem]:
     """단위가 조명 시간대와 겹치면 가산한다."""
-    active = _active_fee_rules(rules, conditions, "lighting")
+    active = _active_fee_rules(rules, conditions, "lighting", day_types)
     start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
 
     for index, rule in enumerate(active):
