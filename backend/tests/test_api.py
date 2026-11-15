@@ -65,6 +65,7 @@ def test_calculated_response_matches_api_draft():
                     ],
                     "total": 30000,
                     "payment_due": 50000,
+                    "onsite_payment": 0,
                     "expected_refund": 20000,
                     "net_cost_after_refund": 30000,
                     "review_items": [],
@@ -85,7 +86,8 @@ def test_needs_review_response_has_null_totals():
     result = response.json()["results"][0]
     fee = result["fee"]
     assert fee["status"] == "needs_review"
-    assert [fee[key] for key in ("total", "payment_due", "expected_refund", "net_cost_after_refund")] == [None] * 4
+    keys = ("total", "payment_due", "onsite_payment", "expected_refund", "net_cost_after_refund")
+    assert [fee[key] for key in keys] == [None] * 5
     assert [item["type"] for item in fee["items"]] == ["base", "lighting"]
     assert fee["review_items"][0]["code"] == "rule_missing"
     assert fee["review_items"][0]["target"] == "discount"

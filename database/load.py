@@ -75,6 +75,8 @@ def validate_options(options):
             raise ValueError('남은시간 계산 단위 누락')
         if o['calculation_type']!='hour_blocks_plus_steps' and extra_minutes is not None:
             raise ValueError('이 계산 방식에는 추가 단위 요금 불필요')
+        if o.get('payment_type') not in (None,'online_prepay','onsite'):
+            raise ValueError('옵션 결제 방식 오류')
 
 def insert_options(con,rid,options):
     validate_options(options)
@@ -82,9 +84,9 @@ def insert_options(con,rid,options):
         con.execute('INSERT OR IGNORE INTO option_categories(id,name) VALUES(?,?)',(o['id'],o['name']))
         option_id=rid+'_'+o['id']+'_'+o['application_type']
         con.execute('''INSERT INTO facility_options
-          (id,rule_set_id,option_id,calculation_type,application_type,rounding_policy,applies_from,applies_to,note,hour_price,extra_unit_minutes,extra_unit_price)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-          (option_id,rid,o['id'],o['calculation_type'],o['application_type'],o['rounding_policy'],o.get('applies_from'),o.get('applies_to'),o.get('note'),o['hour_price'],o.get('extra_unit_minutes'),o.get('extra_unit_price')))
+          (id,rule_set_id,option_id,calculation_type,application_type,rounding_policy,applies_from,applies_to,note,hour_price,extra_unit_minutes,extra_unit_price,payment_type)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+          (option_id,rid,o['id'],o['calculation_type'],o['application_type'],o['rounding_policy'],o.get('applies_from'),o.get('applies_to'),o.get('note'),o['hour_price'],o.get('extra_unit_minutes'),o.get('extra_unit_price'),o.get('payment_type')))
 
 CLOSURE_HOLIDAY_CODES = frozenset(('lunar_new_year_day', 'chuseok_day'))
 
@@ -516,6 +518,7 @@ def upgrade_existing_schema(con):
             ('guardian_max_count', 'INTEGER'), ('guardian_condition', 'TEXT'),
             ('guardian_evidence_note', 'TEXT'), ('discount_rounding_policy', 'TEXT'),
         ],
+        'facility_options': [('payment_type', 'TEXT')],
     }
     for table, fields in expected.items():
         if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():

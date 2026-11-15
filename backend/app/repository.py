@@ -29,6 +29,7 @@ DISCOUNT_ROUNDING = {
     "truncate_100_won": "floor_100",
 }
 LIGHTING_PARTIAL_UNIT = {"exact_units": None, "round_up": "round_up", "proportional_if_exact": "prorate"}
+OPTION_PAYMENT = {"online_prepay": "prepay", "onsite": "onsite", None: None}
 ALL_DAYS = ["weekday", "weekend", "holiday"]
 
 
@@ -231,6 +232,7 @@ def _optional_lighting_rule(option: dict, common: dict) -> dict:
         "extra_unit_minutes": option["extra_unit_minutes"],
         "extra_unit_amount": option["extra_unit_price"],
         "partial_unit": _mapped(LIGHTING_PARTIAL_UNIT, option["rounding_policy"], "조명료 단위 처리"),
+        "payment": _mapped(OPTION_PAYMENT, option["payment_type"], "선택 조명료 결제 방식"),
         "time_from": option["applies_from"],
         "time_to": option["applies_to"],
     }

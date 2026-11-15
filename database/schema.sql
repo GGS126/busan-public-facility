@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS facility_options (
  hour_price INTEGER NOT NULL CHECK(hour_price>=0),
  extra_unit_minutes INTEGER CHECK(extra_unit_minutes>0),
  extra_unit_price INTEGER CHECK(extra_unit_price>=0),
+ payment_type TEXT CHECK(payment_type IN ('online_prepay','onsite')),
  CHECK((extra_unit_minutes IS NULL AND extra_unit_price IS NULL) OR
        (extra_unit_minutes IS NOT NULL AND extra_unit_price IS NOT NULL)),
  UNIQUE(rule_set_id,option_id,application_type)

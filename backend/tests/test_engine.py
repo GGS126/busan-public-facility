@@ -108,7 +108,8 @@ def amounts(result) -> dict[str, int]:
 
 def assert_review(result, target, code):
     assert result.status == "needs_review"
-    assert (result.total, result.payment_due, result.expected_refund, result.net_cost_after_refund) == (None,) * 4
+    totals = (result.total, result.payment_due, result.onsite_payment, result.expected_refund, result.net_cost_after_refund)
+    assert totals == (None,) * 5
     assert [(item.target, item.code) for item in result.review_items] == [(target, code)]
 
 
@@ -560,7 +561,7 @@ def test_invalid_discount_selection_rejected(discounts, headcount, message):
 def optional_lighting_rule(**overrides) -> FeeRule:
     values = dict(
         rule_id="OPT_LIGHT", type="optional_lighting", amount=10000, time_from="07:00", time_to="20:00",
-        extra_unit_minutes=10, extra_unit_amount=1600, partial_unit=None,
+        extra_unit_minutes=10, extra_unit_amount=1600, partial_unit=None, payment="onsite",
     )
     return base_rule(**(values | overrides))
 
@@ -577,7 +578,32 @@ def test_optional_lighting_hour_blocks_plus_steps(minutes, amount):
     result = calculate(facility([base_rule(), optional_lighting_rule()]), lighting_conditions(minutes))
 
     assert amounts(result)["lighting"] == amount
-    assert result.payment_due == 40000 + amount
+    assert (result.payment_due, result.onsite_payment) == (40000, amount)
+    assert result.net_cost_after_refund == result.total == 40000 + amount
+
+
+def test_prepaid_optional_lighting_in_payment_due():
+    rule = optional_lighting_rule(payment="prepay")
+    result = calculate(facility([base_rule(), rule]), lighting_conditions(60))
+
+    assert (result.payment_due, result.onsite_payment, result.net_cost_after_refund) == (50000, 0, 50000)
+
+
+def test_optional_lighting_unknown_payment_needs_review():
+    rule = optional_lighting_rule(payment=None)
+    result = calculate(facility([base_rule(), rule]), lighting_conditions(60))
+
+    assert_review(result, "lighting", "rule_missing")
+    assert "현장에서 결제" in result.review_items[0].reason
+
+
+def test_onsite_lighting_with_refund_discount():
+    rules = facility([base_rule(), optional_lighting_rule()], [discount_rule()])
+    conditions = lighting_conditions(60).model_copy(update={"discount_types": ["multi_child"]})
+    result = calculate(rules, conditions)
+
+    assert (result.payment_due, result.onsite_payment, result.expected_refund) == (40000, 10000, 20000)
+    assert result.net_cost_after_refund == 30000
 
 
 def test_optional_lighting_rounds_up_to_hour():
@@ -616,6 +642,11 @@ def test_optional_lighting_longer_than_use_rejected():
 def test_extra_unit_only_for_optional_lighting():
     with pytest.raises(ValueError, match="선택 조명 규정에만"):
         lighting_rule(extra_unit_minutes=10, extra_unit_amount=1600)
+
+
+def test_payment_only_for_optional_lighting():
+    with pytest.raises(ValueError, match="선택 조명 규정에만"):
+        lighting_rule(payment="onsite")
 
 
 def test_repeated_discount_type_applied_once():
@@ -785,7 +816,8 @@ def test_same_input_gives_same_result():
 def assert_not_eligible(result, code, source_id="S-01"):
     assert result.status == "not_eligible"
     assert result.items == []
-    assert (result.total, result.payment_due, result.expected_refund, result.net_cost_after_refund) == (None,) * 4
+    totals = (result.total, result.payment_due, result.onsite_payment, result.expected_refund, result.net_cost_after_refund)
+    assert totals == (None,) * 5
     assert [(item.target, item.code, item.source_id) for item in result.review_items] == [("time", code, source_id)]
 
 

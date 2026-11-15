@@ -51,6 +51,7 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
         items=[],
         total=None,
         payment_due=None,
+        onsite_payment=None,
         expected_refund=None,
         net_cost_after_refund=None,
         review_items=[
@@ -71,7 +72,13 @@ def _amount_key(result: FeeResult) -> tuple:
     sums = {}
     for item in result.items:
         sums[item.type] = sums.get(item.type, 0) + item.amount
-    return (result.status, tuple(sorted(sums.items())), result.payment_due, result.expected_refund)
+    return (
+        result.status,
+        tuple(sorted(sums.items())),
+        result.payment_due,
+        result.onsite_payment,
+        result.expected_refund,
+    )
 
 
 def _differing_target(results: list[FeeResult]) -> str:
@@ -117,20 +124,23 @@ def _calculate(rules: FacilityRules, conditions: Conditions, day_types: set[str]
             items=items,
             total=None,
             payment_due=None,
+            onsite_payment=None,
             expected_refund=None,
             net_cost_after_refund=None,
             review_items=reviews,
         )
 
     refund = -sum(item.amount for item in items if item.method == "prepay_refund")
-    due = sum(item.amount for item in items if item.method != "prepay_refund")
+    onsite = sum(item.amount for item in items if item.payment == "onsite")
+    due = sum(item.amount for item in items if item.method != "prepay_refund" and item.payment != "onsite")
     return FeeResult(
         status="calculated",
         items=items,
-        total=due - refund,
+        total=due + onsite - refund,
         payment_due=due,
+        onsite_payment=onsite,
         expected_refund=refund,
-        net_cost_after_refund=due - refund,
+        net_cost_after_refund=due + onsite - refund,
         review_items=[],
     )
 
@@ -174,6 +184,7 @@ def _not_calculated(status: str, code: str, reason: str, source_id: str) -> FeeR
         items=[],
         total=None,
         payment_due=None,
+        onsite_payment=None,
         expected_refund=None,
         net_cost_after_refund=None,
         review_items=[ReviewItem(code=code, target="time", reason=reason, source_id=source_id)],
@@ -323,6 +334,9 @@ def _optional_lighting_items(rules: FacilityRules, conditions: Conditions, day_t
         raise NeedsReview("rule_conflict", "이용 시간에 적용되는 선택 조명 규정이 충돌합니다.", covering[0].source_id)
 
     rule = covering[0]
+    # 결제 방식을 모르면 최초 납부액과 현장 결제액을 나눌 수 없다.
+    if rule.payment is None:
+        raise NeedsReview("rule_missing", "선택 조명료를 온라인으로 선결제하는지 현장에서 결제하는지 확인할 수 없습니다.", rule.source_id)
     unit = _require_unit(rule)
     full_units, rest = divmod(minutes, unit)
     amount = full_units * _unit_charge(rule, unit)
@@ -333,7 +347,7 @@ def _optional_lighting_items(rules: FacilityRules, conditions: Conditions, day_t
         if leftover and rule.partial_unit != "round_up":
             raise NeedsReview("rule_missing", "조명 추가 단위 미만의 처리 방식을 확인할 수 없습니다.", rule.source_id)
         amount += (steps + (1 if leftover else 0)) * rule.extra_unit_amount
-    return [FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id)]
+    return [FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id, payment=rule.payment)]
 
 
 def _discount_items(

@@ -110,15 +110,13 @@ def test_matches_official_case(case, facilities):
 
     assert result.status == "calculated", result.review_items
     optional_ids = {rule.rule_id for rule in facility.fee_rules if rule.type == "optional_lighting"}
-    optional = sum(item.amount for item in result.items if item.rule_id in optional_ids)
     by_type = {}
     for item in result.items:
         if item.rule_id not in optional_ids:
             by_type[item.type] = by_type.get(item.type, 0) + item.amount
     checks = {
-        # 정답 사례의 최초 납부액은 온라인 선결제만 뜻한다. payment_due에는 현장 결제하는 선택 조명료도 들어간다.
-        "initial_payment_won": result.payment_due - optional,
-        "optional_lighting_on_site_won": optional,
+        "initial_payment_won": result.payment_due,
+        "optional_lighting_on_site_won": result.onsite_payment,
         "discount_refund_won": result.expected_refund,
         "final_expected_cost_won": result.net_cost_after_refund,
         "total_fee_won": result.payment_due,

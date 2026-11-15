@@ -236,7 +236,8 @@
       "name": "조명시설",
       "hour_price": 10000,
       "extra_unit_minutes": 10,
-      "extra_unit_price": 1600
+      "extra_unit_price": 1600,
+      "payment_type": "onsite"
     },
     {
       "id": "lighting",
