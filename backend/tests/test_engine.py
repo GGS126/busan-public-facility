@@ -221,6 +221,43 @@ def test_day_outside_calendar_ignores_expired_holiday_rule():
     assert [item.rule_id for item in result.items] == ["NEW"]
 
 
+def test_day_outside_calendar_calculated_when_holiday_rate_has_same_amount():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=20000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=20000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert result.total == 40000
+    assert [item.rule_id for item in result.items] == ["WEEKDAY"]
+
+
+def test_day_outside_calendar_needs_review_when_holiday_rate_cannot_be_calculated():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=20000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=None, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert_review(result, "base", "rule_missing")
+    assert result.review_items[0].reason == "이용일이 공휴일인지 확인할 수 없습니다."
+
+
+def test_day_outside_calendar_needs_review_when_holiday_lighting_differs():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="WEEKDAY_LIGHT", amount=5000, day_types=["weekday"]),
+        lighting_rule(rule_id="HOLIDAY_LIGHT", amount=8000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY, start="18:00", end="20:00"))
+
+    assert_review(result, "lighting", "rule_missing")
+
+
 def test_holiday_outside_covered_range_rejected():
     with pytest.raises(ValueError, match="기간 밖의 공휴일"):
         calendar(holidays=[date(2028, 1, 1)])
