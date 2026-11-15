@@ -51,6 +51,8 @@ class Conditions(BaseModel):
     # 인원을 모르는 감면 선택. 인원 비례 감면 시설은 discounts로 받아야 계산한다.
     discount_types: list[str] = []
     discounts: list[DiscountSelection] = []
+    # 지정 회차 중 사용자가 조명을 켤 시간. 필수 조명은 이용 시간으로 자동 계산한다.
+    optional_lighting_minutes: int = Field(default=0, ge=0)
     source: Literal["direct", "llm"]
 
     @field_validator("end_time")
@@ -60,6 +62,12 @@ class Conditions(BaseModel):
         if start is not None and to_minutes(value) <= to_minutes(start):
             raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
         return value
+
+    @model_validator(mode="after")
+    def check_optional_lighting(self) -> "Conditions":
+        if self.optional_lighting_minutes > to_minutes(self.end_time) - to_minutes(self.start_time):
+            raise PydanticCustomError("invalid_lighting_minutes", "선택 조명 사용 시간은 이용 시간보다 길 수 없습니다.")
+        return self
 
     @model_validator(mode="after")
     def check_discounts(self) -> "Conditions":
@@ -119,9 +127,13 @@ class EffectivePeriod(BaseModel):
 class FeeRule(EffectivePeriod):
     rule_id: str
     sport: str
-    type: Literal["base", "lighting"]
+    # optional_lighting: 사용자가 고른 조명 사용 시간으로 계산한다. time_from~time_to는 선택할 수 있는 이용 시간대다.
+    type: Literal["base", "lighting", "optional_lighting"]
     amount: int | None = Field(default=None, ge=0)
     unit_minutes: int | None = Field(default=None, gt=0)
+    # 단위 시간을 채우고 남은 시간에 붙는 요금. 예: 60분 10,000원 + 남은 10분마다 1,600원
+    extra_unit_minutes: int | None = Field(default=None, gt=0)
+    extra_unit_amount: int | None = Field(default=None, ge=0)
     partial_unit: Literal["round_up", "prorate"] | None = None
     day_types: list[DayType] | None = None
     months: list[Annotated[int, Field(ge=1, le=12)]] | None = None
@@ -135,6 +147,10 @@ class FeeRule(EffectivePeriod):
             raise ValueError("time_from과 time_to는 함께 입력해야 합니다.")
         if self.time_from is not None and to_minutes(self.time_from) >= to_minutes(self.time_to):
             raise ValueError("time_from은 time_to보다 빨라야 합니다.")
+        if (self.extra_unit_minutes is None) != (self.extra_unit_amount is None):
+            raise ValueError("extra_unit_minutes와 extra_unit_amount는 함께 입력해야 합니다.")
+        if self.extra_unit_minutes is not None and self.type != "optional_lighting":
+            raise ValueError("추가 단위 요금은 선택 조명 규정에만 입력할 수 있습니다.")
         return self
 
 

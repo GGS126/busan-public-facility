@@ -209,7 +209,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 ## API-06 입력 확장안
 
 작성일: 2026-11-09  
-상태: 팀 검토용 제안 (#7, #16). `discounts`와 감면 계산 방식(`basis`)은 구현, `optional_lighting_minutes`는 미구현
+상태: 팀 검토용 제안 (#7, #16). `discounts`, 감면 계산 방식(`basis`), `optional_lighting_minutes` 구현
 
 PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식으로는 정답 사례를 계산할 수 없어 입력을 확장합니다.
 이 절의 금액은 PR #12의 정답 사례를 기준으로 합니다.
@@ -288,6 +288,11 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 삼락생태공원 | 08~17시 회차, 60분 단위 올림 10,000원 |
 | 구덕운동장 | 없음 (조명은 18시 이후 필수 부과) |
 
+- 이용 시간 전체가 선택 조명 시간대 안에 있어야 계산합니다. 벗어나면(예: 해운대 20~22시 회차) '확인 필요'입니다.
+- 선택 조명료는 `type: "lighting"` 금액 항목으로 반환하고 `payment_due`(최초 납부액)에 포함합니다.
+- 해운대처럼 남은 시간이 추가 단위(10분)로 나눠 떨어지지 않으면 처리 기준이 없어 '확인 필요'입니다.
+- 현장 결제 여부는 DB에 항목이 없어 응답에서 구분하지 않습니다.
+
 ### 이용할 수 없는 시간
 
 지정 회차와 다른 시간, 허용되지 않는 이용시간처럼 규정상 이용할 수 없는 조건은 계산하지 않고 `fee.status`를 `not_eligible`로 반환합니다.
@@ -359,10 +364,11 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 |---|---|---|
 | `rule_id` | 규정 식별자 | `R-F001-02` |
 | `facility_id`, `sport` | 적용 시설과 종목 | `F001`, `futsal` |
-| `type` | 기본요금 또는 조명료 | `base`, `lighting` |
+| `type` | 기본요금, 조명료, 선택 조명료. 선택 조명료의 `time_from`~`time_to`는 선택할 수 있는 이용 시간대 | `base`, `lighting`, `optional_lighting` |
 | `amount` | 단위당 금액 | `5000` |
 | `unit_minutes` | 요금 단위 시간 | `60` |
 | `partial_unit` | 단위 미만 처리 방식 | `round_up` |
+| `extra_unit_minutes`, `extra_unit_amount` | 선택 조명료만. 단위 시간을 채우고 남은 시간의 추가 단위와 금액 | `10`, `1600` |
 | `day_types` | 적용 요일 구분. 모르면 `null`, 모든 요일이면 세 값을 모두 입력 | `["weekday", "weekend", "holiday"]` |
 | `time_from`, `time_to` | 적용 시간대, 조명 시간대. 모르면 `null`, 종일이면 `00:00`, `24:00` | `18:00`, `22:00` |
 | `months` | 적용 월, 계절 기준이 시설마다 다를 수 있어 월로 표시. 전체면 `null` | `[11, 12, 1, 2]` |
@@ -437,7 +443,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `source_id` | 근거 출처 |
 
 `database/`의 정답 사례(`test_cases.json`, `samrak_test_cases.json`, `gudeok_test_cases.json`)는 `backend/tests/test_sqlite_rules.py`가
-SQLite DB를 새로 만들어 규칙 엔진으로 계산한 뒤 비교합니다. 취소·환불 금액과 선택 조명 사례는 아직 계산하지 않아 건너뜁니다.
+SQLite DB를 새로 만들어 규칙 엔진으로 계산한 뒤 비교합니다. 취소·환불 금액 사례는 계산 범위가 아니어서 건너뜁니다.
 
 ### SQLite 규정 변환
 
@@ -447,7 +453,8 @@ SQLite DB를 새로 만들어 규칙 엔진으로 계산한 뒤 비교합니다.
 |---|---|
 | `pricing_rules` | 기본요금 규정. 평일과 주말·공휴일 요금이 다르면 규정 2개. 단위 미만 요금은 `partial_unit: null`(확인 필요) |
 | `pricing_rules.mandatory_light_won` | 같은 회차 시간대의 조명료 규정 |
-| `facility_options` (`mandatory_when_applicable`) | 조명료 규정(60분 단위). 선택 조명(`optional`)은 변환하지 않음 |
+| `facility_options` (`mandatory_when_applicable`) | 조명료 규정(60분 단위) |
+| `facility_options` (`optional`) | 선택 조명료 규정(60분 단위, `extra_unit_*`는 추가 단위 요금) |
 | `time_selection_policies` (`fixed_slot`) | 이용시간 규정. 운영시간은 `facilities.open_time`, `close_time` |
 | `time_selection_policies` (`flexible_interval`) | 변환하지 않음. 허용 이용시간이 확인되지 않음 |
 | `facility_discounts` | 감면 규정. `per_eligible_person_equal_split` → `basis: per_eligible_person` |

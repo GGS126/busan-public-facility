@@ -557,6 +557,67 @@ def test_invalid_discount_selection_rejected(discounts, headcount, message):
         selection_conditions(discounts, headcount=headcount)
 
 
+def optional_lighting_rule(**overrides) -> FeeRule:
+    values = dict(
+        rule_id="OPT_LIGHT", type="optional_lighting", amount=10000, time_from="07:00", time_to="20:00",
+        extra_unit_minutes=10, extra_unit_amount=1600, partial_unit=None,
+    )
+    return base_rule(**(values | overrides))
+
+
+def lighting_conditions(minutes, start="10:00", end="12:00") -> Conditions:
+    return Conditions(
+        sport="futsal", date=MONDAY, start_time=start, end_time=end,
+        optional_lighting_minutes=minutes, source="direct",
+    )
+
+
+@pytest.mark.parametrize(("minutes", "amount"), [(30, 4800), (60, 10000), (80, 13200), (120, 20000)])
+def test_optional_lighting_hour_blocks_plus_steps(minutes, amount):
+    result = calculate(facility([base_rule(), optional_lighting_rule()]), lighting_conditions(minutes))
+
+    assert amounts(result)["lighting"] == amount
+    assert result.payment_due == 40000 + amount
+
+
+def test_optional_lighting_rounds_up_to_hour():
+    rule = optional_lighting_rule(extra_unit_minutes=None, extra_unit_amount=None, partial_unit="round_up")
+    result = calculate(facility([base_rule(), rule]), lighting_conditions(80))
+
+    assert amounts(result)["lighting"] == 20000
+
+
+def test_optional_lighting_leftover_below_step_needs_review():
+    result = calculate(facility([base_rule(), optional_lighting_rule()]), lighting_conditions(85))
+
+    assert_review(result, "lighting", "rule_missing")
+
+
+def test_optional_lighting_outside_selectable_time_needs_review():
+    result = calculate(
+        facility([base_rule(), optional_lighting_rule()]), lighting_conditions(30, start="19:00", end="21:00")
+    )
+
+    assert_review(result, "lighting", "rule_missing")
+    assert result.review_items[0].reason == "이용 시간에 선택할 수 있는 조명 규정이 없습니다."
+
+
+def test_no_optional_lighting_selected_ignores_rule():
+    result = calculate(facility([base_rule(), optional_lighting_rule()]), lighting_conditions(0))
+
+    assert "lighting" not in amounts(result)
+
+
+def test_optional_lighting_longer_than_use_rejected():
+    with pytest.raises(ValueError, match="이용 시간보다 길 수 없습니다"):
+        lighting_conditions(150)
+
+
+def test_extra_unit_only_for_optional_lighting():
+    with pytest.raises(ValueError, match="선택 조명 규정에만"):
+        lighting_rule(extra_unit_minutes=10, extra_unit_amount=1600)
+
+
 def test_repeated_discount_type_applied_once():
     rules = facility(discount_rules=[discount_rule()])
     result = calculate(rules, conditions(discounts=["multi_child", "multi_child"]))

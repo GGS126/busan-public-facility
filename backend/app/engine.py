@@ -107,6 +107,8 @@ def _calculate(rules: FacilityRules, conditions: Conditions, day_types: set[str]
 
     base_ok = attempt("base", lambda: _base_items(rules, conditions, day_types))
     lighting_ok = attempt("lighting", lambda: _lighting_items(rules, conditions, day_types))
+    optional_lighting_ok = attempt("lighting", lambda: _optional_lighting_items(rules, conditions, day_types))
+    lighting_ok = lighting_ok and optional_lighting_ok
     attempt("discount", lambda: _discount_items(rules, conditions, items, base_ok, lighting_ok))
 
     if reviews:
@@ -305,6 +307,33 @@ def _lighting_items(rules: FacilityRules, conditions: Conditions, day_types: set
                 amount += _unit_charge(rule, unit_end - unit_start)
         items.append(FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id))
     return items
+
+
+def _optional_lighting_items(rules: FacilityRules, conditions: Conditions, day_types: set[str]) -> list[FeeItem]:
+    """사용자가 고른 조명 사용 시간만큼 계산한다. 이용 시간 전체가 선택 조명 시간대 안에 있어야 한다."""
+    minutes = conditions.optional_lighting_minutes
+    if not minutes:
+        return []
+    start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
+    active = _active_fee_rules(rules, conditions, "optional_lighting", day_types)
+    covering = [r for r in active if to_minutes(r.time_from) <= start and end <= to_minutes(r.time_to)]
+    if not covering:
+        raise NeedsReview("rule_missing", "이용 시간에 선택할 수 있는 조명 규정이 없습니다.")
+    if len(covering) > 1:
+        raise NeedsReview("rule_conflict", "이용 시간에 적용되는 선택 조명 규정이 충돌합니다.", covering[0].source_id)
+
+    rule = covering[0]
+    unit = _require_unit(rule)
+    full_units, rest = divmod(minutes, unit)
+    amount = full_units * _unit_charge(rule, unit)
+    if rest and rule.extra_unit_minutes is None:
+        amount += _unit_charge(rule, rest)
+    elif rest:
+        steps, leftover = divmod(rest, rule.extra_unit_minutes)
+        if leftover and rule.partial_unit != "round_up":
+            raise NeedsReview("rule_missing", "조명 추가 단위 미만의 처리 방식을 확인할 수 없습니다.", rule.source_id)
+        amount += (steps + (1 if leftover else 0)) * rule.extra_unit_amount
+    return [FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id)]
 
 
 def _discount_items(

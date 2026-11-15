@@ -19,13 +19,12 @@ WEEKDAY, WEEKEND = date(2026, 11, 9), date(2026, 11, 7)
 NOT_FEE_CASES = {
     "T09", "T10", "T11", "T12", "S05", "S06", "S07", "gudeok_cancel_d1", "gudeok_rain_d0",
 }  # 취소·환불 금액은 계산하지 않고 terms 문구로만 안내한다.
-NOT_YET_SUPPORTED = {
-    "T08", "H_OPTION_30", "H_OPTION_60",
-}  # 선택 조명 사용 시간(optional_lighting_minutes)은 아직 입력받지 않는다.
 
 # 시간이 적혀 있지 않은 사례는 사례 설명의 요금(기본요금, 조명료 유무, 1시간 요금 미확인)에 맞는 시간으로 계산한다.
 CASE_TIMES = {
     "T_rounding_unverified": ("07:00", "09:00"),
+    "H_OPTION_30": ("07:00", "09:00"),
+    "H_OPTION_60": ("07:00", "09:00"),
     "S_rounding_unverified": ("08:00", "10:00"),
     "gudeok_discount": ("10:00", "12:00"),
     "gudeok_companion_eligible_only": ("10:00", "12:00"),
@@ -90,14 +89,15 @@ def conditions_for(case, facility) -> Conditions:
         end_time=end,
         headcount=headcount,
         discounts=discounts,
+        optional_lighting_minutes=inputs.get("optional_lighting_minutes") or inputs.get("lighting_minutes") or 0,
         source="direct",
     )
 
 
 @pytest.mark.parametrize("case", load_cases())
 def test_matches_official_case(case, facilities):
-    if case["id"] in NOT_FEE_CASES | NOT_YET_SUPPORTED:
-        pytest.skip("요금 계산 범위 밖이거나 아직 입력받지 않는 조건")
+    if case["id"] in NOT_FEE_CASES:
+        pytest.skip("요금 계산 범위 밖")
 
     expected = case["expected"]
     facility = facilities[case["inputs"]["facility_id"]]
@@ -109,11 +109,16 @@ def test_matches_official_case(case, facilities):
         return
 
     assert result.status == "calculated", result.review_items
+    optional_ids = {rule.rule_id for rule in facility.fee_rules if rule.type == "optional_lighting"}
+    optional = sum(item.amount for item in result.items if item.rule_id in optional_ids)
     by_type = {}
     for item in result.items:
-        by_type[item.type] = by_type.get(item.type, 0) + item.amount
+        if item.rule_id not in optional_ids:
+            by_type[item.type] = by_type.get(item.type, 0) + item.amount
     checks = {
-        "initial_payment_won": result.payment_due,
+        # 정답 사례의 최초 납부액은 온라인 선결제만 뜻한다. payment_due에는 현장 결제하는 선택 조명료도 들어간다.
+        "initial_payment_won": result.payment_due - optional,
+        "optional_lighting_on_site_won": optional,
         "discount_refund_won": result.expected_refund,
         "final_expected_cost_won": result.net_cost_after_refund,
         "total_fee_won": result.payment_due,
@@ -128,7 +133,7 @@ def test_matches_official_case(case, facilities):
 
 def test_every_case_is_checked_or_listed():
     ids = {param.id for param in load_cases()}
-    assert (NOT_FEE_CASES | NOT_YET_SUPPORTED | CASE_TIMES.keys()) <= ids
+    assert (NOT_FEE_CASES | CASE_TIMES.keys()) <= ids
 
 
 def test_slot_mismatch_not_eligible(facilities):
