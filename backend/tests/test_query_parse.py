@@ -1,4 +1,5 @@
 import json
+from collections import deque
 from datetime import date, datetime, timedelta
 from unittest.mock import Mock
 
@@ -10,6 +11,16 @@ from app.gemini_extractor import GeminiExtractor, GeminiHTTPError, GeminiRespons
 from app.query_parser import parse_query
 
 TODAY = date(2026, 11, 9)
+
+
+@pytest.fixture(autouse=True)
+def reset_gemini_state(monkeypatch):
+    monkeypatch.setattr(main, "gemini_calls", deque())
+    main.gemini_provider.cache_clear()
+    yield
+    main.gemini_provider.cache_clear()
+
+
 CONDITIONS = {
     "sport": "futsal",
     "districts": ["해운대구"],
@@ -49,14 +60,6 @@ def test_personal_information_is_not_sent_to_provider():
     extract.assert_not_called()
 
 
-@pytest.mark.parametrize("districts", [None, []])
-def test_no_district_searches_all_busan(districts):
-    extract = Mock(return_value=CONDITIONS | {"districts": districts})
-    result = parse_query("내일 풋살", today=TODAY, extract=extract)
-    assert result["status"] == "ok"
-    assert result["conditions"]["districts"] == []
-
-
 def test_provider_exception_returns_failed_without_details():
     extract = Mock(side_effect=RuntimeError("private details"))
     result = parse_query("풋살", today=TODAY, extract=extract)
@@ -76,6 +79,8 @@ def test_gemini_rejects_unknown_sport(monkeypatch):
                                discount_codes={}, districts=["해운대구"])
     with pytest.raises(GeminiResponseError, match="^unsupported_sport_code$"):
         extractor("풋살", TODAY)
+    payload = json.loads(connection.request.call_args.args[2])
+    assert payload["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
 
 
 @pytest.mark.parametrize(("errors", "diagnostic"), [
@@ -118,7 +123,10 @@ def test_api_keeps_partial_conditions_in_response(monkeypatch):
     assert result["missing_fields"] == ["discount_types"]
 
 
-@pytest.mark.parametrize("phone", ["051-123-4567", "02-1234-5678", "0311234567", "+82-51-123-4567"])
+@pytest.mark.parametrize("phone", [
+    "051-123-4567", "02-1234-5678", "0311234567", "+82-51-123-4567",
+    "070-1234-5678", "0505-123-4567", "1588-1234", "1688-1234", "080-123-4567",
+])
 def test_landline_is_blocked_before_extraction(phone):
     extract = Mock()
     result = parse_query(f"풋살 문의 {phone}", today=TODAY, extract=extract)
@@ -150,6 +158,25 @@ def test_empty_model_uses_default(monkeypatch, model):
 def test_non_format_errors_are_not_retried(monkeypatch, code):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     provider = Mock(side_effect=GeminiResponseError(code))
+    monkeypatch.setattr(main, "GeminiExtractor", Mock(return_value=provider))
+    response = TestClient(main.app).post("/api/query/parse", json={"query": "풋살"})
+    assert response.json()["status"] == "llm_failed"
+    provider.assert_called_once()
+
+
+@pytest.mark.parametrize("districts", [None, []])
+def test_unspecified_district_means_all_busan(districts):
+    extract = Mock(return_value=CONDITIONS | {"districts": districts})
+    result = parse_query("내일 풋살", today=TODAY, extract=extract)
+    assert result["status"] == "ok"
+    assert result["conditions"]["districts"] == []
+
+
+def test_retry_counts_towards_call_limit(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(main, "monotonic", lambda: 100)
+    main.gemini_calls.extend([100] * 14)
+    provider = Mock(side_effect=GeminiResponseError("invalid_output_json"))
     monkeypatch.setattr(main, "GeminiExtractor", Mock(return_value=provider))
     response = TestClient(main.app).post("/api/query/parse", json={"query": "풋살"})
     assert response.json()["status"] == "llm_failed"
