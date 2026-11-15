@@ -480,6 +480,83 @@ def test_multiple_discounts_are_not_calculated(stackable):
     assert amounts(result) == {"base": 40000}
 
 
+def selection_conditions(discounts, headcount=4, **overrides) -> Conditions:
+    values = dict(
+        sport="futsal", date=MONDAY, start_time="10:00", end_time="12:00",
+        headcount=headcount, discounts=discounts, source="direct",
+    )
+    return Conditions(**(values | overrides))
+
+
+def test_per_person_discount_prorated_by_headcount():
+    # 기본요금 40,000원 ÷ 4명 × 1명 × 50%
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 1}]))
+
+    assert amounts(result)["discount"] == -5000
+    assert result.net_cost_after_refund == 35000
+
+
+def test_per_person_discount_exact_after_division():
+    # 40,000원 × 50% × 2명 ÷ 6명은 나눠 떨어지지 않지만, 30,000원 × 50% × 2명 ÷ 6명은 5,000원이다.
+    rules = facility([base_rule(amount=15000)], [discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 2}], headcount=6))
+
+    assert amounts(result)["discount"] == -5000
+
+
+def test_per_person_discounts_for_different_people_calculated_separately():
+    rules = facility(
+        discount_rules=[
+            discount_rule(basis="per_eligible_person"),
+            discount_rule(rule_id="DISABLED", discount_type="disabled", basis="per_eligible_person"),
+        ]
+    )
+    result = calculate(
+        rules, selection_conditions([{"type": "multi_child", "count": 1}, {"type": "disabled", "count": 2}])
+    )
+
+    assert [item.amount for item in result.items if item.type == "discount"] == [-5000, -10000]
+    assert result.expected_refund == 15000
+
+
+def test_per_person_discount_without_count_needs_review():
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, conditions(day=MONDAY, discounts=["multi_child"]))
+
+    assert_review(result, "discount", "rule_missing")
+    assert "감면 대상 인원" in result.review_items[0].reason
+
+
+def test_holder_discount_applies_only_when_holder_eligible():
+    rules = facility(discount_rules=[discount_rule(basis="holder_whole_fee")])
+
+    holder = calculate(rules, selection_conditions([{"type": "multi_child", "count": 1, "holder": True}]))
+    companion = calculate(rules, selection_conditions([{"type": "multi_child", "count": 3}]))
+
+    assert amounts(holder)["discount"] == -20000
+    assert amounts(companion)["discount"] == 0
+
+
+def test_fixed_amount_discount_must_cover_whole_fee():
+    with pytest.raises(ValueError, match="fixed_amount"):
+        discount_rule(rate=None, fixed_amount=1000, basis="per_eligible_person")
+
+
+@pytest.mark.parametrize(
+    ("discounts", "headcount", "message"),
+    [
+        ([{"type": "multi_child", "count": 1}, {"type": "multi_child", "count": 1}], 4, "두 번"),
+        ([{"type": "multi_child", "count": 1, "holder": True}, {"type": "disabled", "count": 1, "holder": True}], 4, "대표자"),
+        ([{"type": "multi_child", "count": 1}], None, "전체 이용 인원"),
+        ([{"type": "multi_child", "count": 3}, {"type": "disabled", "count": 2}], 4, "보다 많습니다"),
+    ],
+)
+def test_invalid_discount_selection_rejected(discounts, headcount, message):
+    with pytest.raises(ValueError, match=message):
+        selection_conditions(discounts, headcount=headcount)
+
+
 def test_repeated_discount_type_applied_once():
     rules = facility(discount_rules=[discount_rule()])
     result = calculate(rules, conditions(discounts=["multi_child", "multi_child"]))

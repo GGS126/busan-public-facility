@@ -252,3 +252,23 @@ def test_server_error_hides_details_and_input(monkeypatch, caplog):
     assert "secret detail" not in response.text
     assert "multi_child" not in caplog.text
     assert "secret detail" not in caplog.text
+
+
+def test_discount_selection_error_message_returned():
+    response = client.post(
+        "/api/compare", json=payload(discount_types=[], discounts=[{"type": "multi_child", "count": 1}])
+    )
+
+    assert response.status_code == 400
+    [field] = response.json()["error"]["fields"]
+    assert field["code"] == "invalid_discount"
+    assert field["message"] == "감면 대상 인원을 입력하면 전체 이용 인원도 입력해야 합니다."
+
+
+def test_unknown_discount_selection_type_rejected():
+    response = client.post(
+        "/api/compare", json=payload(discount_types=[], headcount=4, discounts=[{"type": "nope", "count": 1}])
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["fields"][0]["field"] == "conditions.discounts.0.type"

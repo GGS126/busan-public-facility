@@ -13,7 +13,7 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
 
     checklist: list[str] = []
     checklist_reviews: list[ReviewItem] = []
-    for discount_type in dict.fromkeys(conditions.discount_types):
+    for discount_type, _, _ in conditions.discount_selections:
         matched = [
             rule
             for rule in rules.discount_rules

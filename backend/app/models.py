@@ -22,6 +22,7 @@ BandTime = Annotated[str, StringConstraints(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|
 Rounding = Annotated[str, StringConstraints(pattern=r"^(floor|ceil|round)_(1|10|100|1000)$")]
 DayType = Literal["weekday", "weekend", "holiday"]
 DiscountMethod = Literal["onsite", "prepay_refund"]
+DiscountBasis = Literal["whole_fee", "per_eligible_person", "holder_whole_fee"]
 
 
 def to_minutes(value: str) -> int:
@@ -32,6 +33,14 @@ def to_minutes(value: str) -> int:
 # 이용 조건
 
 
+class DiscountSelection(BaseModel):
+    """감면 대상자 입력. 이름·증빙 번호 같은 개인정보는 받지 않고 인원수만 받는다."""
+
+    type: str = Field(min_length=1)
+    count: int = Field(ge=1)
+    holder: bool = False
+
+
 class Conditions(BaseModel):
     sport: str = Field(min_length=1)
     districts: list[str] = []
@@ -39,7 +48,9 @@ class Conditions(BaseModel):
     start_time: ClockTime
     end_time: BandTime
     headcount: int | None = Field(default=None, ge=1)
+    # 인원을 모르는 감면 선택. 인원 비례 감면 시설은 discounts로 받아야 계산한다.
     discount_types: list[str] = []
+    discounts: list[DiscountSelection] = []
     source: Literal["direct", "llm"]
 
     @field_validator("end_time")
@@ -49,6 +60,26 @@ class Conditions(BaseModel):
         if start is not None and to_minutes(value) <= to_minutes(start):
             raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
         return value
+
+    @model_validator(mode="after")
+    def check_discounts(self) -> "Conditions":
+        types = [*dict.fromkeys(self.discount_types), *(d.type for d in self.discounts)]
+        if len(set(types)) != len(types):
+            raise PydanticCustomError("invalid_discount", "같은 감면 유형을 두 번 선택할 수 없습니다.")
+        if sum(d.holder for d in self.discounts) > 1:
+            raise PydanticCustomError("invalid_discount", "예약 대표자는 감면 유형 하나에만 해당할 수 있습니다.")
+        if self.discounts and self.headcount is None:
+            raise PydanticCustomError("invalid_discount", "감면 대상 인원을 입력하면 전체 이용 인원도 입력해야 합니다.")
+        if self.discounts and sum(d.count for d in self.discounts) > self.headcount:
+            raise PydanticCustomError("invalid_discount", "감면 대상 인원이 전체 이용 인원보다 많습니다.")
+        return self
+
+    @property
+    def discount_selections(self) -> list[tuple[str, int | None, bool | None]]:
+        """(유형, 대상 인원, 대표자 여부). discount_types로 받은 감면은 인원과 대표자 여부를 모른다."""
+        return [(t, None, None) for t in dict.fromkeys(self.discount_types)] + [
+            (d.type, d.count, d.holder) for d in self.discounts
+        ]
 
 
 class RequestConditions(Conditions):
@@ -114,6 +145,9 @@ class DiscountRule(EffectivePeriod):
     fixed_amount: int | None = Field(default=None, ge=0)
     applies_to: Literal["base", "base_and_lighting"] | None = None
     method: DiscountMethod | None = None
+    # whole_fee: 대상 요금 전체, per_eligible_person: 대상 요금 ÷ 전체 인원 × 대상 인원,
+    # holder_whole_fee: 예약 대표자가 대상일 때만 대상 요금 전체
+    basis: DiscountBasis = "whole_fee"
     stackable: bool | None = None
     rounding: Rounding | None = None
     required_documents: list[str] | None = None
@@ -123,6 +157,8 @@ class DiscountRule(EffectivePeriod):
     def check_amount(self) -> "DiscountRule":
         if self.rate is not None and self.fixed_amount is not None:
             raise ValueError("rate와 fixed_amount는 함께 입력할 수 없습니다.")
+        if self.fixed_amount is not None and self.basis != "whole_fee":
+            raise ValueError("fixed_amount는 basis가 whole_fee일 때만 입력할 수 있습니다.")
         return self
 
 
