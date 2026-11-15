@@ -1,6 +1,6 @@
 
-import { useRef, useState } from 'react'
-import { compareFacilities, searchFacilities } from './api/compare'
+import { useEffect, useRef, useState } from 'react'
+import { compareFacilities, getSearchOptions, searchFacilities } from './api/compare'
 import { getFacilitySlots } from './data/facilitySlots'
 import Header from './components/Header'
 import HeroBanner from './components/HeroBanner'
@@ -22,9 +22,11 @@ function getToday() {
 
 function App() {
   // 이용조건 입력 상태
-  const [sport, setSport] = useState('tennis')
-  const [aiSport, setAiSport] = useState(null)
-  const [aiDistrict, setAiDistrict] = useState('')
+  const [sport, setSport] = useState('')
+  const [options, setOptions] = useState(null)
+  const [source, setSource] = useState('direct')
+  const [alternatives, setAlternatives] = useState([])
+  const [extractedOptions, setExtractedOptions] = useState(null)
   const [district, setDistrict] = useState('전체')
   const [date, setDate] = useState('')
   const [startTime, setStartTime] = useState('')
@@ -47,6 +49,17 @@ function App() {
   const [compareError, setCompareError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  useEffect(() => {
+    let active = true
+    getSearchOptions().then(catalog => {
+      if (active) {
+        setOptions(catalog)
+        setSport(current => current || catalog.sports[0]?.code || '')
+      }
+    }).catch(() => {})
+    return () => { active = false }
+  }, [])
+
   // 입력 조건 변경 시 이전 검색 및 비교 결과 초기화
   function clearResult() {
     searchRequest.current += 1
@@ -62,6 +75,9 @@ function App() {
 
   // 이용조건 유효성 검사
   function validateConditions() {
+    if (!sport) {
+      return '이용 종목을 선택해 주세요.'
+    }
     if (!date) {
       return '이용 날짜를 선택해 주세요.'
     }
@@ -137,14 +153,15 @@ function App() {
     const requestId = searchRequest.current
     setSearching(true)
     try {
-      const { results } = await searchFacilities({
+      const { results, alternatives } = await searchFacilities({
         sport,
         districts: district === '전체' ? [] : [district],
         date,
         ...(startTime && endTime ? { start_time: startTime, end_time: endTime } : {}),
-        source: aiSport ? 'llm' : 'direct',
+        source,
       })
       if (requestId !== searchRequest.current) return
+      setAlternatives(alternatives?.districts ?? [])
       setSearchResults(results)
       setSearched(true)
       requestAnimationFrame(() => {
@@ -202,8 +219,11 @@ function App() {
 
   // 자연어 입력에서 확인한 조건을 직접 입력 폼에 적용
   function handleApplyAI(conditions) {
-    setAiSport({ code: conditions.sport, label: conditions.sportLabel })
-    setAiDistrict(conditions.district)
+    setSource('llm')
+    setExtractedOptions({
+      sports: [{ code: conditions.sport, label: conditions.sportLabel }],
+      districts: conditions.district === '전체' ? [] : [conditions.district],
+    })
     setSport(conditions.sport)
     setDistrict(conditions.district || '전체')
     setDate(conditions.date || '')
@@ -279,7 +299,7 @@ function App() {
                 Number(eligibleCount) === 0
                   ? []
                   : [discountType],
-              source: 'direct',
+              source,
             },
           }
 
@@ -326,6 +346,7 @@ function App() {
 
       <main className="main-container">
         <NaturalLanguageInput
+          options={options}
           onApply={handleApplyAI}
           onDirectInput={handleDirectInput}
         />
@@ -334,8 +355,7 @@ function App() {
 
         <SearchForm
           sport={sport}
-          aiSport={aiSport}
-          aiDistrict={aiDistrict}
+          options={options ?? extractedOptions}
           setSport={setSport}
           district={district}
           setDistrict={setDistrict}
@@ -354,11 +374,12 @@ function App() {
           onSearch={handleSearch}
           loading={searching || loading}
           error={error}
-          clearResult={clearResult}
+          clearResult={() => { setSource('direct'); clearResult() }}
         />
 
         <FacilityList
           facilities={searchResults}
+          alternatives={alternatives}
           selectedIds={selectedIds}
           onToggle={toggleFacility}
           searched={searched}

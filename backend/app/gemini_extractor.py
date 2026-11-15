@@ -5,6 +5,7 @@ import json
 import re
 from datetime import date
 
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
 NULLABLE_TEXT = {"type": ["string", "null"]}
 PROPERTIES = {
     "sport": NULLABLE_TEXT,
@@ -45,9 +46,9 @@ class GeminiResponseError(ValueError):
 
 class GeminiExtractor:
     def __init__(self, api_key: str, *, sport_codes: dict[str, str], discount_codes: dict[str, str],
-                 districts: list[str], model: str = "gemini-3.5-flash-lite"):
+                 districts: list[str], model: str = DEFAULT_MODEL):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model):
-            raise GeminiResponseError("invalid_model_configuration")
+            raise ValueError("invalid_model_configuration")
         self.api_key = api_key
         self.model = model
         self.sport_codes = sport_codes
@@ -82,6 +83,8 @@ class GeminiExtractor:
                 "maxOutputTokens": 1024,
             },
         }
+        if self.model == DEFAULT_MODEL:
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "minimal"}
         connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=5)
         try:
             connection.request("POST", f"/v1beta/models/{self.model}:generateContent",

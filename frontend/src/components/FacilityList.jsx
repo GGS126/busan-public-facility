@@ -6,6 +6,7 @@ import {
 
 function FacilityList({
   facilities,
+  alternatives,
   selectedIds,
   onToggle,
   searched,
@@ -34,6 +35,7 @@ function FacilityList({
         <div className="facility-no-results">
           <h3>검색 결과가 없습니다</h3>
           <p>다른 지역이나 이용 조건으로 다시 검색해 주세요.</p>
+          {alternatives.length > 0 && <p>검색 가능한 다른 지역은 {alternatives.join(', ')}입니다.</p>}
         </div>
       ) : (
         <>

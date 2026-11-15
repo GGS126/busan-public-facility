@@ -1,6 +1,10 @@
 import logging
 import os
+from collections import deque
 from datetime import datetime
+from functools import lru_cache
+from threading import BoundedSemaphore, Lock
+from time import monotonic
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,7 +13,7 @@ from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
 from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots
-from app.gemini_extractor import GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
     CompareRequest,
@@ -141,6 +145,29 @@ def parse_natural_language(request: QueryParseRequest) -> dict:
     return parse_with_options(request, catalog)
 
 
+gemini_slots = BoundedSemaphore(4)
+gemini_call_lock = Lock()
+gemini_calls: deque[float] = deque()
+
+
+def reserve_gemini_call() -> bool:
+    with gemini_call_lock:
+        now = monotonic()
+        while gemini_calls and now - gemini_calls[0] >= 60:
+            gemini_calls.popleft()
+        if len(gemini_calls) >= 15:
+            return False
+        gemini_calls.append(now)
+        return True
+
+
+@lru_cache(maxsize=4)
+def gemini_provider(key, model, sports, discounts, districts):
+    return GeminiExtractor(
+        key, model=model, sport_codes=dict(sports), discount_codes=dict(discounts), districts=list(districts),
+    )
+
+
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
     def extract(query, today):
         key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -148,19 +175,23 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             logger.warning("Gemini extraction failed: code=missing_api_key")
             return None
         try:
-            provider = GeminiExtractor(
+            provider = gemini_provider(
                 key,
-                sport_codes={option.code: option.label for option in catalog.sports},
-                discount_codes={option.code: option.label for option in catalog.discount_types},
-                districts=catalog.districts,
-                model=os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.5-flash-lite",
+                os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
+                tuple((option.code, option.label) for option in catalog.sports),
+                tuple((option.code, option.label) for option in catalog.discount_types),
+                tuple(catalog.districts),
             )
-        except GeminiResponseError as error:
-            logger.warning("Gemini extraction failed: type=%s code=%s", type(error).__name__, error.code)
+        except ValueError:
+            logger.warning("Gemini extraction failed: code=invalid_model_configuration")
             return None
 
         for attempt in (1, 2):
+            if not gemini_slots.acquire(blocking=False):
+                return None
             try:
+                if not reserve_gemini_call():
+                    return None
                 return provider(query, today)
             except GeminiResponseError as error:
                 logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
@@ -174,6 +205,8 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                 # Exception messages may include request text or credentials.
                 logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
                 break
+            finally:
+                gemini_slots.release()
         return None
 
     result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
@@ -182,14 +215,14 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
     return result
 
 
-def check_against_options(conditions: Conditions) -> None:
+def check_against_options(conditions: Conditions, options: OptionsResponse) -> None:
     """선택지에 없는 값은 입력 오류로 돌려보낸다. 시설에만 없는 값은 규칙 엔진이 확인 필요로 처리한다."""
     errors = []
-    if conditions.sport not in {option.code for option in available_options.sports}:
+    if conditions.sport not in {option.code for option in options.sports}:
         errors.append(
             {"type": "invalid_option", "loc": ("body", "conditions", "sport"), "msg": "선택할 수 없는 종목입니다."}
         )
-    if not set(conditions.discount_types) <= {option.code for option in available_options.discount_types}:
+    if not set(conditions.discount_types) <= {option.code for option in options.discount_types}:
         errors.append(
             {
                 "type": "invalid_option",
@@ -205,15 +238,23 @@ def check_against_options(conditions: Conditions) -> None:
 def compare(request: CompareRequest) -> CompareResponse:
     has_sqlite = DB_PATH.is_file()
     if not has_sqlite or any(facility_id in facilities for facility_id in request.facility_ids):
-        check_against_options(request.conditions)
+        check_against_options(request.conditions, available_options)
+    sqlite_facilities = {}
+    if has_sqlite and any(facility_id not in facilities for facility_id in request.facility_ids):
+        catalog, options = read_catalog(DB_PATH)
+        sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
+        if any(facility_id in sqlite_facilities for facility_id in request.facility_ids):
+            check_against_options(request.conditions, options)
     results = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)
         if rules is not None:
             results.append(compare_facility(rules, request.conditions))
             continue
-        result = compare_sqlite(DB_PATH, facility_id, request.conditions) if has_sqlite else None
-        if result is None:
+        facility = sqlite_facilities.get(facility_id)
+        if facility is None:
             raise FacilityNotFound
-        results.append(result)
+        if facility["sport"] != request.conditions.sport:
+            return error_response(400, "invalid_option", "선택한 시설에서 이용할 수 없는 종목입니다.")
+        results.append(compare_sqlite(DB_PATH, facility, request.conditions))
     return CompareResponse(results=results)

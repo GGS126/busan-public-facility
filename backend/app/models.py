@@ -30,6 +30,11 @@ def to_minutes(value: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+def validate_time_order(start: str, end: str) -> None:
+    if to_minutes(end) <= to_minutes(start):
+        raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
+
+
 # 이용 조건
 
 
@@ -47,8 +52,8 @@ class Conditions(BaseModel):
     @classmethod
     def end_after_start(cls, value: str, info: ValidationInfo) -> str:
         start = info.data.get("start_time")
-        if start is not None and to_minutes(value) <= to_minutes(start):
-            raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
+        if start is not None:
+            validate_time_order(start, value)
         return value
 
 
@@ -238,9 +243,9 @@ class FacilitySearchConditions(BaseModel):
     @model_validator(mode="after")
     def check_times(self) -> "FacilitySearchConditions":
         if (self.start_time is None) != (self.end_time is None):
-            raise ValueError("시작 시간과 종료 시간을 함께 입력해 주세요.")
-        if self.start_time and self.end_time and to_minutes(self.end_time) <= to_minutes(self.start_time):
-            raise ValueError("종료 시간은 시작 시간보다 늦어야 합니다.")
+            raise PydanticCustomError("invalid_time_range", "시작 시간과 종료 시간을 함께 입력해 주세요.")
+        if self.start_time and self.end_time:
+            validate_time_order(self.start_time, self.end_time)
         return self
 
 

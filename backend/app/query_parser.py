@@ -7,7 +7,7 @@ from datetime import date
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.models import BandTime, ClockTime
+from app.models import BandTime, ClockTime, to_minutes
 
 QUESTIONS = {
     "sport": "어떤 종목을 이용하시나요?",
@@ -25,6 +25,8 @@ END_TIME = TypeAdapter(BandTime)
 SENSITIVE_PATTERN = re.compile(
     r"(?<!\d)(?:\d{6}[-.\s]?\d{7}|(?:\+82[-.\s]?|0)1[016789][- .]?\d{3,4}[- .]?\d{4})(?!\d)"
     r"|(?<!\d)(?:0(?:2|[3-6][1-5])|\+82[- .]?(?:2|[3-6][1-5]))[- .]?\d{3,4}[- .]?\d{4}(?!\d)"
+    r"|(?<!\d)(?:0|\+82[- .]?)(?:[78]0|50[2-8])[- .]?\d{3,4}[- .]?\d{4}(?!\d)"
+    r"|(?<!\d)1[568]\d{2}[- .]?\d{4}(?!\d)"
     r"|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
 )
 
@@ -53,15 +55,8 @@ def parse_query(
     if not isinstance(raw, Mapping):
         return _result("llm_failed", {})
 
-    conditions = {"source": "llm", "districts": []}
+    conditions = {"source": "llm"}
     missing = []
-    districts = raw.get("districts")
-    if districts is not None:
-        if _valid("districts", districts, today):
-            conditions["districts"] = _clean(districts)
-        else:
-            conditions.pop("districts")
-            missing.append("districts")
     for field in REQUIRED_FIELDS:
         value = raw.get(field)
         if not _valid(field, value, today):
@@ -69,8 +64,10 @@ def parse_query(
             continue
         conditions[field] = _clean(value)
 
-    for field in ("headcount", "discount_types"):
+    for field in ("districts", "headcount", "discount_types"):
         value = raw.get(field)
+        if field == "districts" and value is None:
+            value = []
         if field == "headcount" and value is None:
             continue
         if not _valid(field, value, today):
@@ -80,7 +77,7 @@ def parse_query(
 
     start = conditions.get("start_time")
     end = conditions.get("end_time")
-    if start and end and end <= start:
+    if start and end and to_minutes(end) <= to_minutes(start):
         conditions.pop("end_time")
         missing.append("end_time")
         result = _result("need_more", conditions, missing)

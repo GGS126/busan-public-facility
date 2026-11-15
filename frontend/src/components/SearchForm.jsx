@@ -23,8 +23,7 @@ function withSelectedTime(time) {
 
 function SearchForm({
   sport,
-  aiSport,
-  aiDistrict,
+  options,
   setSport,
   district,
   setDistrict,
@@ -72,10 +71,12 @@ function SearchForm({
             value={sport}
             onChange={(e) => update(setSport, e.target.value)}
           >
-            <option value="tennis">테니스</option>
-            {aiSport && aiSport.code !== 'tennis' && (
-              <option value={aiSport.code}>{aiSport.label}</option>
+            {!options?.sports.some(({ code }) => code === sport) && (
+              <option value={sport}>{sport || '이용 종목 선택'}</option>
             )}
+            {options?.sports.map(({ code, label }) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
           </select>
         </div>
 
@@ -87,12 +88,9 @@ function SearchForm({
             onChange={(e) => update(setDistrict, e.target.value)}
           >
             <option value="전체">부산 전체</option>
-            <option value="해운대구">해운대구</option>
-            <option value="사상구">사상구</option>
-            <option value="서구">서구</option>
-            {aiDistrict && !['전체', '해운대구', '사상구', '서구'].includes(aiDistrict) && (
-              <option value={aiDistrict}>{aiDistrict}</option>
-            )}
+            {options?.districts.map(value => (
+              <option key={value} value={value}>{value}</option>
+            ))}
           </select>
         </div>
 
