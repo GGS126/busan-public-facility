@@ -1,11 +1,13 @@
+import sqlite3
 import subprocess
 from datetime import datetime, timedelta
 import sys
+from contextlib import closing
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, models
 
 from app.facility_catalog import DB_PATH, read_catalog
 from app.models import KST, Conditions
@@ -83,3 +85,42 @@ def test_sqlite_compare_handles_invalid_options_and_conflicts(sqlite_db, gudeok,
         fee = response.json()["results"][0]["fee"]
         assert fee["payment_due"] is None
         assert fee["review_items"][0]["code"] == code
+
+
+@pytest.mark.parametrize(("day", "closure_status", "time_status", "has_slots", "expected_fee"), [
+    ("2027-02-07", "closed", "not_eligible", False, None),
+    ("2027-02-06", "no_scheduled_closure", "eligible", True, 9000),
+    ("2099-04-05", "needs_calendar_resolution", "unknown", True, None),
+])
+def test_search_and_compare_agree_on_holiday_closure(
+    sqlite_db, tmp_path, monkeypatch, day, closure_status, time_status, has_slots, expected_fee,
+):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 15, tzinfo=tz)
+
+    monkeypatch.setattr(models, "datetime", FixedDateTime)
+    db = tmp_path / "closure.sqlite3"
+    db.write_bytes(sqlite_db.read_bytes())
+    facility_id = "busan_samrak_ecopark_tennis"
+    with closing(sqlite3.connect(db)) as connection, connection:
+        connection.execute("UPDATE rule_sets SET effective_to = ? WHERE facility_id = ?", ("2099-04-05", facility_id))
+    monkeypatch.setattr(main, "DB_PATH", db)
+    conditions = {
+        "sport": "tennis", "districts": ["사상구"], "date": day,
+        "start_time": "08:00", "end_time": "10:00", "source": "direct",
+    }
+    client = TestClient(main.app)
+    search = client.post("/api/facilities/search", json={"conditions": conditions})
+    assert search.status_code == 200
+    facility, = search.json()["results"]
+    assert facility["closure"]["status"] == closure_status
+    assert facility["time_check"]["status"] == time_status
+    assert bool(facility["time_options"]) is has_slots
+
+    comparison = client.post("/api/compare", json={"facility_ids": [facility_id], "conditions": conditions})
+    assert comparison.status_code == 200
+    fee = comparison.json()["results"][0]["fee"]
+    assert fee["payment_due"] == expected_fee
+    assert fee["status"] == ("needs_review" if expected_fee is None else "calculated")

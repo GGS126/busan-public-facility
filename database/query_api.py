@@ -64,7 +64,7 @@ def closure_rules(db,facility_id,use_date):
        ORDER BY c.closure_type,c.closure_value''',(facility_id,use_date))
 
 
-def closure_status(db,facility_id,use_date,holiday_codes=None):
+def closure_statuses(db, use_date, holiday_codes=None):
     # 명절 날짜를 변환하지 않는다. holiday_codes는 백엔드의 검증된 날짜 데이터가 공급한다.
     use_date=normalize_use_date(use_date)
     if holiday_codes is not None:
@@ -72,26 +72,59 @@ def closure_status(db,facility_id,use_date,holiday_codes=None):
                 not isinstance(x,str) or x not in _load.CLOSURE_HOLIDAY_CODES
                 for x in holiday_codes):
             raise ValueError('holiday_codes는 지원하는 명절 코드 목록이어야 합니다')
-    active=fetch(db,'''SELECT r.id,s.url AS source_url FROM rule_sets r
-       JOIN sources s ON s.id=r.source_id
-       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to''',
-       (facility_id,use_date))
-    if not active:
-        return {'status':'no_active_rule_set','facility_id':facility_id,
-                'date':use_date,'is_closed':None,'matched_rules':[]}
-    rules=closure_rules(db,facility_id,use_date)
-    codes=set(holiday_codes or [])
-    matched=[x for x in rules if
-       (x['type']=='annual_date' and x['value']==use_date[5:]) or
-       (x['type']=='exact_date' and x['value']==use_date) or
-       (x['type']=='holiday_code' and x['value'] in codes)]
-    if matched: status,closed='closed',True
-    elif holiday_codes is None and any(x['type']=='holiday_code' for x in rules):
-        status,closed='needs_calendar_resolution',None
-    else: status,closed='no_scheduled_closure',False
-    return {'status':status,'facility_id':facility_id,'date':use_date,
-            'is_closed':closed,'matched_rules':matched,'source_url':active[0]['source_url'],
-            'note':'임시 휴장·행사·별도 공지는 반영되지 않았습니다. 실제 예약 가능 여부는 공식 예약 사이트에서 확인해야 합니다.'}
+    rows = fetch(db, """SELECT r.facility_id, r.effective_from, r.effective_to,
+        s.url AS source_url, s.checked_on,
+        c.closure_type AS type, c.closure_value AS value, c.note
+        FROM rule_sets r JOIN sources s ON s.id=r.source_id
+        LEFT JOIN closure_rules c ON c.rule_set_id=r.id
+        WHERE ? BETWEEN r.effective_from AND r.effective_to
+        ORDER BY r.facility_id, c.closure_type, c.closure_value""", (use_date,))
+    grouped = {}
+    for row in rows:
+        facility_id = row.pop("facility_id")
+        grouped.setdefault(facility_id, []).append(row)
+
+    codes = set(holiday_codes or [])
+    results = {}
+    for facility_id, records in grouped.items():
+        rules = [row for row in records if row["type"] is not None]
+        matched = [
+            row for row in rules
+            if (row["type"] == "annual_date" and row["value"] == use_date[5:])
+            or (row["type"] == "exact_date" and row["value"] == use_date)
+            or (row["type"] == "holiday_code" and row["value"] in codes)
+        ]
+        if matched:
+            status, closed = "closed", True
+        elif holiday_codes is None and any(row["type"] == "holiday_code" for row in rules):
+            status, closed = "needs_calendar_resolution", None
+        else:
+            status, closed = "no_scheduled_closure", False
+        results[facility_id] = {
+            "status": status, "facility_id": facility_id, "date": use_date,
+            "is_closed": closed, "matched_rules": matched, "source_url": records[0]["source_url"],
+            "note": "임시 휴장·행사·별도 공지는 반영되지 않았습니다. 실제 예약 가능 여부는 공식 예약 사이트에서 확인해야 합니다.",
+        }
+    return results
+
+
+def closure_status(db, facility_id, use_date, holiday_codes=None):
+    use_date = normalize_use_date(use_date)
+    return closure_statuses(db, use_date, holiday_codes).get(facility_id, {
+        "status": "no_active_rule_set", "facility_id": facility_id,
+        "date": use_date, "is_closed": None, "matched_rules": [],
+    })
+
+
+def fixed_slots_by_facility(db, use_date):
+    rows = fetch(db, """SELECT r.facility_id, p.start_time, p.end_time
+        FROM pricing_rules p JOIN rule_sets r ON r.id = p.rule_set_id
+        WHERE p.selection_type = 'fixed_slot' AND ? BETWEEN r.effective_from AND r.effective_to
+        ORDER BY r.facility_id, p.slot_no""", (normalize_use_date(use_date),))
+    slots = {}
+    for row in rows:
+        slots.setdefault(row.pop("facility_id"), []).append(row)
+    return slots
 
 
 def backend_time_policy(db, facility_id, use_date):

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots
+from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_fixed_slots
 from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -27,7 +27,7 @@ from app.models import (
 from app.options import build_options
 from app.query_parser import parse_query
 from app.repository import load_rule_data
-from app.sqlite_compare import compare_sqlite, facility_closure
+from app.sqlite_compare import compare_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -113,16 +113,17 @@ def search_facilities(request: FacilitySearchRequest):
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
     fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    closures = facility_closures(DB_PATH, conditions.date)
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
             continue
         slots = fixed_slots.get(facility["facility_id"])
-        closure = facility_closure(DB_PATH, facility["facility_id"], conditions.date.isoformat())
+        closure = closures.get(facility["facility_id"], {"status": "no_active_rule_set", "is_closed": None})
         if closure["is_closed"]:
             slots = None
         time_status = "not_eligible" if closure["is_closed"] else "unknown"
-        if slots and conditions.start_time:
+        if closure["is_closed"] is False and slots and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
         results.append({
@@ -240,11 +241,13 @@ def compare(request: CompareRequest) -> CompareResponse:
     if not has_sqlite or any(facility_id in facilities for facility_id in request.facility_ids):
         check_against_options(request.conditions, available_options)
     sqlite_facilities = {}
+    closures = {}
     if has_sqlite and any(facility_id not in facilities for facility_id in request.facility_ids):
         catalog, options = read_catalog(DB_PATH)
         sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
         if any(facility_id in sqlite_facilities for facility_id in request.facility_ids):
             check_against_options(request.conditions, options)
+            closures = facility_closures(DB_PATH, request.conditions.date)
     results = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)
@@ -256,5 +259,5 @@ def compare(request: CompareRequest) -> CompareResponse:
             raise FacilityNotFound
         if facility["sport"] != request.conditions.sport:
             return error_response(400, "invalid_option", "선택한 시설에서 이용할 수 없는 종목입니다.")
-        results.append(compare_sqlite(DB_PATH, facility, request.conditions))
+        results.append(compare_sqlite(DB_PATH, facility, request.conditions, closures=closures))
     return CompareResponse(results=results)

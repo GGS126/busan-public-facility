@@ -1,27 +1,14 @@
 """Adapt the SQLite quote to the comparison response used by the web UI."""
 
-import sys
-from functools import cache
-from importlib import import_module
-from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from app.facility_catalog import DB_PATH
+from app.facility_catalog import DB_PATH, facility_closures, load_query_api
 from app.models import CompareResult, Conditions, FeeItem, FeeResult, ReviewItem, Source, Terms
 
 
-@cache
-def load_query_api(path: Path):
-    package_name = "_facility_database"
-    spec = spec_from_file_location(package_name, path.parent / "__init__.py")
-    if spec is None or spec.loader is None:
-        raise ImportError("SQLite query module is unavailable")
-    package = module_from_spec(spec)
-    sys.modules.setdefault(package_name, package)
-    return import_module(f"{package_name}.query_api")
-
-
-def compare_sqlite(path: Path, facility: dict[str, str], conditions: Conditions) -> CompareResult:
+def compare_sqlite(
+    path: Path, facility: dict[str, str], conditions: Conditions, *, closures: dict[str, dict] | None = None,
+) -> CompareResult:
     query = load_query_api(DB_PATH.with_name("query_api.py"))
     facility_id = facility["facility_id"]
 
@@ -55,7 +42,21 @@ def compare_sqlite(path: Path, facility: dict[str, str], conditions: Conditions)
 
     items = []
     reviews = []
-    if len(rules) > 1:
+    if closures is None:
+        closures = facility_closures(path, conditions.date)
+    closure = closures.get(facility_id)
+    if closure is None or closure["is_closed"] is None:
+        reviews.append(ReviewItem(
+            code="rule_not_in_effect" if closure is None else "rule_missing",
+            target="base", source_id=source_id,
+            reason="적용기간 내 요금 규정 없음" if closure is None else "명절 휴장 여부를 확인해 주세요.",
+        ))
+    elif closure["is_closed"]:
+        reviews.append(ReviewItem(
+            code="rule_not_in_effect", target="base", source_id=source_id,
+            reason="정기 휴장일입니다. " + " / ".join(item["note"] for item in closure["matched_rules"]),
+        ))
+    elif len(rules) > 1:
         reviews.append(ReviewItem(code="rule_conflict", target="base", source_id=source_id,
                                   reason="적용 기간이 겹치는 요금 규정이 있습니다."))
     else:
