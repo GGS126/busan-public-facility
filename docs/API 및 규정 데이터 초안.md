@@ -339,7 +339,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 |---|---|---|
 | `facility_id`, `name` | 시설 식별자와 이름 | 첫 통합 |
 | `source_id` | 시설 정보의 공식 출처 | 첫 통합 |
-| `holidays` | 공휴일 날짜 목록. 없는 평일 공휴일은 평일 요금으로 계산되므로 필요 | 첫 통합 |
+| `holidays` | 시설별로 두지 않고 백엔드의 공통 공휴일 목록(`backend/data/holidays_kr.json`)을 사용. 목록 기간 밖이면 공휴일 여부에 따라 요금이 달라질 때만 확인 필요 | 첫 통합 |
 | `address`, `district` | 주소와 지역 | 검색 |
 | `operating_hours`, `phone` | 운영시간과 연락처 | 검색 |
 | `reservation_url` | 공식 예약 링크 | 준비사항 |

@@ -36,6 +36,12 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
                 )
             )
 
+    sources = [source for source in rules.sources if source.source_id in used]
+    # 공휴일 요금을 적용했으면 공휴일 판정의 근거도 함께 보여 준다.
+    calendar = rules.holiday_calendar
+    if calendar is not None and calendar.is_holiday(conditions.date):
+        sources.append(calendar.source)
+
     return CompareResult(
         facility_id=rules.facility_id,
         facility_name=rules.name,
@@ -43,5 +49,5 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
         terms=rules.terms,
         checklist=checklist,
         checklist_review_items=checklist_reviews,
-        sources=[source for source in rules.sources if source.source_id in used],
+        sources=sources,
     )

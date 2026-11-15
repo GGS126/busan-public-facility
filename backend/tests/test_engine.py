@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from app.engine import calculate
-from app.models import Conditions, DiscountRule, FacilityRules, FeeRule, Source, TimePolicy
+from app.models import Conditions, DiscountRule, FacilityRules, FeeRule, Holiday, HolidayCalendar, Source, TimePolicy
 
 SATURDAY = date(2026, 11, 7)
 MONDAY = date(2026, 11, 9)
@@ -44,6 +44,15 @@ def discount_rule(**overrides) -> DiscountRule:
     return DiscountRule(**(values | overrides))
 
 
+def calendar(holidays=(), covered_from="2026-01-01", covered_to="2027-12-31") -> HolidayCalendar:
+    return HolidayCalendar(
+        covered_from=covered_from,
+        covered_to=covered_to,
+        holidays=[Holiday(date=day, name="가상 공휴일") for day in holidays],
+        source=Source(source_id="S-HOLIDAY", url="https://example.com", checked_at="2026-11-05", license="가상"),
+    )
+
+
 def time_policy(**overrides) -> TimePolicy:
     values = dict(
         policy_id="TIME",
@@ -66,12 +75,12 @@ def flexible_policy(**overrides) -> TimePolicy:
     return time_policy(**(values | overrides))
 
 
-def facility(fee_rules=None, discount_rules=None, holidays=None, time_policies=()) -> FacilityRules:
+def facility(fee_rules=None, discount_rules=None, holidays=(), holiday_calendar=None, time_policies=()) -> FacilityRules:
     return FacilityRules(
         facility_id="F",
         name="가상 시설",
         source_id="S-00",
-        holidays=holidays or [],
+        holiday_calendar=holiday_calendar or calendar(holidays),
         time_policies=list(time_policies),
         fee_rules=[base_rule()] if fee_rules is None else fee_rules,
         discount_rules=discount_rules or [],
@@ -190,6 +199,91 @@ def test_holiday_rate_applied():
     result = calculate(facility(rules, holidays=[MONDAY]), conditions(day=MONDAY))
 
     assert amounts(result)["base"] == 60000
+
+
+def test_weekend_holiday_matches_weekend_rate():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=10000, day_types=["weekday"]),
+        base_rule(rule_id="WEEKEND", amount=30000, day_types=["weekend"]),
+    ]
+    result = calculate(facility(rules, holidays=[SATURDAY]), conditions(day=SATURDAY))
+
+    assert amounts(result)["base"] == 60000
+
+
+def test_day_outside_calendar_needs_review_when_holiday_changes_rate():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=10000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=30000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert_review(result, "base", "rule_missing")
+    assert result.review_items[0].reason == "이용일이 공휴일인지 확인할 수 없습니다."
+    assert result.review_items[0].source_id == "S-00"
+
+
+def test_day_outside_calendar_calculated_when_rate_is_same_every_day():
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert amounts(result)["base"] == 40000
+
+
+def test_day_outside_calendar_ignores_expired_holiday_rule():
+    rules = [
+        base_rule(rule_id="OLD_HOLIDAY", amount=30000, day_types=["holiday"], effective_to="2026-06-30"),
+        base_rule(rule_id="NEW", amount=20000),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert [item.rule_id for item in result.items] == ["NEW"]
+
+
+def test_day_outside_calendar_calculated_when_holiday_rate_has_same_amount():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=20000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=20000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert result.total == 40000
+    assert [item.rule_id for item in result.items] == ["WEEKDAY"]
+
+
+def test_day_outside_calendar_needs_review_when_holiday_rate_cannot_be_calculated():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=20000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=None, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert_review(result, "base", "rule_missing")
+    assert result.review_items[0].reason == "이용일이 공휴일인지 확인할 수 없습니다."
+
+
+def test_day_outside_calendar_needs_review_when_holiday_lighting_differs():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="WEEKDAY_LIGHT", amount=5000, day_types=["weekday"]),
+        lighting_rule(rule_id="HOLIDAY_LIGHT", amount=8000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY, start="18:00", end="20:00"))
+
+    assert_review(result, "lighting", "rule_missing")
+
+
+def test_holiday_outside_covered_range_rejected():
+    with pytest.raises(ValueError, match="기간 밖의 공휴일"):
+        calendar(holidays=[date(2028, 1, 1)])
 
 
 def test_base_rate_changes_by_time_band_with_separate_items():
