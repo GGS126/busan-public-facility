@@ -47,12 +47,34 @@ function getFeeLabel(type) {
   return labels[type] || type || '기타 요금'
 }
 
-function getBookingUrl(result, facilities) {
-  const facility = facilities.find(
+function getFacility(result, facilities) {
+  return facilities.find(
     (item) => item.id === result.facility_id
   )
+}
 
-  return facility?.bookingUrl || null
+function isExampleUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) {
+    return false
+  }
+
+  try {
+    const hostname = new URL(url).hostname.toLowerCase()
+
+    return (
+      hostname === 'example.com' ||
+      hostname.endsWith('.example.com')
+    )
+  } catch {
+    return false
+  }
+}
+
+function isTestSource(source) {
+  return (
+    source?.license === '가상 데이터' ||
+    isExampleUrl(source?.url)
+  )
 }
 
 function FeeResult({ results, facilities = [] }) {
@@ -83,7 +105,15 @@ function FeeResult({ results, facilities = [] }) {
           {results.map((result) => {
             const fee = result.fee || {}
             const calculated = fee.status === 'calculated'
-            const bookingUrl = getBookingUrl(result, facilities)
+
+            const facility = getFacility(result, facilities)
+
+            const isTestData =
+              facility?.isTestData === true ||
+              result.facility_id === 'F001'
+
+            const bookingUrl =
+              !isTestData ? facility?.bookingUrl : null
 
             return (
               <article
@@ -95,10 +125,29 @@ function FeeResult({ results, facilities = [] }) {
                     {calculated ? '계산 완료' : '확인 필요'}
                   </span>
 
-                  <h3>{result.facility_name}</h3>
+                  <h3>
+                    {displayText(result.facility_name)}
+                  </h3>
                 </div>
 
-                {/* 시설별로 선택한 이용 날짜와 시간 */}
+                {isTestData && (
+                  <div
+                    className="review-box"
+                    style={{ marginTop: '12px' }}
+                  >
+                    <strong>
+                      백엔드 연동 테스트용 가상 시설
+                    </strong>
+
+                    <p>
+                      이 시설의 요금과 예약 규정은
+                      실제 부산 공공체육시설 정보가
+                      아닌 테스트 데이터입니다.
+                    </p>
+                  </div>
+                )}
+
+                {/* 선택한 이용조건 */}
                 <div className="result-details">
                   <h4>선택한 이용조건</h4>
 
@@ -112,9 +161,13 @@ function FeeResult({ results, facilities = [] }) {
                   <p>
                     이용시간:{' '}
                     <strong>
-                      {displayText(result.selected_start_time)}
+                      {displayText(
+                        result.selected_start_time
+                      )}
                       {' ~ '}
-                      {displayText(result.selected_end_time)}
+                      {displayText(
+                        result.selected_end_time
+                      )}
                     </strong>
                   </p>
                 </div>
@@ -127,8 +180,14 @@ function FeeResult({ results, facilities = [] }) {
                     <>
                       <div className="fee-list">
                         {fee.items?.map((item, index) => (
-                          <div className="fee-row" key={index}>
-                            <span>{getFeeLabel(item.type)}</span>
+                          <div
+                            className="fee-row"
+                            key={`${item.rule_id || item.type}-${index}`}
+                          >
+                            <span>
+                              {getFeeLabel(item.type)}
+                            </span>
+
                             <strong>
                               {formatWon(item.amount)}
                             </strong>
@@ -154,24 +213,52 @@ function FeeResult({ results, facilities = [] }) {
                         <div className="fee-row final-price">
                           <span>최종 예상 부담액</span>
                           <strong>
-                            {formatWon(fee.net_cost_after_refund)}
+                            {formatWon(
+                              fee.net_cost_after_refund
+                            )}
                           </strong>
                         </div>
                       </div>
+
+                      {fee.review_items?.length > 0 && (
+                        <div className="review-box">
+                          <h4>추가 확인사항</h4>
+
+                          <ul>
+                            {fee.review_items.map(
+                              (item, index) => (
+                                <li key={index}>
+                                  {getItemText(item)}
+                                </li>
+                              )
+                            )}
+                          </ul>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div className="review-box">
                       <h4>요금 확인 필요</h4>
+
                       <p>
-                        현재 조건의 요금을 확정할 수 없습니다.
+                        현재 조건의 요금을 확정할 수
+                        없습니다.
                       </p>
 
                       {fee.review_items?.length ? (
-                        fee.review_items.map((item, index) => (
-                          <p key={index}>{getItemText(item)}</p>
-                        ))
+                        <ul>
+                          {fee.review_items.map(
+                            (item, index) => (
+                              <li key={index}>
+                                {getItemText(item)}
+                              </li>
+                            )
+                          )}
+                        </ul>
                       ) : (
-                        <p>추가 확인이 필요한 항목입니다.</p>
+                        <p>
+                          추가 확인이 필요한 항목입니다.
+                        </p>
                       )}
                     </div>
                   )}
@@ -183,12 +270,16 @@ function FeeResult({ results, facilities = [] }) {
 
                   <p>
                     예약 시작:{' '}
-                    {displayText(result.terms?.booking_open)}
+                    {displayText(
+                      result.terms?.booking_open
+                    )}
                   </p>
 
                   <p>
                     취소 기한:{' '}
-                    {displayText(result.terms?.cancel_deadline)}
+                    {displayText(
+                      result.terms?.cancel_deadline
+                    )}
                   </p>
 
                   <p>
@@ -203,21 +294,26 @@ function FeeResult({ results, facilities = [] }) {
 
                   {result.checklist?.length ? (
                     <ul>
-                      {result.checklist.map((item, index) => (
-                        <li key={index}>
-                          {getItemText(item)}
-                        </li>
-                      ))}
+                      {result.checklist.map(
+                        (item, index) => (
+                          <li key={index}>
+                            {getItemText(item)}
+                          </li>
+                        )
+                      )}
                     </ul>
                   ) : (
                     <p>
-                      준비사항 정보가 아직 연결되지 않았습니다.
+                      현재 응답에 등록된 준비사항이
+                      없습니다.
                     </p>
                   )}
 
-                  {result.checklist_review_items?.length > 0 && (
+                  {result.checklist_review_items
+                    ?.length > 0 && (
                     <>
                       <h4>추가 확인사항</h4>
+
                       <ul>
                         {result.checklist_review_items.map(
                           (item, index) => (
@@ -231,36 +327,56 @@ function FeeResult({ results, facilities = [] }) {
                   )}
                 </div>
 
-                {/* 공식 출처 */}
+                {/* 자료 출처 */}
                 <div className="result-details">
-                  <h4>공식 출처 및 확인일</h4>
+                  <h4>자료 출처 및 확인일</h4>
 
                   {result.sources?.length ? (
-                    result.sources.map((source, index) => (
-                      <div key={index}>
-                        {source.url ? (
-                          <p>
-                            <a
-                              href={source.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              공식 자료 확인 ↗
-                            </a>
-                          </p>
-                        ) : (
-                          <p>출처 링크: 확인 필요</p>
-                        )}
+                    result.sources.map(
+                      (source, index) => {
+                        const testSource =
+                          isTestSource(source)
 
-                        <p>
-                          자료 확인일:{' '}
-                          {displayText(source.checked_at)}
-                        </p>
-                      </div>
-                    ))
+                        return (
+                          <div
+                            key={`${source.source_id || 'source'}-${index}`}
+                          >
+                            {testSource ? (
+                              <p>
+                                테스트용 가상 출처
+                                {source.source_id
+                                  ? ` (${source.source_id})`
+                                  : ''}
+                              </p>
+                            ) : source.url ? (
+                              <p>
+                                <a
+                                  href={source.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  자료 출처 확인 ↗
+                                </a>
+                              </p>
+                            ) : (
+                              <p>
+                                출처 링크: 확인 필요
+                              </p>
+                            )}
+
+                            <p>
+                              자료 확인일:{' '}
+                              {displayText(
+                                source.checked_at
+                              )}
+                            </p>
+                          </div>
+                        )
+                      }
+                    )
                   ) : (
                     <p>
-                      공식 출처 및 확인일 정보가 아직
+                      출처 및 확인일 정보가 아직
                       연결되지 않았습니다.
                     </p>
                   )}
@@ -274,8 +390,15 @@ function FeeResult({ results, facilities = [] }) {
                     >
                       공식 예약 사이트 이동 ↗
                     </a>
+                  ) : isTestData ? (
+                    <p>
+                      테스트용 시설로 공식 예약
+                      링크가 없습니다.
+                    </p>
                   ) : (
-                    <p>공식 예약 링크 확인 필요</p>
+                    <p>
+                      공식 예약 링크 확인 필요
+                    </p>
                   )}
                 </div>
               </article>
@@ -286,8 +409,10 @@ function FeeResult({ results, facilities = [] }) {
 
       <p className="result-disclaimer">
         본 서비스는 참고용 정보를 제공합니다.
-        실제 예약 가능 여부와 최종 요금은 공식 예약 사이트에서
-        확인해야 합니다. 현재는 모의 API를 사용하고 있습니다.
+        실제 예약 가능 여부와 최종 요금은
+        각 시설의 공식 안내에서 확인해야 합니다.
+        테스트용 시설의 정보는 실제 예약에
+        사용할 수 없습니다.
       </p>
     </section>
   )

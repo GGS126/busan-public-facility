@@ -10,9 +10,17 @@ import FacilityList from './components/FacilityList'
 import FeeResult from './components/FeeResult'
 import './App.css'
 
-// 비교 대상 공공체육시설
-// 시설 검색 API 연동 전까지 기존 목록 유지
+// 시설 검색 API가 병합되기 전까지 사용하는 임시 시설 목록
 const facilities = [
+  {
+    id: 'F001',
+    name: '예시 체육관',
+    sport: 'futsal',
+    district: '해운대구',
+    address: '백엔드 연동 테스트용 가상 시설 (실제 주소 없음)',
+    bookingUrl: null,
+    isTestData: true,
+  },
   {
     id: 'busan_haeundae_arboretum_tennis',
     name: '해운대수목원 테니스장',
@@ -99,12 +107,13 @@ function App() {
   const [discountType, setDiscountType] = useState('none')
   const [eligibleCount, setEligibleCount] = useState('0')
 
-  // 백엔드에서 가져온 이용조건 선택지
+  // 백엔드 이용조건 선택지
   const [options, setOptions] = useState({
     sports: [],
     districts: [],
     discount_types: [],
   })
+
   const [optionsLoading, setOptionsLoading] = useState(true)
   const [optionsError, setOptionsError] = useState('')
   const [optionsRetry, setOptionsRetry] = useState(0)
@@ -136,7 +145,7 @@ function App() {
         setOptions(response)
         setOptionsError('')
 
-        // 서버가 지원하는 종목 중 하나를 기본 선택
+        // 서버가 지원하는 종목을 기본 선택
         setSport((previous) => {
           const exists = response.sports.some(
             (item) => item.code === previous
@@ -153,7 +162,7 @@ function App() {
           return tennis?.code || response.sports[0]?.code || ''
         })
 
-        // 기존 지역이 API 목록에 없다면 전체로 초기화
+        // 지원하지 않는 지역이면 전체로 초기화
         setDistrict((previous) =>
           previous === '전체' ||
           response.districts.includes(previous)
@@ -161,7 +170,7 @@ function App() {
             : '전체'
         )
 
-        // 지원하지 않는 감면 유형이면 감면 없음 선택
+        // 지원하지 않는 감면 유형이면 감면 없음
         setDiscountType((previous) =>
           previous === 'none' ||
           response.discount_types.some(
@@ -198,7 +207,7 @@ function App() {
     setOptionsRetry((previous) => previous + 1)
   }
 
-  // 입력 조건 변경 시 이전 검색 및 비교 결과 초기화
+  // 입력 조건 변경 시 검색 및 비교 결과 초기화
   function clearResult() {
     setSearched(false)
     setSearchResults([])
@@ -280,7 +289,7 @@ function App() {
     return ''
   }
 
-  // 시설의 예약 회차와 희망 시간이 일치하는지 확인
+  // 시설의 예약 회차와 희망 시간 일치 여부 확인
   function getMatchingTime(facilityId) {
     if (!startTime || !endTime) {
       return ''
@@ -307,7 +316,8 @@ function App() {
       return
     }
 
-    // 시설 검색 API 연동 전까지 기존 시설 목록 사용
+    // TODO: 시설 검색 API 병합 후 서버 조회로 교체
+    // 현재는 백엔드 테스트 시설 F001을 포함한 임시 목록
     const filtered = facilities.filter((facility) => {
       return (
         facility.sport === sport &&
@@ -330,7 +340,7 @@ function App() {
     }, 100)
   }
 
-  // 시설 선택 시 일치하는 예약 회차 자동 선택
+  // 시설 선택 및 이용시간 자동 선택
   function toggleFacility(id) {
     const isSelected = selectedIds.includes(id)
 
@@ -373,10 +383,9 @@ function App() {
     setCompareError('')
   }
 
-  // 자연어 입력에서 확인한 조건을 직접 입력 폼에 적용
+  // 자연어 입력 조건을 직접 입력 폼에 적용
   function handleApplyAI(conditions) {
-    // API가 지원하는 종목만 적용
-    const requestedSport = conditions.sport || 'tennis'
+    const requestedSport = conditions.sport || sport
 
     const nextSport = options.sports.some(
       (item) => item.code === requestedSport
@@ -384,7 +393,6 @@ function App() {
       ? requestedSport
       : sport
 
-    // API가 지원하는 지역만 적용
     const requestedDistrict = conditions.district || '전체'
 
     const nextDistrict =
@@ -396,10 +404,12 @@ function App() {
     setSport(nextSport)
     setDistrict(nextDistrict)
     setDate(conditions.date || '')
-
-    // 자연어 입력 화면과 시간 필드명 일치
-    setStartTime(conditions.startTime || '')
-    setEndTime(conditions.endTime || '')
+    setStartTime(
+      conditions.startTime || conditions.start_time || ''
+    )
+    setEndTime(
+      conditions.endTime || conditions.end_time || ''
+    )
 
     if (conditions.headcount != null) {
       setPeople(String(conditions.headcount))
@@ -407,7 +417,6 @@ function App() {
 
     clearResult()
 
-    // 화면 갱신 후 01 이용 조건 입력 영역으로 이동
     setTimeout(() => {
       document.getElementById('search')?.scrollIntoView({
         behavior: 'smooth',
@@ -423,7 +432,7 @@ function App() {
     })
   }
 
-  // 선택한 시설을 각자의 이용시간으로 비교
+  // 선택한 시설을 각각의 이용시간으로 비교
   async function handleCompare() {
     setCompareError('')
     setResults([])
@@ -500,7 +509,6 @@ function App() {
         })
       )
 
-      // 개별 비교 결과를 하나의 배열로 합침
       setResults(responses.flat())
 
       setTimeout(() => {
@@ -559,7 +567,7 @@ function App() {
           onRetryOptions={retryOptions}
         />
 
-        {/* 시설 검색 결과 및 시설별 이용시간 선택 */}
+        {/* 시설 검색 결과 */}
         <FacilityList
           facilities={searchResults}
           selectedIds={selectedIds}
@@ -573,7 +581,7 @@ function App() {
           error={compareError}
         />
 
-        {/* 시설별 요금 및 이용조건 비교 결과 */}
+        {/* 시설별 요금 비교 결과 */}
         <FeeResult
           results={results}
           facilities={facilities}
@@ -597,6 +605,11 @@ function App() {
             <p>
               예약 가능 여부와 최신 요금·규정은 공식
               안내를 확인해 주세요.
+            </p>
+
+            <p>
+              현재 예시 체육관(F001)은 백엔드 연동을
+              검증하기 위한 가상 테스트 시설입니다.
             </p>
           </div>
         </section>
