@@ -42,7 +42,7 @@ POST /api/compare
 |---|---|---|
 | `facility_ids` | 예 | 1곳 이상, 등록된 시설 |
 | `conditions.sport` | 예 | `GET /api/options`의 종목 |
-| `conditions.districts` | 아니요 | 시설 검색(API-02)에서 필수, 이 API의 계산에는 사용하지 않음 |
+| `conditions.districts` | 아니요 | 시설 검색(API-02)의 지역 필터. 빈 배열이면 부산 전체. 이 API의 계산에는 사용하지 않음 |
 | `conditions.date` | 예 | 올바른 날짜, 지난 날짜 불가 |
 | `conditions.start_time` | 예 | 올바른 시간 |
 | `conditions.end_time` | 예 | `start_time`보다 늦은 시간, 자정까지 이용은 `24:00` |
@@ -206,6 +206,124 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 
 로그에는 API 키와 개인정보를 남기지 않으며, 감면 유형도 개인 정보를 드러낼 수 있으므로 기록하지 않습니다.
 
+## API-06 입력 확장안
+
+작성일: 2026-11-09  
+상태: 팀 검토용 제안 (#7, #16)
+
+PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식으로는 정답 사례를 계산할 수 없어 입력을 확장합니다.
+이 절의 금액은 PR #12의 정답 사례를 기준으로 합니다.
+
+| 규정 | 시설 | 현재 형식의 문제 |
+|---|---|---|
+| 감면 대상 인원에 비례한 감면 | 해운대수목원, 삼락생태공원 | 감면 유형만 받아 기본요금 전체를 감면함 |
+| 예약 대표자가 대상일 때만 감면 | 구덕운동장 | 대표자 여부를 받지 않음 |
+| 사용자가 고르는 선택 조명 | 해운대수목원, 삼락생태공원 | 조명 사용 시간을 받지 않음 |
+| 지정 회차, 허용 이용시간 | 3곳 모두 | 선택할 수 없는 시간을 '확인 필요'로 잘못 안내함 |
+
+### 확장된 요청
+
+```json
+{
+  "facility_ids": ["busan_haeundae_arboretum_tennis"],
+  "conditions": {
+    "sport": "tennis",
+    "districts": [],
+    "date": "2026-11-11",
+    "start_time": "07:00",
+    "end_time": "09:00",
+    "headcount": 4,
+    "discounts": [
+      { "type": "disabled", "count": 1, "holder": true },
+      { "type": "multi_child", "count": 1, "holder": false }
+    ],
+    "optional_lighting_minutes": 0,
+    "source": "direct"
+  }
+}
+```
+
+| 항목 | 필수 | 검증 |
+|---|---|---|
+| `conditions.headcount` | `discounts`가 있으면 예 | 1 이상의 정수. 예약 대표자를 포함한 전체 이용 인원 |
+| `conditions.discounts` | 아니요 | 감면 대상자가 없으면 빈 배열 |
+| `discounts[].type` | 예 | `GET /api/options`의 감면 유형, 항목 간 중복 불가 |
+| `discounts[].count` | 예 | 1 이상의 정수. 이 유형의 감면 대상 인원 |
+| `discounts[].holder` | 아니요 | 예약 대표자가 이 유형의 대상자이면 `true`, 기본값 `false`. `true`는 한 항목만 가능 |
+| `conditions.optional_lighting_minutes` | 아니요 | 0 이상의 정수, 기본값 0. 이용 시간보다 길 수 없음 |
+
+- `discounts[].count`의 합은 `headcount`를 넘을 수 없습니다. 대표자도 `count`에 포함합니다.
+- `discount_types`는 `discounts`로 대체합니다. 한 사람에게는 감면 유형 하나만 적용한다고 보고, 서로 다른 사람의 유형은 함께 받을 수 있습니다.
+- 입력은 인원수와 유형 코드뿐이며 이름·증빙 번호 같은 개인정보는 받지 않습니다.
+- 위 항목을 위반하면 지금처럼 `400 validation_error`와 항목별 `fields`로 응답합니다.
+
+### 감면 계산 방식
+
+시설마다 감면 규정에 계산 방식(`basis`)을 두고, 같은 입력으로 시설별 규정에 맞게 계산합니다.
+
+| `basis` | 계산 | 시설 |
+|---|---|---|
+| `per_eligible_person` | 기본요금 ÷ `headcount` × `count` × 감면율 | 해운대수목원, 삼락생태공원 |
+| `holder_whole_fee` | 대표자가 대상(`holder: true`)이면 기본요금 × 감면율, 아니면 0원 | 구덕운동장 |
+| `whole_fee` | 기본요금 × 감면율 (현재 엔진 방식) | 해당 시설 없음 |
+
+| 사례 | 조건 | 감면액 |
+|---|---|---|
+| T06 해운대 평일 07~09시 | 8,000원, 4명 중 감면 대상 2명 | 8,000 ÷ 4 × 2 × 50% = 2,000원 환급 |
+| S04 삼락 주말 15~17시 | 9,000원, 3명 중 1명 | 9,000 ÷ 3 × 1 × 50% = 1,500원 환급 |
+| 구덕 대표자 대상 | 8,000원, 대표자 장애인 | 8,000 × 50% = 4,000원 환급 |
+| 구덕 동반자만 대상 | 8,000원, 동반자 3명 | 0원 |
+
+- 감면 유형별로 금액 항목(`type: "discount"`)을 하나씩 반환하고, 조명료는 세 시설 모두 감면 대상에서 제외합니다.
+- 나눠 떨어지지 않는 금액은 규정의 `rounding`으로 처리하고, 끝전 기준이 없으면 '확인 필요'(`rule_missing`)로 반환합니다.
+- `per_eligible_person`은 대표자 여부와 관계없이 인원으로 계산하고, `holder_whole_fee`는 `count`와 관계없이 대표자 여부로 계산합니다.
+
+### 선택 조명
+
+`optional_lighting_minutes`는 지정 회차 중 사용자가 조명을 켤 시간입니다. 필수 조명(해운대 20~22시 회차, 구덕 18시 이후)은 지금처럼 이용 시간으로 자동 계산합니다.
+
+| 시설 | 선택 조명 규정 |
+|---|---|
+| 해운대수목원 | 07~20시 회차, 60분 10,000원 + 남은 10분마다 1,600원, 현장 결제 |
+| 삼락생태공원 | 08~17시 회차, 60분 단위 올림 10,000원 |
+| 구덕운동장 | 없음 (조명은 18시 이후 필수 부과) |
+
+### 이용할 수 없는 시간
+
+지정 회차와 다른 시간, 허용되지 않는 이용시간처럼 규정상 이용할 수 없는 조건은 계산하지 않고 `fee.status`를 `not_eligible`로 반환합니다.
+[함께 정할 내용](#함께-정할-내용)의 `not_eligible` 제안을 구체화한 것입니다.
+
+| `fee.status` | 의미 | 합계 |
+|---|---|---|
+| `not_eligible` | 규정상 이 조건으로 이용할 수 없음 | 모두 `null` |
+
+| `review_items[].code` | 상황 | 예 |
+|---|---|---|
+| `slot_mismatch` | 지정 회차와 시간이 다름 | 해운대 09:00~10:00 |
+| `duration_not_allowed` | 허용 이용시간이 아님 | 구덕 3시간 |
+| `outside_hours` | 운영시간 밖 | 구덕 22:00 이후 |
+
+여러 시설을 비교할 때 한 시설만 이용할 수 없을 수 있으므로 `400` 대신 시설별 결과로 반환합니다.
+`review_items[].target`에는 `time`을 추가합니다.
+
+### 다른 API에 미치는 영향
+
+| 대상 | 변경 |
+|---|---|
+| 프론트엔드 (#16) | '감면 대상 인원' 입력을 유형별 `count`로 보내고, 대표자 여부와 선택 조명 시간 입력을 추가 |
+| 자연어 추출 (#15) | 감면 유형만 추출하고 인원·대표자 여부는 사용자 확인 화면에서 입력. AI가 인원을 추정하지 않음 |
+| `GET /api/options` | 변경 없음 |
+| 규칙 엔진 | 감면 규정에 `basis`, 시설에 회차·허용 이용시간, 조명에 선택 조명 규정 추가 |
+
+### 확인할 내용
+
+| 담당 | 확인할 내용 |
+|---|---|
+| 김승일 | 유형별 인원 + 대표자 여부 입력을 화면에 넣을 수 있는지, `not_eligible` 표시 방법 |
+| 왕연호 | 중증 장애인 보호자 1명을 `count`에 포함하는 것이 맞는지, 나눠 떨어지지 않을 때의 끝전 처리 기준과 정답 사례 |
+| 김규성 | 자연어 추출 결과를 `discounts` 형식으로 넘기고 인원은 확인 화면에서 받는 방식이 괜찮은지 |
+| 공통 | 해당 시설에 없는 선택 조명을 요청했을 때 0원으로 계산하고 안내할지, 확인 필요로 처리할지 |
+
 ## 규정 데이터 항목
 
 저장 구조와 DB 종류는 이 항목을 기준으로 왕연호와 함께 정합니다.
@@ -250,6 +368,29 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 | `months` | 적용 월, 계절 기준이 시설마다 다를 수 있어 월로 표시. 전체면 `null` | `[11, 12, 1, 2]` |
 | `effective_from`, `effective_to` | 규정 적용 기간, 시행일을 시작일로 사용 | `2026-01-01`, `null` |
 | `source_id` | 근거 출처 | `S-01` |
+
+### 이용시간 규정
+
+예약할 수 있는 시간을 정한 규정입니다. 맞지 않는 시간은 요금을 계산하지 않고 `fee.status: "not_eligible"`과 사유를 반환합니다(PR #17의 입력 확장안 참고).
+시설에 이 규정이 없거나 이용일에 유효한 규정이 없으면 이용시간 제한을 확인하지 않습니다.
+
+| 항목 | 설명 | 예시 |
+|---|---|---|
+| `policy_id`, `sport` | 규정 식별자와 종목 | `T-HAEUNDAE-01`, `tennis` |
+| `selection` | 지정 회차만 가능 또는 허용 이용시간 안에서 자유 선택 | `fixed_slot`, `flexible` |
+| `slots` | 지정 회차의 시작·종료 시간. `fixed_slot`에서 필수 | `[{"start_time": "07:00", "end_time": "09:00"}]` |
+| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 필수 | `[60, 120]` |
+| `open_time`, `close_time` | 운영시간. 없으면 확인하지 않음 | `08:00`, `22:00` |
+| `effective_from`, `effective_to` | 규정 적용 기간. 동절기·하절기 회차를 구분 | `2026-10-01`, `2027-03-31` |
+| `source_id` | 근거 출처 | `S-01` |
+
+| 사유 코드 | 상황 |
+|---|---|
+| `slot_mismatch` | 지정 회차와 시간이 다름. 사유에 가능한 회차 목록을 포함 |
+| `duration_not_allowed` | `allowed_minutes`에 없는 이용시간 |
+| `outside_hours` | 운영시간 밖 |
+
+같은 종목에 유효한 규정이 둘 이상이면 `needs_review`와 `rule_conflict`(`target: "time"`)를 반환합니다.
 
 ### 감면 규정
 
@@ -349,4 +490,200 @@ SDD에 정의되지 않아 이 문서에서 제안하는 내용입니다. 합의
 | 이용조건 미표기 데이터 | SRS 2.4는 이용조건을 확인하지 못한 데이터의 사용을 금지하고 SDD는 빈 값의 적재를 거부하므로, 확인 결과를 `license`에 기록하는 형식을 결정 |
 | `checklist` 위치 | UI-06은 API-07을 호출하므로 API-06 응답에도 둘지 준비사항 단계에서 결정. 합의 전까지 SDD대로 유지 |
 
-시설 검색·상세·선택지·체크리스트 API(API-02, 03, 05, 07)는 첫 통합 후 SDD를 바탕으로 이 문서의 형식에 맞춰 구체화합니다.
+체크리스트 API(API-07)는 SDD를 바탕으로 이 문서의 형식에 맞춰 구체화합니다. 선택지 API(API-05)는 구현되어 있고, 시설 검색·상세 API는 아래 절에서 제안합니다.
+
+## 시설 검색·상세 API (API-02, API-03)
+
+작성일: 2026-11-09  
+상태: 팀 검토용 제안 (#16)
+
+조건에 맞는 후보 시설 목록(UI-03)과 시설 상세(UI-04)에 필요한 형식입니다(FR-003, FR-004, FR-011, FR-012).
+프론트엔드에 하드코딩된 시설 목록·주소·예약 URL과 `facilitySlots.js`의 회차를 이 API로 대체합니다.
+예시는 PR #12의 실제 시설 정보를 사용합니다.
+
+### 시설 검색 (API-02)
+
+```
+POST /api/facilities/search
+```
+
+```json
+{
+  "conditions": {
+    "sport": "tennis",
+    "districts": [],
+    "date": "2026-11-11",
+    "start_time": "09:00",
+    "end_time": "10:00",
+    "source": "direct"
+  }
+}
+```
+
+`conditions`는 API-06과 같은 형식이고 같은 검증을 거칩니다. 검색에서는 다음 항목만 다르게 다룹니다.
+
+| 항목 | 필수 | 검색에서의 처리 |
+|---|---|---|
+| `sport` | 예 | 이 종목의 요금 규정이 있는 시설만 반환 |
+| `districts` | 아니요 | 지정한 지역의 시설만 반환. 빈 배열이면 부산 전체 |
+| `date` | 예 | 이용일에 유효한 이용시간 규정으로 시간 선택지와 이용 가능 여부 판단 |
+| `start_time`, `end_time` | 아니요 | 둘 다 있으면 시설별로 이용 가능 여부 판단, 없으면 판단 생략. 하나만 있으면 `400` |
+| `headcount`, 감면 항목 | 아니요 | 검색에 쓰지 않음. 검색 → 비교로 같은 조건을 넘길 수 있게 받기만 함 |
+
+종목·지역은 **목록에서 제외하는 조건**입니다. 날짜·시간은 목록에서 빼지 않고 시설별로 판단 결과를 붙입니다.
+시간 때문에 시설이 사라지면 사용자가 "가능한 회차"를 알 수 없기 때문입니다(결과 없음 시 조건 완화 안내, UC-003).
+
+#### 응답
+
+```json
+{
+  "results": [
+    {
+      "facility_id": "busan_haeundae_arboretum_tennis",
+      "name": "해운대수목원 테니스장",
+      "sport": "tennis",
+      "district": "해운대구",
+      "address": "부산 해운대구 석대동 26",
+      "time_check": {
+        "status": "not_eligible",
+        "review_items": [
+          {
+            "code": "slot_mismatch",
+            "target": "time",
+            "reason": "정해진 회차로만 예약할 수 있습니다. 가능한 회차: 07:00~09:00, 09:00~11:00, …",
+            "source_id": "busan_reserve_619_2026h2"
+          }
+        ]
+      },
+      "time_options": {
+        "selection": "fixed_slot",
+        "slots": [
+          { "start_time": "07:00", "end_time": "09:00" },
+          { "start_time": "09:00", "end_time": "11:00" }
+        ],
+        "allowed_minutes": [],
+        "open_time": null,
+        "close_time": null,
+        "source_id": "busan_reserve_619_2026h2"
+      },
+      "source_id": "busan_reserve_619_2026h2"
+    }
+  ],
+  "alternatives": null,
+  "sources": [
+    {
+      "source_id": "busan_reserve_619_2026h2",
+      "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=531&progrmSn=619",
+      "checked_at": "2026-11-06",
+      "license": null
+    }
+  ]
+}
+```
+
+| `time_check.status` | 의미 |
+|---|---|
+| `eligible` | 규정상 이 시간에 이용 가능. 실제 잔여석은 확인하지 않음 |
+| `not_eligible` | 규정상 이 시간에 이용 불가. 사유는 API-06의 `slot_mismatch`, `duration_not_allowed`, `outside_hours`와 같음 |
+| `unknown` | 이용일에 유효한 이용시간 규정이 없거나, 요청에 시간이 없어 판단하지 않음 |
+
+- 정렬은 `eligible` → `unknown` → `not_eligible` 순서이고, 같은 상태 안에서는 시설명 순서입니다.
+- `time_options`는 이용일에 유효한 이용시간 규정입니다. 규정이 없으면 `null`입니다. 프론트엔드는 이 값으로 회차·시간 선택지를 그립니다.
+  - `fixed_slot`: `slots` 중에서 선택
+  - `flexible`: `open_time`~`close_time` 안에서 `allowed_minutes` 길이로 선택
+- 이용 가능 여부는 **규정상 판단**이며, 실제 예약 가능 여부(잔여석)는 제공하지 않습니다. 화면에 공식 예약 사이트 확인 안내를 함께 표시합니다.
+- 요금은 계산하지 않습니다. 요금은 비교할 시설을 고른 뒤 API-06으로 계산합니다.
+
+#### 결과 없음
+
+종목·지역에 맞는 시설이 없으면 `200`과 빈 `results`를 반환합니다.
+지역을 지정했는데 결과가 없으면, 같은 종목의 시설이 있는 다른 지역을 `alternatives`로 안내합니다.
+
+```json
+{
+  "results": [],
+  "alternatives": { "districts": ["사상구", "서구", "해운대구"] },
+  "sources": []
+}
+```
+
+종목 자체가 등록되지 않았으면 `GET /api/options`에 없는 값이므로 API-06처럼 `400 invalid_option`으로 응답합니다.
+
+### 시설 상세 (API-03)
+
+```
+GET /api/facilities/{facility_id}?date=2026-11-11
+```
+
+`date`는 선택이며, 없으면 오늘(한국 시간) 기준으로 유효한 규정을 보여 줍니다. 지난 날짜는 `400`입니다.
+
+```json
+{
+  "facility_id": "busan_gudeok_stadium_tennis",
+  "name": "구덕운동장 테니스장",
+  "sports": ["tennis"],
+  "district": "서구",
+  "address": "부산 서구 망양로 57 (서대신동3가, 구덕운동장)",
+  "phone": "051-602-2215 / 051-602-2201",
+  "operating_hours": { "open_time": "08:00", "close_time": "22:00", "note": "연중무휴(정기 휴무일 없음)" },
+  "closure_note": "연중무휴(명절 등 별도 공지일 제외)",
+  "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
+  "time_options": [
+    {
+      "sport": "tennis",
+      "selection": "flexible",
+      "slots": [],
+      "allowed_minutes": [60, 120],
+      "open_time": "08:00",
+      "close_time": "22:00",
+      "source_id": "busan_reserve_472_2026winter"
+    }
+  ],
+  "source_id": "busan_reserve_472_2026winter",
+  "sources": [
+    {
+      "source_id": "busan_reserve_472_2026winter",
+      "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
+      "checked_at": "2026-11-06",
+      "license": null
+    }
+  ]
+}
+```
+
+- 모르는 값은 `null`이며 화면에는 '확인 필요'로 표시합니다(FR-004).
+- `booking_url`이 `null`이면 공식 예약 링크 대신 '공식 예약 링크 확인 필요'를 표시합니다(FR-012).
+- 등록되지 않은 시설은 `404 facility_not_found`입니다.
+- 요금·예약·취소 조건은 API-06이 맡고, 상세 API에는 넣지 않습니다.
+
+### 필요한 데이터
+
+| 항목 | PR #12 DB | 상태 |
+|---|---|---|
+| `name`, `address`, `phone`, `booking_url` | `facilities` | 있음 |
+| `operating_hours` | `facilities.open_time`, `close_time`, `holiday_note` | 있음 |
+| `closure_note` | `reservation_rules.closure_note` | 있음 |
+| `time_options` | `time_selection_policies`, `pricing_rules`의 회차 | 있음. 백엔드 이용시간 규정(#19)으로 변환 |
+| `district` | 없음 | **추가 필요**. 지역 필터와 `/api/options`의 지역 선택지에 사용 |
+| `sources[].license` | 없음 | 확인 필요. 없으면 `null` |
+
+시설 데이터 항목의 `reservation_url`은 DB와 프론트엔드에 맞춰 `booking_url`로 부릅니다.
+
+### SDD와 다른 점
+
+| 항목 | 제안 | 이유 |
+|---|---|---|
+| 검색 요청 | `{"conditions": {...}}` | API-06과 같은 조건 형식을 재사용 |
+| `districts` | 선택 항목, 빈 배열이면 부산 전체 | 직접 입력 화면의 '부산 전체' 선택과 자연어 입력에서 지역을 말하지 않은 경우 |
+| 시간 판단 | 목록에서 빼지 않고 `time_check`로 표시 | 결과 없음 대신 가능한 회차를 안내(UC-003 대안 흐름) |
+| `time_options` | 검색·상세 응답에 추가 | 프론트엔드의 하드코딩된 회차 데이터 대체(#16) |
+| 상세 `date` 파라미터 | 추가 | 동절기·하절기처럼 기간별로 다른 회차를 보여 줌 |
+| `alternatives` | 결과 없음 응답에 추가 | 조건 완화 안내(UC-003) |
+
+### 확인할 내용
+
+| 담당 | 확인할 내용 |
+|---|---|
+| 김승일 | `time_check`·`time_options`로 시설 목록과 회차 선택 화면을 그릴 수 있는지, `alternatives` 안내 문구 |
+| 왕연호 | `district` 컬럼 추가, `license`(이용허락범위) 기록 방법 |
+| 김규성 | 자연어 추출에서 지역이 없을 때 `districts: []`(부산 전체)로 넘기는 방식 |
