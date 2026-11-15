@@ -79,6 +79,10 @@ def test_sqlite_options_match_facility_search(monkeypatch, tmp_path):
     assert response.json()["results"][0]["time_options"] is None
     response = client.post("/api/facilities/search", json={"conditions": conditions | {"start_time": "09:00"}})
     assert response.status_code == 400
+    assert response.json()["error"]["fields"][0]["code"] == "invalid_time_range"
+
+    response = client.post("/api/facilities/search", json={"conditions": conditions | {"districts": ["동구"]}})
+    assert response.json()["alternatives"] == {"districts": ["사상구", "서구", "해운대구"]}
 
 
 def test_values_are_merged_without_duplicates_in_stable_order():

@@ -1,8 +1,8 @@
 
 import { useState } from 'react'
-import { getSearchOptions, parseNaturalLanguage } from '../api/compare'
+import { parseNaturalLanguage } from '../api/compare'
 
-function NaturalLanguageInput({ onApply, onDirectInput }) {
+function NaturalLanguageInput({ onApply, onDirectInput, options: catalog }) {
   const [sentence, setSentence] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
   const [message, setMessage] = useState('')
@@ -21,10 +21,7 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
 
     setLoading(true)
     try {
-      const [catalog, result] = await Promise.all([
-        getSearchOptions(),
-        parseNaturalLanguage(sentence.trim()),
-      ])
+      const result = await parseNaturalLanguage(sentence.trim())
       if (result.status !== 'ok' && result.status !== 'need_more') {
         setMessage(result.message || '조건을 추출하지 못했습니다. 직접 입력해 주세요.')
         return
@@ -34,7 +31,14 @@ function NaturalLanguageInput({ onApply, onDirectInput }) {
       const districts = parsed.districts ?? []
       const questions = Object.values(result.questions)
       if (districts.length > 1) questions.push('검색할 지역을 한 곳 선택해 주세요.')
-      setOptions(catalog)
+      const sports = catalog?.sports ?? []
+      setOptions({
+        sports: parsed.sport && !sports.some(({ code }) => code === parsed.sport)
+          ? [...sports, { code: parsed.sport, label: parsed.sport }]
+          : sports,
+        districts: [...new Set([...(catalog?.districts ?? []), ...districts])],
+        discount_types: catalog?.discount_types ?? [],
+      })
       setConditions({
         sport: parsed.sport ?? '',
         district: districts.length === 1 ? districts[0] : districts.length === 0 ? '전체' : '',

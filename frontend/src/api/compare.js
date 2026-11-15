@@ -1,6 +1,7 @@
+import { facilities } from '../data/mockFacilities'
 
 const USE_MOCK_API =
-  import.meta.env.VITE_USE_MOCK_API !== 'false'
+  import.meta.env.VITE_USE_MOCK_API === 'true'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || ''
@@ -26,6 +27,11 @@ async function requestAPI(path, options = {}, timeout = REQUEST_TIMEOUT) {
     })
 
     if (!response.ok) {
+      if (response.status >= 400 && response.status < 500) {
+        const payload = await response.json().catch(() => null)
+        const detail = payload?.error?.fields?.[0]?.message ?? payload?.error?.message
+        if (typeof detail === 'string' && detail) throw new Error(detail)
+      }
       if (response.status === 404) {
         throw new Error('요청한 API를 찾을 수 없습니다.')
       }
@@ -111,10 +117,20 @@ export async function compareFacilities(request) {
 }
 
 export function getSearchOptions() {
+  if (USE_MOCK_API) {
+    return Promise.resolve({
+      sports: [{ code: 'tennis', label: '테니스' }],
+      districts: [...new Set(facilities.map(facility => facility.district))],
+      discount_types: [],
+    })
+  }
   return requestAPI('/api/facilities/options')
 }
 
 export function parseNaturalLanguage(query) {
+  if (USE_MOCK_API) {
+    return Promise.resolve({ status: 'llm_failed', message: '모의 모드에서는 직접 입력해 주세요.' })
+  }
   return requestAPI('/api/query/parse', {
     method: 'POST',
     body: JSON.stringify({ query }),
@@ -122,6 +138,25 @@ export function parseNaturalLanguage(query) {
 }
 
 export async function searchFacilities(conditions) {
+  if (USE_MOCK_API) {
+    const candidates = facilities.filter(facility => facility.sport === conditions.sport)
+    const results = candidates.filter(facility =>
+      !conditions.districts.length || conditions.districts.includes(facility.district)
+    ).map(facility => {
+      if (facility.district !== '사상구' || conditions.date < '2026-10-01' || conditions.date > '2027-03-31') {
+        return facility
+      }
+      const slots = ['08:00|10:00', '10:00|12:00', '13:00|15:00', '15:00|17:00'].map(slot => {
+        const [start_time, end_time] = slot.split('|')
+        return { start_time, end_time }
+      })
+      return { ...facility, time_options: { selection: 'fixed_slot', slots } }
+    })
+    return {
+      results,
+      alternatives: results.length ? null : { districts: candidates.map(facility => facility.district) },
+    }
+  }
   const result = await requestAPI('/api/facilities/search', {
     method: 'POST',
     body: JSON.stringify({ conditions }),
