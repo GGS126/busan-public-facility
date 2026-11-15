@@ -1,6 +1,10 @@
 import logging
 import os
+from collections import deque
 from datetime import datetime
+from functools import lru_cache
+from threading import BoundedSemaphore, Lock
+from time import monotonic
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -8,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.gemini_extractor import GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest, QueryParseResponse,
 )
@@ -87,6 +91,29 @@ def parse_natural_language(request: QueryParseRequest) -> dict:
     return parse_with_options(request, available_options)
 
 
+gemini_slots = BoundedSemaphore(4)
+gemini_call_lock = Lock()
+gemini_calls: deque[float] = deque()
+
+
+def reserve_gemini_call() -> bool:
+    with gemini_call_lock:
+        now = monotonic()
+        while gemini_calls and now - gemini_calls[0] >= 60:
+            gemini_calls.popleft()
+        if len(gemini_calls) >= 15:
+            return False
+        gemini_calls.append(now)
+        return True
+
+
+@lru_cache(maxsize=4)
+def gemini_provider(key, model, sports, discounts, districts):
+    return GeminiExtractor(
+        key, model=model, sport_codes=dict(sports), discount_codes=dict(discounts), districts=list(districts),
+    )
+
+
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
     def extract(query, today):
         key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -94,19 +121,23 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             logger.warning("Gemini extraction failed: code=missing_api_key")
             return None
         try:
-            provider = GeminiExtractor(
+            provider = gemini_provider(
                 key,
-                sport_codes={option.code: option.label for option in catalog.sports},
-                discount_codes={option.code: option.label for option in catalog.discount_types},
-                districts=catalog.districts,
-                model=os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.5-flash-lite",
+                os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
+                tuple((option.code, option.label) for option in catalog.sports),
+                tuple((option.code, option.label) for option in catalog.discount_types),
+                tuple(catalog.districts),
             )
-        except GeminiResponseError as error:
-            logger.warning("Gemini extraction failed: type=%s code=%s", type(error).__name__, error.code)
+        except ValueError:
+            logger.warning("Gemini extraction failed: code=invalid_model_configuration")
             return None
 
         for attempt in (1, 2):
+            if not gemini_slots.acquire(blocking=False):
+                return None
             try:
+                if not reserve_gemini_call():
+                    return None
                 return provider(query, today)
             except GeminiResponseError as error:
                 logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
@@ -120,6 +151,8 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                 # Exception messages may include request text or credentials.
                 logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
                 break
+            finally:
+                gemini_slots.release()
         return None
 
     result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
