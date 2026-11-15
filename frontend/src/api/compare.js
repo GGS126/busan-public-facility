@@ -1,11 +1,75 @@
 
 const USE_MOCK_API =
-  import.meta.env.VITE_USE_MOCK_API !== 'false'
+  import.meta.env.VITE_USE_MOCK_API === 'true'
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || ''
 
 const REQUEST_TIMEOUT = 10000
+
+// 백엔드에서 전달한 필드별 오류 메시지 정리
+function formatFieldErrors(fields) {
+  if (!fields || typeof fields !== 'object') {
+    return ''
+  }
+
+  const messages = Object.entries(fields).flatMap(
+    ([field, errors]) => {
+      const values = Array.isArray(errors)
+        ? errors
+        : [errors]
+
+      return values.map((value) => {
+        const message =
+          typeof value === 'string'
+            ? value
+            : JSON.stringify(value)
+
+        return `${field}: ${message}`
+      })
+    }
+  )
+
+  return messages.join('\n')
+}
+
+// API 오류 메시지 생성
+function createAPIError(response, data) {
+  const errorInfo = data?.error
+  const errorCode = errorInfo?.code
+  const fieldErrors = formatFieldErrors(errorInfo?.fields)
+
+  let message = errorInfo?.message
+
+  if (!message) {
+    if (
+      response.status === 404 &&
+      errorCode === 'facility_not_found'
+    ) {
+      message = '요청한 체육시설을 찾을 수 없습니다.'
+    } else if (response.status === 404) {
+      message = '요청한 API 경로를 찾을 수 없습니다.'
+    } else if (response.status >= 500) {
+      message =
+        '서버에 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.'
+    } else {
+      message =
+        `요청을 처리할 수 없습니다. (${response.status})`
+    }
+  }
+
+  if (fieldErrors) {
+    message += `\n${fieldErrors}`
+  }
+
+  const error = new Error(message)
+
+  error.status = response.status
+  error.code = errorCode || null
+  error.fields = errorInfo?.fields || null
+
+  return error
+}
 
 // API 요청 공통 처리
 async function requestAPI(path, options = {}) {
@@ -25,23 +89,30 @@ async function requestAPI(path, options = {}) {
       },
     })
 
+    const contentType =
+      response.headers.get('content-type') || ''
+
+    let data = null
+
+    if (contentType.includes('application/json')) {
+      try {
+        data = await response.json()
+      } catch {
+        data = null
+      }
+    }
+
     if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error('요청한 API를 찾을 수 없습니다.')
-      }
+      throw createAPIError(response, data)
+    }
 
-      if (response.status >= 500) {
-        throw new Error(
-          '서버에 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.'
-        )
-      }
-
+    if (data === null) {
       throw new Error(
-        `요청을 처리할 수 없습니다. (${response.status})`
+        '서버에서 올바른 JSON 응답을 받지 못했습니다.'
       )
     }
 
-    return await response.json()
+    return data
   } catch (error) {
     if (error.name === 'AbortError') {
       throw new Error(
@@ -86,7 +157,7 @@ function createMockResult(facilityId) {
       review_items: [
         {
           reason:
-            '실제 요금 계산 API가 아직 연결되지 않았습니다.',
+            '현재 개발용 Mock API를 사용하고 있습니다.',
         },
       ],
     },
@@ -108,4 +179,9 @@ export async function compareFacilities(request) {
     method: 'POST',
     body: JSON.stringify(request),
   })
+}
+
+// 이용조건 선택지 조회 API
+export async function getOptions() {
+  return requestAPI('/api/options')
 }

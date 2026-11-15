@@ -1,14 +1,5 @@
 
-const discounts = [
-  ['none', '감면 없음'],
-  ['disabled', '장애인'],
-  ['multi_child', '다자녀 가정'],
-  ['low_income', '기초생활수급자'],
-  ['national_merit', '국가유공자'],
-  ['independence_merit', '독립유공자'],
-]
-
-// 30분 단위 이용시간 목록 생성
+ // 30분 단위 이용시간 목록 생성
 const timeOptions = Array.from({ length: 48 }, (_, index) => {
   const hour = String(Math.floor(index / 2)).padStart(2, '0')
   const minute = index % 2 === 0 ? '00' : '30'
@@ -37,11 +28,17 @@ function SearchForm({
   loading,
   error,
   clearResult,
+  options,
+  optionsLoading,
+  optionsError,
+  onRetryOptions,
 }) {
   function update(setter, value) {
     setter(value)
     clearResult()
   }
+
+  const unavailable = optionsLoading || Boolean(optionsError)
 
   return (
     <section className="search-card" id="search">
@@ -57,15 +54,49 @@ function SearchForm({
         </div>
       </div>
 
+      {/* 이용조건 선택지 로딩 상태 */}
+      {optionsLoading && (
+        <p role="status">
+          이용 가능한 종목, 지역 및 감면 유형을 불러오는 중입니다.
+        </p>
+      )}
+
+      {/* 이용조건 선택지 API 오류 */}
+      {optionsError && (
+        <div role="alert">
+          <p className="error-message">
+            이용조건 선택지를 불러오지 못했습니다.
+            {' '}
+            {optionsError}
+          </p>
+          <button
+            type="button"
+            onClick={onRetryOptions}
+            disabled={optionsLoading}
+          >
+            다시 시도
+          </button>
+        </div>
+      )}
+
       <div className="search-fields">
         <div className="field">
           <label htmlFor="sport">이용 종목</label>
           <select
             id="sport"
             value={sport}
+            disabled={unavailable || options.sports.length === 0}
             onChange={(e) => update(setSport, e.target.value)}
           >
-            <option value="tennis">테니스</option>
+            {options.sports.length === 0 && (
+              <option value="">선택 가능한 종목 없음</option>
+            )}
+
+            {options.sports.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.label}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -74,12 +105,16 @@ function SearchForm({
           <select
             id="district"
             value={district}
+            disabled={unavailable}
             onChange={(e) => update(setDistrict, e.target.value)}
           >
             <option value="전체">부산 전체</option>
-            <option value="해운대구">해운대구</option>
-            <option value="사상구">사상구</option>
-            <option value="서구">서구</option>
+
+            {options.districts.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -144,17 +179,22 @@ function SearchForm({
           <select
             id="discount"
             value={discountType}
+            disabled={unavailable}
             onChange={(e) => {
               setDiscountType(e.target.value)
               setEligibleCount('0')
               clearResult()
             }}
           >
-            {discounts.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
+            <option value="none">감면 없음</option>
+
+            {options.discount_types
+              .filter((item) => item.code !== 'none')
+              .map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.label}
+                </option>
+              ))}
           </select>
         </div>
 
@@ -180,9 +220,17 @@ function SearchForm({
       <button
         className="search-button"
         onClick={onSearch}
-        disabled={loading}
+        disabled={
+          loading ||
+          unavailable ||
+          options.sports.length === 0
+        }
       >
-        {loading ? '검색 중...' : '시설 검색하기'}
+        {loading
+          ? '검색 중...'
+          : optionsLoading
+            ? '이용조건 불러오는 중...'
+            : '시설 검색하기'}
       </button>
     </section>
   )

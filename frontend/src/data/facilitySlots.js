@@ -1,4 +1,3 @@
-
 export const facilitySlots = {
   busan_haeundae_arboretum_tennis: {
     type: 'fixed',
@@ -29,6 +28,18 @@ export const facilitySlots = {
     closeTime: '22:00',
     durations: [60, 120],
     message: '',
+  },
+
+  // 백엔드 연동 테스트 전용 가상 시설
+  // 실제 운영시간이나 공식 예약 회차를 의미하지 않음
+  F001: {
+    type: 'fixed',
+    slots: [
+      ['10:00', '12:00'],
+      ['14:00', '16:00'],
+      ['18:00', '20:00'],
+    ],
+    message: '백엔드 연동 테스트용 시간대입니다.',
   },
 }
 

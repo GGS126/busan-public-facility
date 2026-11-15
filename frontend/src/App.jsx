@@ -1,6 +1,6 @@
 
-import { useState } from 'react'
-import { compareFacilities } from './api/compare'
+import { useEffect, useState } from 'react'
+import { compareFacilities, getOptions } from './api/compare'
 import { getFacilitySlots } from './data/facilitySlots'
 import Header from './components/Header'
 import HeroBanner from './components/HeroBanner'
@@ -11,6 +11,7 @@ import FeeResult from './components/FeeResult'
 import './App.css'
 
 // 비교 대상 공공체육시설
+// 시설 검색 API 연동 전까지 기존 목록 유지
 const facilities = [
   {
     id: 'busan_haeundae_arboretum_tennis',
@@ -51,9 +52,45 @@ function getToday() {
   return `${year}-${month}-${day}`
 }
 
+// 선택지 API 응답 형식 확인
+function validateOptions(data) {
+  if (
+    !data ||
+    !Array.isArray(data.sports) ||
+    !Array.isArray(data.districts) ||
+    !Array.isArray(data.discount_types)
+  ) {
+    throw new Error(
+      '이용조건 선택지의 서버 응답 형식이 올바르지 않습니다.'
+    )
+  }
+
+  const validOptions = (items) =>
+    items.every(
+      (item) =>
+        item &&
+        typeof item.code === 'string' &&
+        typeof item.label === 'string'
+    )
+
+  if (
+    !validOptions(data.sports) ||
+    !validOptions(data.discount_types) ||
+    !data.districts.every(
+      (district) => typeof district === 'string'
+    )
+  ) {
+    throw new Error(
+      '이용조건 선택지에 올바르지 않은 데이터가 포함되어 있습니다.'
+    )
+  }
+
+  return data
+}
+
 function App() {
   // 이용조건 입력 상태
-  const [sport, setSport] = useState('tennis')
+  const [sport, setSport] = useState('')
   const [district, setDistrict] = useState('전체')
   const [date, setDate] = useState('')
   const [startTime, setStartTime] = useState('')
@@ -61,6 +98,16 @@ function App() {
   const [people, setPeople] = useState('1')
   const [discountType, setDiscountType] = useState('none')
   const [eligibleCount, setEligibleCount] = useState('0')
+
+  // 백엔드에서 가져온 이용조건 선택지
+  const [options, setOptions] = useState({
+    sports: [],
+    districts: [],
+    discount_types: [],
+  })
+  const [optionsLoading, setOptionsLoading] = useState(true)
+  const [optionsError, setOptionsError] = useState('')
+  const [optionsRetry, setOptionsRetry] = useState(0)
 
   // 시설 검색 및 비교 상태
   const [searched, setSearched] = useState(false)
@@ -73,6 +120,83 @@ function App() {
   const [error, setError] = useState('')
   const [compareError, setCompareError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // 페이지 진입 시 이용조건 선택지 조회
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadOptions() {
+      try {
+        const response = validateOptions(await getOptions())
+
+        if (cancelled) {
+          return
+        }
+
+        setOptions(response)
+        setOptionsError('')
+
+        // 서버가 지원하는 종목 중 하나를 기본 선택
+        setSport((previous) => {
+          const exists = response.sports.some(
+            (item) => item.code === previous
+          )
+
+          if (exists) {
+            return previous
+          }
+
+          const tennis = response.sports.find(
+            (item) => item.code === 'tennis'
+          )
+
+          return tennis?.code || response.sports[0]?.code || ''
+        })
+
+        // 기존 지역이 API 목록에 없다면 전체로 초기화
+        setDistrict((previous) =>
+          previous === '전체' ||
+          response.districts.includes(previous)
+            ? previous
+            : '전체'
+        )
+
+        // 지원하지 않는 감면 유형이면 감면 없음 선택
+        setDiscountType((previous) =>
+          previous === 'none' ||
+          response.discount_types.some(
+            (item) => item.code === previous
+          )
+            ? previous
+            : 'none'
+        )
+      } catch (err) {
+        if (!cancelled) {
+          setOptionsError(
+            err.message ||
+              '이용조건 선택지를 불러오지 못했습니다.'
+          )
+        }
+      } finally {
+        if (!cancelled) {
+          setOptionsLoading(false)
+        }
+      }
+    }
+
+    loadOptions()
+
+    return () => {
+      cancelled = true
+    }
+  }, [optionsRetry])
+
+  // 선택지 다시 불러오기
+  function retryOptions() {
+    setOptionsLoading(true)
+    setOptionsError('')
+    setOptionsRetry((previous) => previous + 1)
+  }
 
   // 입력 조건 변경 시 이전 검색 및 비교 결과 초기화
   function clearResult() {
@@ -87,6 +211,33 @@ function App() {
 
   // 이용조건 유효성 검사
   function validateConditions() {
+    if (optionsLoading || optionsError) {
+      return '이용조건 선택지를 먼저 불러와 주세요.'
+    }
+
+    if (
+      !sport ||
+      !options.sports.some((item) => item.code === sport)
+    ) {
+      return '이용 종목을 올바르게 선택해 주세요.'
+    }
+
+    if (
+      district !== '전체' &&
+      !options.districts.includes(district)
+    ) {
+      return '이용 지역을 올바르게 선택해 주세요.'
+    }
+
+    if (
+      discountType !== 'none' &&
+      !options.discount_types.some(
+        (item) => item.code === discountType
+      )
+    ) {
+      return '감면 유형을 올바르게 선택해 주세요.'
+    }
+
     if (!date) {
       return '이용 날짜를 선택해 주세요.'
     }
@@ -115,10 +266,13 @@ function App() {
     }
 
     if (
-      eligibleCount === '' ||
-      !Number.isInteger(Number(eligibleCount)) ||
-      Number(eligibleCount) < 0 ||
-      Number(eligibleCount) > Number(people)
+      discountType !== 'none' &&
+      (
+        eligibleCount === '' ||
+        !Number.isInteger(Number(eligibleCount)) ||
+        Number(eligibleCount) < 0 ||
+        Number(eligibleCount) > Number(people)
+      )
     ) {
       return '감면 대상 인원을 올바르게 입력해 주세요.'
     }
@@ -153,6 +307,7 @@ function App() {
       return
     }
 
+    // 시설 검색 API 연동 전까지 기존 시설 목록 사용
     const filtered = facilities.filter((facility) => {
       return (
         facility.sport === sport &&
@@ -220,8 +375,26 @@ function App() {
 
   // 자연어 입력에서 확인한 조건을 직접 입력 폼에 적용
   function handleApplyAI(conditions) {
-    setSport(conditions.sport || 'tennis')
-    setDistrict(conditions.district || '전체')
+    // API가 지원하는 종목만 적용
+    const requestedSport = conditions.sport || 'tennis'
+
+    const nextSport = options.sports.some(
+      (item) => item.code === requestedSport
+    )
+      ? requestedSport
+      : sport
+
+    // API가 지원하는 지역만 적용
+    const requestedDistrict = conditions.district || '전체'
+
+    const nextDistrict =
+      requestedDistrict === '전체' ||
+      options.districts.includes(requestedDistrict)
+        ? requestedDistrict
+        : '전체'
+
+    setSport(nextSport)
+    setDistrict(nextDistrict)
     setDate(conditions.date || '')
 
     // 자연어 입력 화면과 시간 필드명 일치
@@ -380,6 +553,10 @@ function App() {
           loading={loading}
           error={error}
           clearResult={clearResult}
+          options={options}
+          optionsLoading={optionsLoading}
+          optionsError={optionsError}
+          onRetryOptions={retryOptions}
         />
 
         {/* 시설 검색 결과 및 시설별 이용시간 선택 */}
