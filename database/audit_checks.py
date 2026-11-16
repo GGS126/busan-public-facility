@@ -719,3 +719,30 @@ with tempfile.TemporaryDirectory() as new_tmp:
  assert q.closure_status(new_db,hw,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
  assert len(q.facilities(new_db))==4
  print('PASS: 화명생태공원 테니스장 추가, 동절기 4회차·요금·환불·감면·휴장·예약기간, 4시설 무결성')
+
+
+# 삼락생태공원 축구장 동절기 다종목 공용 DB 검증
+with tempfile.TemporaryDirectory() as soccer_tmp:
+ soccer_db=pathlib.Path(soccer_tmp)/'soccer.sqlite3'
+ import build_db as soccer_build
+ soccer_build.build(soccer_db)
+ soc='busan_samrak_ecopark_soccer'
+ rid='samrak_soccer_winter_2026_2027'
+ with closing(sqlite3.connect(soccer_db)) as c:
+  assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+  assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==5
+  assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(soc,)).fetchone()==('soccer','사상구')
+  assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==3
+  assert c.execute('SELECT COUNT(*) FROM facility_options WHERE rule_set_id=?',(rid,)).fetchone()[0]==0
+  assert c.execute('SELECT COUNT(*) FROM closure_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==2
+  assert c.execute('SELECT online_open_days_before,online_close_days_before,normal_cancel_online_min_days_before FROM reservation_rules WHERE rule_set_id=?',(rid,)).fetchone()==(60,1,1)
+  assert c.execute('SELECT COUNT(*) FROM refund_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==6
+  refund=c.execute('SELECT days_before_min,rate_percent,channel FROM refund_rules WHERE rule_set_id=? AND reason=\'user_cancel\'',(rid,)).fetchall()
+  assert (3,100,'my_page') in refund and (2,90,'my_page') in refund and (1,80,'my_page') in refund
+ assert q.quote(soccer_db,soc,'2026-11-17','08:00','11:00',False)['total_won']==20000
+ assert q.quote(soccer_db,soc,'2026-11-21','11:00','14:00',True)['total_won']==30000
+ assert q.quote(soccer_db,soc,'2026-11-17','08:00','10:00',False)['status']=='invalid_time'
+ assert q.discount_proration_check(soccer_db,soc,'2026-11-17',20000,20,2,'multi_child')['discount_refund_won']==1000
+ assert q.closure_status(soccer_db,soc,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
+ print('PASS: 삼락 축구장 동절기 3시간 회차·요금·환불·감면·정기 휴장·기존 테니스장 4개 유지')
