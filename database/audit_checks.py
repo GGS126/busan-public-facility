@@ -5,6 +5,16 @@ import load,query_api as q
 R=pathlib.Path(__file__).resolve().parent
 D=json.loads((R/'seed.json').read_text(encoding='utf-8'))
 files=['seed.json','samrak_winter_2026_2027.json','gudeok_winter_2026_2027.json']
+from copy import deepcopy
+invalid_option=deepcopy(D['options'])
+invalid_option[0]['payment_type']='unverified'
+try:
+ load.validate_options(invalid_option)
+except ValueError as exc:
+ assert '결제 방식' in str(exc)
+else:
+ raise AssertionError('미지원 옵션 결제 방식 입력 허용됨')
+
 with tempfile.TemporaryDirectory() as tmp:
  tmp=pathlib.Path(tmp)
  db=tmp/'facilities.sqlite3'
@@ -20,6 +30,24 @@ with tempfile.TemporaryDirectory() as tmp:
   }, '시설별 구·군 데이터 오류'
   assert c.execute('select count(*) from pricing_rules').fetchone()[0]==13
   assert c.execute('select count(*) from facility_discounts').fetchone()[0]==31
+  option_payments=c.execute("""SELECT f.id,o.application_type,o.payment_type FROM facility_options o
+       JOIN rule_sets r ON r.id=o.rule_set_id JOIN facilities f ON f.id=r.facility_id
+       ORDER BY f.id,o.application_type""").fetchall()
+  assert ('busan_haeundae_arboretum_tennis','optional','onsite') in option_payments,option_payments
+  assert ('busan_haeundae_arboretum_tennis','included_in_base_price','online_prepay') in option_payments,option_payments
+  assert ('busan_samrak_ecopark_tennis','optional',None) in option_payments,option_payments
+  assert ('busan_gudeok_stadium_tennis','mandatory_when_applicable',None) in option_payments,option_payments
+  gudeok=q.facility_options(db,'busan_gudeok_stadium_tennis','2026-11-09')
+  assert len(gudeok)==1 and gudeok[0]['payment_type'] is None,gudeok
+  assert '결제 장소·시점' in gudeok[0]['note'],gudeok
+  samrak=q.facility_options(db,'busan_samrak_ecopark_tennis','2026-11-09')
+  assert len(samrak)==1 and samrak[0]['payment_type'] is None,samrak
+  assert '결제 장소·시점' in samrak[0]['note'],samrak
+  assert all(x[2] in (None,'online_prepay','onsite') for x in option_payments)
+  ha=q.facility_options(db,'busan_haeundae_arboretum_tennis','2026-11-09')
+  assert any(o['application_type']=='optional' and o['payment_type']=='onsite' for o in ha),ha
+  assert any(o['application_type']=='included_in_base_price' and o['payment_type']=='online_prepay' for o in ha),ha
+  print('PASS: 옵션 결제방식 onsite/null 저장 및 조회')
  # 기존 스키마에 CREATE IF NOT EXISTS만 실행하면 누락 컬럼과 VIEW가 남는 회귀 확인.
  legacy=tmp/'legacy.sqlite3'
  shutil.copy2(db,legacy)
@@ -27,7 +55,7 @@ with tempfile.TemporaryDirectory() as tmp:
   c.execute('DROP VIEW IF EXISTS v_facility_discounts')
   c.execute('DROP VIEW IF EXISTS v_slot_prices')
   for table,cols in [('facilities',['district']),('sources',['license']),
-                     ('facility_discounts',['guardian_max_count','guardian_condition',
+                     ('facility_options',['payment_type']),('facility_discounts',['guardian_max_count','guardian_condition',
                                             'guardian_evidence_note','discount_rounding_policy'])]:
    for col in cols:
     c.execute(f'ALTER TABLE {table} DROP COLUMN {col}')
@@ -39,6 +67,8 @@ with tempfile.TemporaryDirectory() as tmp:
  with closing(sqlite3.connect(legacy)) as c:
   assert c.execute("SELECT COUNT(*) FROM facilities WHERE district<>''").fetchone()[0]==3
   assert c.execute('SELECT license FROM sources LIMIT 1').fetchone()[0] is None
+  assert c.execute("SELECT COUNT(*) FROM facility_options WHERE payment_type='onsite'").fetchone()[0]==1
+  assert c.execute("SELECT COUNT(*) FROM facility_options WHERE payment_type='online_prepay'").fetchone()[0]==1
   assert c.execute("SELECT COUNT(*) FROM facility_discounts WHERE category_id='disabled' AND guardian_max_count=1").fetchone()[0]==3
   assert c.execute('SELECT category_name FROM v_facility_discounts LIMIT 1').fetchone()[0]
   assert c.execute("SELECT name FROM discount_categories WHERE id='multi_child'").fetchone()[0]=='다자녀가정에 속하는 사람'
