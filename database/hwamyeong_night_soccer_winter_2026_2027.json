@@ -6,14 +6,14 @@
     "district": "북구",
     "address": "부산광역시 북구 금곡동 1511-3 (화명생태공원)",
     "phone": "051-310-6028",
-    "booking_url": "https://reserve.busan.go.kr/rent/view.do?progrmSn=380&resveGroupSn=55",
+    "booking_url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=380",
     "open_time": "18:00",
     "close_time": "21:00",
     "holiday_note": "설 당일, 추석 당일 휴장"
   },
   "source": {
     "id": "busan_reserve_380_night_soccer_winter_2026",
-    "url": "https://reserve.busan.go.kr/rent/view.do?progrmSn=380&resveGroupSn=55",
+    "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=380",
     "title": "부산광역시 통합예약 - 낙동강관리본부 야간축구장(동절기)",
     "checked_on": "2026-11-16",
     "verification_level": "user_transcribed_official",

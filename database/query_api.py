@@ -446,10 +446,20 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
     # 고정회차에 포함된 필수 옵션의 요금은 pricing_rules에 이미 존재한다.
     # 별도 옵션 규칙을 조회하더라도 같은 요금을 중복 합산하지 않는다.
     if typ=='fixed_slot' and p['mandatory_light_won']:
-        included=[r for r in facility_option_records
-                  if r['option_id']=='lighting' and r['application_type']=='included_in_base_price'
-                  and parse(r['applies_from'])<=start and end<=parse(r['applies_to'])]
-        if not included:
+        included=[]
+        for r in facility_option_records:
+            if r['option_id']!='lighting' or r['application_type']!='included_in_base_price':
+                continue
+            # 회차 전체가 야간일 수도, 19~22시 중 20~22시만 필수 조명일 수도 있다.
+            # 포함된 시간만 산정하여 이미 표시된 필수 조명료와 일치하는지 확인한다.
+            threshold=parse(r['applies_from']) if r['applies_from'] else 0
+            boundary=parse(r['applies_to'],True) if r['applies_to'] else 1440
+            overlap=max(0,min(end,boundary)-max(start,threshold))
+            if overlap:
+                charge=option_charge(overlap,r)
+                if charge['status']=='priced' and charge['amount_won']==p['mandatory_light_won']:
+                    included.append(r)
+        if len(included)!=1:
             return {'status':'option_rule_inconsistent','reason':'필수 조명 포함 회차의 옵션 규칙이 일치하지 않음'}
     optional=optional_lighting_quote(db,facility_id,use_date,optional_lighting_minutes,options=facility_option_records)
     if optional['status']!='priced':return optional

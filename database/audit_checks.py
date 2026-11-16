@@ -731,7 +731,7 @@ with tempfile.TemporaryDirectory() as soccer_tmp:
  with closing(sqlite3.connect(soccer_db)) as c:
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
-  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==6
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==7
   assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(soc,)).fetchone()==('soccer','사상구')
   assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==3
   assert c.execute('SELECT COUNT(*) FROM facility_options WHERE rule_set_id=?',(rid,)).fetchone()[0]==0
@@ -755,7 +755,7 @@ with tempfile.TemporaryDirectory() as night_tmp:
  night='busan_hwamyeong_ecopark_night_soccer'
  nrid='hwamyeong_night_soccer_winter_2026_2027'
  with closing(sqlite3.connect(night_db)) as c:
-  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==6
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==7
   assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(night,)).fetchone()==('soccer','북구')
   assert c.execute('SELECT weekday_base_won,weekend_holiday_base_won,mandatory_light_won FROM pricing_rules WHERE rule_set_id=?',(nrid,)).fetchone()==(20000,30000,30000)
   assert c.execute('SELECT application_type,payment_type,hour_price FROM facility_options WHERE rule_set_id=?',(nrid,)).fetchone()==('included_in_base_price','online_prepay',10000)
@@ -768,3 +768,28 @@ with tempfile.TemporaryDirectory() as night_tmp:
   assert result['total_won']==total,result
   assert result['lighting_fee_won']==30000,result
  print('PASS: 화명 야간축구장 요금/필수 조명/결제방식 및 6개 시설')
+
+
+# 해운대수목원 축구장 추가: 주간 4회차 / 야간 1회차 / 포함 조명료 / 감면 / 환불
+with tempfile.TemporaryDirectory() as hs_tmp:
+ hs_db=pathlib.Path(hs_tmp)/'haeundae_soccer.sqlite3'
+ import build_db as hs_build
+ hs_build.build(hs_db)
+ hs='busan_haeundae_arboretum_soccer'
+ hrid='haeundae_soccer_2026h2'
+ with closing(sqlite3.connect(hs_db)) as c:
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==7
+  assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(hs,)).fetchone()==('soccer','해운대구')
+  assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',(hrid,)).fetchone()[0]==5
+  assert c.execute('SELECT weekday_base_won,weekend_holiday_base_won,mandatory_light_won FROM pricing_rules WHERE rule_set_id=? AND start_time=?',(hrid,'19:00')).fetchone()==(120000,180000,20000)
+  assert c.execute('SELECT payment_type FROM facility_options WHERE rule_set_id=? AND application_type=?',(hrid,'optional')).fetchone()[0]=='onsite'
+  assert c.execute('SELECT payment_type FROM facility_options WHERE rule_set_id=? AND application_type=?',(hrid,'included_in_base_price')).fetchone()[0]=='online_prepay'
+  assert c.execute('SELECT percent FROM facility_discounts WHERE rule_set_id=? AND category_id=?',(hrid,'independence_merit')).fetchone()[0]==50
+  assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+  assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+ for a,b,weekend,total,light in [('07:00','10:00',False,120000,0),('10:00','13:00',True,180000,0),('19:00','22:00',False,140000,20000),('19:00','22:00',True,200000,20000)]:
+  r=q.quote(str(hs_db),hs,'2026-11-17',a,b,weekend)
+  assert r['status']=='priced' and r['total_won']==total and r['lighting_fee_won']==light,r
+ assert q.discount_proration_check(str(hs_db),hs,'2026-11-17',120000,20,2,'multi_child')['discount_refund_won']==6000
+ assert q.quote(str(hs_db),hs,'2026-11-17','18:00','21:00',False)['status']=='invalid_time'
+ print('PASS: 해운대수목원 축구장 5회차/야간 포함 조명/감면/전체 7개 시설')
