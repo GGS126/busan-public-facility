@@ -13,6 +13,35 @@ function formatFieldErrors(fields) {
     return ''
   }
 
+  // 배열 형식:
+  // [{ field, code, message }]
+  if (Array.isArray(fields)) {
+    return fields
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return ''
+        }
+
+        const field =
+          typeof item.field === 'string'
+            ? item.field
+            : ''
+
+        const message =
+          typeof item.message === 'string'
+            ? item.message
+            : '입력값을 확인해 주세요.'
+
+        return field
+          ? `${field}: ${message}`
+          : message
+      })
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  // 객체 형식:
+  // { fieldName: ["오류 메시지"] }
   const messages = Object.entries(fields).flatMap(
     ([field, errors]) => {
       const values = Array.isArray(errors)
@@ -23,7 +52,11 @@ function formatFieldErrors(fields) {
         const message =
           typeof value === 'string'
             ? value
-            : JSON.stringify(value)
+            : value &&
+                typeof value === 'object' &&
+                typeof value.message === 'string'
+              ? value.message
+              : JSON.stringify(value)
 
         return `${field}: ${message}`
       })
@@ -86,6 +119,16 @@ function createAPIError(response, data) {
     message = '요청한 체육시설을 찾을 수 없습니다.'
   } else if (response.status === 404) {
     message = '요청한 API 경로를 찾을 수 없습니다.'
+  } else if (
+    errorCode === 'validation_error' &&
+    (response.status === 400 ||
+      response.status === 422)
+  ) {
+    message =
+      typeof errorInfo?.message === 'string' &&
+      errorInfo.message.trim()
+        ? errorInfo.message
+        : '입력한 이용조건을 확인해 주세요.'
   } else if (
     typeof errorInfo?.message === 'string' &&
     errorInfo.message.trim()
