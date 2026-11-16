@@ -236,7 +236,8 @@
       "name": "조명시설",
       "hour_price": 10000,
       "extra_unit_minutes": 10,
-      "extra_unit_price": 1600
+      "extra_unit_price": 1600,
+      "payment_type": "onsite"
     },
     {
       "id": "lighting",
@@ -246,10 +247,11 @@
       "rounding_policy": "exact_units",
       "applies_from": "20:00",
       "applies_to": "22:00",
-      "note": "20:00~22:00 회차는 조명 사용 필수. 조명료 20,000원이 회차 총요금에 이미 포함되어 추가 부과하지 않음.",
+      "note": "20:00~22:00 회차는 조명 사용 필수. 조명료 20,000원이 회차 총요금에 이미 포함되어 추가 부과하지 않음. 해당 금액은 회차 예약 시 온라인 선결제 총요금에 포함되며 선택 조명료로 중복 청구하지 않음.",
       "hour_price": 10000,
       "extra_unit_minutes": null,
-      "extra_unit_price": null
+      "extra_unit_price": null,
+      "payment_type": "online_prepay"
     }
   ],
   "closure_rules": [

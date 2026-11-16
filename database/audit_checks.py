@@ -689,3 +689,33 @@ with tempfile.TemporaryDirectory() as tmp:
  print('PASS: 시간제 시설 2곳 추가 시 PK 충돌 없음, 평일/주말 1시간 요금 분리 확인')
  print('PASS: 시설별 district 3곳 저장·조회 및 빈 값 입력 차단')
  print('PASS: JSON 3개 재적재, DB 무결성, 확인된 요금 계산 7건 및 미확인 요금 2건 확인 필요, 잘못된 JSON 4건 차단 및 DB 원본 보존')
+
+# 화명생태공원 신규 동절기 시설: 기존 3시설과 함께 적재 검증.
+with tempfile.TemporaryDirectory() as new_tmp:
+ new_db=pathlib.Path(new_tmp)/'hwamyeong.sqlite3'
+ hw='busan_hwamyeong_ecopark_tennis'
+ load.load_many([R/x for x in files]+[R/'hwamyeong_winter_2026_2027.json'], new_db)
+ with closing(sqlite3.connect(new_db)) as c:
+  assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+  assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==4
+  assert c.execute('SELECT district FROM facilities WHERE id=?',(hw,)).fetchone()==('북구',)
+  assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',('hwamyeong_tennis_winter_2026_2027',)).fetchone()[0]==4
+  assert c.execute('SELECT COUNT(*) FROM facility_options WHERE rule_set_id=?',('hwamyeong_tennis_winter_2026_2027',)).fetchone()[0]==0
+  assert c.execute('SELECT COUNT(*) FROM closure_rules WHERE rule_set_id=?',('hwamyeong_tennis_winter_2026_2027',)).fetchone()[0]==2
+  assert c.execute('SELECT COUNT(*) FROM refund_rules WHERE rule_set_id=?',('hwamyeong_tennis_winter_2026_2027',)).fetchone()[0]==6
+  assert c.execute('SELECT guardian_max_count FROM facility_discounts WHERE rule_set_id=? AND category_id=?',('hwamyeong_tennis_winter_2026_2027','disabled')).fetchone()==(1,)
+  assert c.execute('SELECT COUNT(*) FROM facility_discounts WHERE rule_set_id=?',('hwamyeong_tennis_winter_2026_2027',)).fetchone()[0]==12
+  assert c.execute('SELECT online_open_days_before,online_close_days_before,normal_cancel_online_min_days_before FROM reservation_rules WHERE rule_set_id=?',('hwamyeong_tennis_winter_2026_2027',)).fetchone()==(60,2,1)
+  refund_rows=c.execute('SELECT reason,days_before_min,days_before_max,rate_percent,channel FROM refund_rules WHERE rule_set_id=?',('hwamyeong_tennis_winter_2026_2027',)).fetchall()
+  assert any(row[0]=='user_cancel' and row[1]==2 and row[3]==90 and row[4]=='my_page' for row in refund_rows),refund_rows
+ for date,weekday,total in [('2026-11-17',False,6000),('2026-11-21',True,9000)]:
+  result=q.quote(new_db,hw,date,'08:00','10:00',weekday)
+  assert result['status']=='priced' and result['total_won']==total,result
+ assert q.quote(new_db,hw,'2026-11-17','12:00','14:00',False)['status']=='invalid_time'
+ rules=q.discounts(new_db,hw,'2026-11-17')
+ assert rules and all(r['discount_rounding_policy'] is None for r in rules)
+ assert q.discount_proration_check(new_db,hw,'2026-11-17',6000,4,2,'multi_child')['discount_refund_won']==1500
+ assert q.closure_status(new_db,hw,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
+ assert len(q.facilities(new_db))==4
+ print('PASS: 화명생태공원 테니스장 추가, 동절기 4회차·요금·환불·감면·휴장·예약기간, 4시설 무결성')
