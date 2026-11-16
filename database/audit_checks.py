@@ -731,7 +731,7 @@ with tempfile.TemporaryDirectory() as soccer_tmp:
  with closing(sqlite3.connect(soccer_db)) as c:
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
-  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==5
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==6
   assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(soc,)).fetchone()==('soccer','사상구')
   assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==3
   assert c.execute('SELECT COUNT(*) FROM facility_options WHERE rule_set_id=?',(rid,)).fetchone()[0]==0
@@ -746,3 +746,25 @@ with tempfile.TemporaryDirectory() as soccer_tmp:
  assert q.discount_proration_check(soccer_db,soc,'2026-11-17',20000,20,2,'multi_child')['discount_refund_won']==1000
  assert q.closure_status(soccer_db,soc,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
  print('PASS: 삼락 축구장 동절기 3시간 회차·요금·환불·감면·정기 휴장·기존 테니스장 4개 유지')
+
+# 야간 축구장 별도 추가: 3시간 의무 조명 요금 분리와 중복 청구 방지 검증
+with tempfile.TemporaryDirectory() as night_tmp:
+ night_db=pathlib.Path(night_tmp)/'night.sqlite3'
+ import build_db as night_build
+ night_build.build(night_db)
+ night='busan_hwamyeong_ecopark_night_soccer'
+ nrid='hwamyeong_night_soccer_winter_2026_2027'
+ with closing(sqlite3.connect(night_db)) as c:
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==6
+  assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(night,)).fetchone()==('soccer','북구')
+  assert c.execute('SELECT weekday_base_won,weekend_holiday_base_won,mandatory_light_won FROM pricing_rules WHERE rule_set_id=?',(nrid,)).fetchone()==(20000,30000,30000)
+  assert c.execute('SELECT application_type,payment_type,hour_price FROM facility_options WHERE rule_set_id=?',(nrid,)).fetchone()==('included_in_base_price','online_prepay',10000)
+  assert c.execute('SELECT COUNT(*) FROM closure_rules WHERE rule_set_id=?',(nrid,)).fetchone()[0]==2
+  assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
+  assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
+ for weekend,total in ((False,50000),(True,60000)):
+  result=q.quote(str(night_db),night,'2026-11-17','18:00','21:00',weekend)
+  assert result['status']=='priced',result
+  assert result['total_won']==total,result
+  assert result['lighting_fee_won']==30000,result
+ print('PASS: 화명 야간축구장 요금/필수 조명/결제방식 및 6개 시설')

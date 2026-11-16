@@ -1,0 +1,178 @@
+{
+  "facility": {
+    "id": "busan_hwamyeong_ecopark_night_soccer",
+    "name": "화명생태공원 야간축구장",
+    "facility_type": "soccer",
+    "district": "북구",
+    "address": "부산광역시 북구 금곡동 1511-3 (화명생태공원)",
+    "phone": "051-310-6028",
+    "booking_url": "https://reserve.busan.go.kr/rent/view.do?progrmSn=380&resveGroupSn=55",
+    "open_time": "18:00",
+    "close_time": "21:00",
+    "holiday_note": "설 당일, 추석 당일 휴장"
+  },
+  "source": {
+    "id": "busan_reserve_380_night_soccer_winter_2026",
+    "url": "https://reserve.busan.go.kr/rent/view.do?progrmSn=380&resveGroupSn=55",
+    "title": "부산광역시 통합예약 - 낙동강관리본부 야간축구장(동절기)",
+    "checked_on": "2026-11-16",
+    "verification_level": "user_transcribed_official",
+    "note": "사용자가 제공한 공식 예약 상세정보 및 부산시 통합예약 상세 페이지 확인. 대관 장소는 화명생태공원 축구장. 동절기 18:00~21:00 3시간 회차, 주중 50,000원·주말 60,000원은 조명 3시간 포함 요금. 안내에 명시된 조명 1시간 10,000원으로 3시간 조명료 30,000원 분리. 따라서 기본 코트 이용료는 평일 20,000원·주말 30,000원으로 산정. 조명료는 감면 대상 제외. 예약 시 이용료 납부 후 확정하므로 포함된 조명료도 선결제. 2026년 공사 일정 안내는 시설 요금·예약 규정 DB 범위 밖인 코트별 일시 제한이므로 저장하지 않음. 하절기 19:00~22:00 회차는 동절기 규정에 포함하지 않음. 끝전 처리 기준 미확인. 공휴일 요금 별도 미명시.",
+    "license": null
+  },
+  "rule_set": {
+    "id": "hwamyeong_night_soccer_winter_2026_2027",
+    "effective_from": "2026-10-01",
+    "effective_to": "2027-03-31",
+    "status": "confirmed"
+  },
+  "slots": [
+    {
+      "no": 1,
+      "from": "18:00",
+      "to": "21:00",
+      "minutes": 180,
+      "weekday": 20000,
+      "weekend": 30000,
+      "light": 30000
+    }
+  ],
+  "discounts": [
+    {
+      "id": "low_income",
+      "category": "기초생활수급자"
+    },
+    {
+      "id": "disabled",
+      "category": "장애인",
+      "guardian_max_count": 1,
+      "guardian_condition": "장애의 정도가 심한 등록 장애인의 보호자 1명 포함(부산광역시 낙동강 생태공원 보전 및 운영에 관한 조례 제12조제2항제2호)",
+      "guardian_evidence_note": "중증 장애인 해당 여부와 보호자 관계 확인 필요; 개별 증빙 세부 방식은 예약 안내에 따름"
+    },
+    {
+      "id": "merit_families",
+      "category": "독립유공자·국가유공자·5·18민주유공자·특수임무유공자 및 해당 유족·가족, 의상자·의사자유족 및 의상자가족"
+    },
+    {
+      "id": "war_veteran",
+      "category": "참전유공자"
+    },
+    {
+      "id": "agent_orange",
+      "category": "고엽제후유증·후유의증 환자 및 고엽제후유증 2세 환자"
+    },
+    {
+      "id": "pows",
+      "category": "등록 포로 및 억류지 출신 포로가족"
+    },
+    {
+      "id": "children_group",
+      "category": "축구장·야구장·족구장·테니스장에서 체육활동·경기·체육행사에 참여하는 10명 이상의 어린이"
+    },
+    {
+      "id": "multichild",
+      "category": "다자녀 가정"
+    }
+  ],
+  "discount_common": {
+    "percent": 50,
+    "basis": "per_eligible_person_equal_split",
+    "rounding_policy": null,
+    "applies_to": "base_court_fee_only",
+    "excluded_from": "lighting_fee",
+    "processing": "pay_full_then_refund",
+    "documents": "감면대상자 모두 이름을 명시하고 증빙서류를 각각 제출. 다자녀 가족 구성원은 가족사랑카드·모바일카드·차량스티커 또는 주민등록등본·가족관계증명서 제출. 동일 가족은 증빙 1부 가능.",
+    "deadline": "경기장 이용시간 전 낙동강관리본부 이용료반환신청 게시판에 신청·증빙서류 첨부",
+    "note": "부산광역시 낙동강 생태공원 보전 및 운영에 관한 조례 제12조에 따른 감면 대상 이용자별 50% 인원 비례 감면. 전체 야간 회차 요금에 포함된 조명료 30,000원은 50% 감면 대상에서 제외. 감면은 코트 기본요금(평일 20,000원·주말 30,000원)에만 적용. 20명 중 2명 감면대상 평일 예시: 20,000÷20×50%×2=1,000원 환급. 끝전 처리 규정 미확인."
+  },
+  "refunds": [
+    {
+      "id": "user_3plus",
+      "reason": "user_cancel",
+      "min": 3,
+      "max": null,
+      "rate": 100,
+      "channel": "my_page",
+      "condition": "이용일 3일 이전 마이페이지 취소 및 전액 반환"
+    },
+    {
+      "id": "user_2",
+      "reason": "user_cancel",
+      "min": 2,
+      "max": 2,
+      "rate": 90,
+      "channel": "my_page",
+      "condition": "이용일 2일 이전 마이페이지 취소 및 90% 반환"
+    },
+    {
+      "id": "user_1",
+      "reason": "user_cancel",
+      "min": 1,
+      "max": 1,
+      "rate": 80,
+      "channel": "my_page",
+      "condition": "이용일 1일 이전 마이페이지 취소 및 80% 반환"
+    },
+    {
+      "id": "user_0",
+      "reason": "user_cancel",
+      "min": 0,
+      "max": 0,
+      "rate": 0,
+      "channel": "not_allowed",
+      "condition": "당일 일반 취소 환불 불가"
+    },
+    {
+      "id": "rain_unused",
+      "reason": "rain_unused",
+      "min": null,
+      "max": null,
+      "rate": 100,
+      "channel": "nakdong_refund_board",
+      "condition": "이용일 이후 우천 미사용 시 이용료반환신청 게시판에 접수하면 전액 반환"
+    },
+    {
+      "id": "force_majeure",
+      "reason": "force_majeure_or_city_event",
+      "min": null,
+      "max": null,
+      "rate": 100,
+      "channel": "nakdong_refund_board",
+      "condition": "천재지변·불가항력·부산시 행사 또는 시설 관리·운영 사유로 이용 불가 시 전액 반환"
+    }
+  ],
+  "reservation": {
+    "online_open_days_before": 60,
+    "online_close_days_before": 1,
+    "normal_cancel_online_min_days_before": 1,
+    "closure_note": "설 당일·추석 당일 휴장"
+  },
+  "options": [
+    {
+      "id": "lighting",
+      "name": "조명시설",
+      "calculation_type": "rounded_units",
+      "application_type": "included_in_base_price",
+      "rounding_policy": "exact_units",
+      "applies_from": "18:00",
+      "applies_to": "21:00",
+      "note": "야간 18:00~21:00 회차는 조명 3시간 사용료 30,000원이 전체 예약 금액(평일 50,000원·주말 60,000원)에 포함됨. 선택 조명으로 중복 부과하지 않음. 조명료는 감면 제외.",
+      "hour_price": 10000,
+      "extra_unit_minutes": null,
+      "extra_unit_price": null,
+      "payment_type": "online_prepay"
+    }
+  ],
+  "closure_rules": [
+    {
+      "type": "holiday_code",
+      "value": "lunar_new_year_day",
+      "note": "설 당일 휴장"
+    },
+    {
+      "type": "holiday_code",
+      "value": "chuseok_day",
+      "note": "추석 당일 휴장"
+    }
+  ]
+}
