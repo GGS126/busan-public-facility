@@ -33,39 +33,89 @@ function formatFieldErrors(fields) {
   return messages.join('\n')
 }
 
+// FastAPI 기본 422 오류 메시지 정리
+function formatValidationErrors(detail) {
+  if (!Array.isArray(detail)) {
+    return ''
+  }
+
+  return detail
+    .map((item) => {
+      if (!item || typeof item !== 'object') {
+        return ''
+      }
+
+      const field = Array.isArray(item.loc)
+        ? item.loc
+            .filter((part) => part !== 'body')
+            .join('.')
+        : ''
+
+      const message =
+        typeof item.msg === 'string'
+          ? item.msg
+          : '입력값을 확인해 주세요.'
+
+      return field
+        ? `${field}: ${message}`
+        : message
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
 // API 오류 메시지 생성
 function createAPIError(response, data) {
   const errorInfo = data?.error
-  const errorCode = errorInfo?.code
-  const fieldErrors = formatFieldErrors(errorInfo?.fields)
+  const errorCode = errorInfo?.code || null
 
-  let message = errorInfo?.message
+  const fieldErrors = formatFieldErrors(
+    errorInfo?.fields
+  )
 
-  if (!message) {
-    if (
-      response.status === 404 &&
-      errorCode === 'facility_not_found'
-    ) {
-      message = '요청한 체육시설을 찾을 수 없습니다.'
-    } else if (response.status === 404) {
-      message = '요청한 API 경로를 찾을 수 없습니다.'
-    } else if (response.status >= 500) {
-      message =
-        '서버에 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.'
-    } else {
-      message =
-        `요청을 처리할 수 없습니다. (${response.status})`
-    }
+  const validationErrors = formatValidationErrors(
+    data?.detail
+  )
+
+  let message
+
+  if (
+    response.status === 404 &&
+    errorCode === 'facility_not_found'
+  ) {
+    message = '요청한 체육시설을 찾을 수 없습니다.'
+  } else if (response.status === 404) {
+    message = '요청한 API 경로를 찾을 수 없습니다.'
+  } else if (
+    typeof errorInfo?.message === 'string' &&
+    errorInfo.message.trim()
+  ) {
+    message = errorInfo.message
+  } else if (response.status === 422) {
+    message = '입력한 이용조건을 확인해 주세요.'
+  } else if (response.status >= 500) {
+    message =
+      '서버에 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.'
+  } else {
+    message =
+      `요청을 처리할 수 없습니다. (${response.status})`
   }
 
-  if (fieldErrors) {
-    message += `\n${fieldErrors}`
+  const details = [
+    fieldErrors,
+    validationErrors,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  if (details) {
+    message += `\n${details}`
   }
 
   const error = new Error(message)
 
   error.status = response.status
-  error.code = errorCode || null
+  error.code = errorCode
   error.fields = errorInfo?.fields || null
 
   return error
@@ -80,14 +130,17 @@ async function requestAPI(path, options = {}) {
   }, REQUEST_TIMEOUT)
 
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    })
+    const response = await fetch(
+      `${API_BASE_URL}${path}`,
+      {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      }
+    )
 
     const contentType =
       response.headers.get('content-type') || ''
@@ -147,7 +200,8 @@ function createMockResult(facilityId) {
 
   return {
     facility_id: facilityId,
-    facility_name: names[facilityId] || facilityId,
+    facility_name:
+      names[facilityId] || facilityId,
     fee: {
       status: 'needs_review',
       items: [],
@@ -171,7 +225,9 @@ function createMockResult(facilityId) {
 export async function compareFacilities(request) {
   if (USE_MOCK_API) {
     return {
-      results: request.facility_ids.map(createMockResult),
+      results: request.facility_ids.map(
+        createMockResult
+      ),
     }
   }
 
