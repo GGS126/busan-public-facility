@@ -473,15 +473,63 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
         r=options[0]
         if start<parse(r['applies_from']) or end>parse(r['applies_to']):
             return {'status':'invalid_optional_lighting','reason':'선택 조명 가능 시간 밖의 회차'}
+    # 확정된 옵션 금액과 결제 시점은 별개의 정보다.
+    # 결제 방식 미확인(NULL)을 현장 결제라고 추정하지 않는다.
+    optional_amount=optional['optional_lighting_fee_won']
+    payment_due=p['base_fee_won']
+    onsite_payment=0
+    payment_unverified_won=0
+    review_items=[]
+
+    def assign_option_payment(amount, rule):
+        nonlocal payment_due, onsite_payment, payment_unverified_won
+        if not amount:
+            return
+        payment_type=rule['payment_type'] if rule is not None else None
+        if payment_type=='online_prepay':
+            payment_due+=amount
+        elif payment_type=='onsite':
+            onsite_payment+=amount
+        else:
+            payment_unverified_won+=amount
+            review_items.append({
+                'code':'option_payment_type_unverified',
+                'target':'option_payment',
+                'reason':'옵션 요금은 확인되었으나 결제 시점·장소가 공식 자료로 확인되지 않았습니다.',
+                'option_id':rule['option_id'] if rule is not None else 'lighting',
+                'amount_won':amount,
+            })
+
+    if light:
+        # 고정 회차 포함 조명료와 자유시간형 조명료 모두 결제방식에 따라 분리한다.
+        if typ=='fixed_slot':
+            mandatory_rule=included[0] if p['mandatory_light_won'] else None
+        else:
+            mandatory_rule=records[0] if records else None
+        assign_option_payment(light,mandatory_rule)
+    if optional_amount:
+        unverified_before_optional=payment_unverified_won
+        optional_rule=next((r for r in facility_option_records
+                            if r['option_id']=='lighting' and r['application_type']=='optional'),None)
+        assign_option_payment(optional_amount,optional_rule)
+        optional_unverified=payment_unverified_won-unverified_before_optional
+    else:
+        optional_unverified=0
+
     # 단일 감면은 이 함수에서 적용하지 않는다: 반환 금액은 감면 전 금액이다.
     single_discount_selected=bool(discount_category_ids)
     return {'status':'priced','facility_id':facility_id,'date':use_date,'selection_type':typ,
             'start_time':start_time,'end_time':end_time,'duration_minutes':duration,
             'price_rule_id':p['price_rule_id'],'base_fee_won':p['base_fee_won'],
             'lighting_minutes':light_minutes,'lighting_fee_won':light,
-            'total_won':p['base_fee_won']+light+optional['optional_lighting_fee_won'],
+            'total_won':p['base_fee_won']+light+optional_amount,
             'optional_lighting_minutes':optional_lighting_minutes,
-            'optional_lighting_on_site_won':optional['optional_lighting_fee_won'],
+            'optional_lighting_on_site_won':onsite_payment if optional_amount else 0,
+            'optional_lighting_payment_unverified_won':optional_unverified,
+            'payment_due':payment_due,'onsite_payment':onsite_payment,
+            'payment_unverified_won':payment_unverified_won,
+            'payment_status':'needs_review' if review_items else 'confirmed',
+            'review_items':review_items,
             'booking_availability_verified':False,
             'discount_application_status':'not_calculated' if single_discount_selected else 'not_requested'}
 

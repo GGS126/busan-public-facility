@@ -444,6 +444,24 @@ with tempfile.TemporaryDirectory() as tmp:
  for fac,start,end,week,light,expected in checks:
   actual=q.quote(db,fac,'2026-11-09',start,end,week,light)
   assert actual['status']=='priced' and actual['total_won']==expected,(fac,actual,expected)
+ # PR #26 리뷰: 결제시점 미확인(NULL)을 현장 결제로 단정하지 않는다.
+ unknown=q.quote(db,'busan_samrak_ecopark_tennis','2026-11-09','08:00','10:00',False,60)
+ assert unknown['status']=='priced' and unknown['total_won']==16000,unknown
+ assert unknown['payment_status']=='needs_review' and unknown['payment_unverified_won']==10000,unknown
+ assert unknown['payment_due']==6000 and unknown['onsite_payment']==0,unknown
+ assert unknown['optional_lighting_on_site_won']==0,unknown
+ assert unknown['optional_lighting_payment_unverified_won']==10000,unknown
+ assert unknown['review_items'][0]['code']=='option_payment_type_unverified',unknown
+ known=q.quote(db,'busan_haeundae_arboretum_tennis','2026-11-09','18:00','20:00',False,60)
+ assert known['payment_status']=='confirmed' and known['onsite_payment']==10000,known
+ assert known['optional_lighting_on_site_won']==10000 and known['payment_due']==8000,known
+ included_light=q.quote(db,'busan_haeundae_arboretum_tennis','2026-11-09','20:00','22:00',False)
+ assert included_light['payment_status']=='confirmed' and included_light['payment_due']==28000,included_light
+ assert included_light['onsite_payment']==0 and included_light['payment_unverified_won']==0,included_light
+ unknown_mandatory=q.quote(db,'busan_gudeok_stadium_tennis','2026-11-09','18:00','20:00',False)
+ assert unknown_mandatory['payment_status']=='needs_review',unknown_mandatory
+ assert unknown_mandatory['payment_unverified_won']==20000 and unknown_mandatory['onsite_payment']==0,unknown_mandatory
+ print('PASS: PR26 NULL 결제시점 확인 필요, 금액 확정 유지, 현장/온라인 결제 분리')
  # 회귀 테스트: quote()가 필수/포함/선택 조명 옵션을 반복 조회하지 않는다.
  # 함수 직접 호출(optional_lighting_quote)은 기존처럼 독립적으로 동작해야 한다.
  original_facility_options=q.facility_options
