@@ -30,6 +30,7 @@ PowerShell에서는 아래 명령을 실행한 뒤 키를 입력하면 Python이
 `ok`는 사용자가 확인할 추출 결과이고, `need_more`는 빠진 조건과 질문을 담습니다.
 `llm_failed`이면 직접 입력으로 이어갑니다. 키는 서버에만 설정합니다.
 모델은 `GEMINI_MODEL`로 지정할 수 있으며 기본값은 `gemini-3.5-flash-lite`입니다.
+Gemini 3 계열은 `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`를 지원합니다.
 Gemini 소켓 타임아웃은 5초이며, 응답 형식이 잘못됐을 때만 한 번 재시도합니다.
 지역을 지정하지 않으면 `districts: []`로 부산 전체를 뜻합니다. 감면 유형이 불명확하면 `need_more`로 확인을 요청합니다.
 Gemini 호출은 서버 프로세스마다 최근 60초 동안 15회(재시도 포함), 동시 4회로 제한합니다. 제한에 도달하면 직접 입력을 안내합니다.

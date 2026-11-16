@@ -134,9 +134,11 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
 
         for attempt in (1, 2):
             if not gemini_slots.acquire(blocking=False):
+                logger.warning("Gemini extraction failed: code=rate_limited limit=concurrency")
                 return None
             try:
                 if not reserve_gemini_call():
+                    logger.warning("Gemini extraction failed: code=rate_limited limit=per_minute")
                     return None
                 return provider(query, today)
             except GeminiResponseError as error:

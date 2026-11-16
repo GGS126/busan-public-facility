@@ -67,7 +67,11 @@ def test_provider_exception_returns_failed_without_details():
     assert "private details" not in str(result)
 
 
-def test_gemini_rejects_unknown_sport(monkeypatch):
+@pytest.mark.parametrize(("model", "level"), [
+    ("gemini-3.5-flash-lite", "minimal"),
+    ("gemini-3.1-pro-preview", "low"),
+])
+def test_gemini_rejects_unknown_sport(monkeypatch, model, level):
     connection = Mock()
     connection.getresponse.return_value.status = 200
     connection.getresponse.return_value.read.return_value = json.dumps({"candidates": [{
@@ -76,11 +80,16 @@ def test_gemini_rejects_unknown_sport(monkeypatch):
     }]}).encode()
     monkeypatch.setattr("app.gemini_extractor.http.client.HTTPSConnection", Mock(return_value=connection))
     extractor = GeminiExtractor("test-key", sport_codes={"futsal": "풋살"},
-                               discount_codes={}, districts=["해운대구"])
+                               discount_codes={}, districts=["해운대구"], model=model)
     with pytest.raises(GeminiResponseError, match="^unsupported_sport_code$"):
         extractor("풋살", TODAY)
     payload = json.loads(connection.request.call_args.args[2])
-    assert payload["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "minimal"}
+    assert payload["generationConfig"]["thinkingConfig"] == {"thinkingLevel": level}
+
+
+def test_unconfigured_gemini_3_model_is_rejected():
+    with pytest.raises(ValueError, match="invalid_model_configuration"):
+        GeminiExtractor("test-key", sport_codes={}, discount_codes={}, districts=[], model="gemini-3.99-flash")
 
 
 @pytest.mark.parametrize(("errors", "diagnostic"), [
@@ -125,7 +134,7 @@ def test_api_keeps_partial_conditions_in_response(monkeypatch):
 
 @pytest.mark.parametrize("phone", [
     "051-123-4567", "02-1234-5678", "0311234567", "+82-51-123-4567",
-    "070-1234-5678", "0505-123-4567", "1588-1234", "1688-1234", "080-123-4567",
+    "070-1234-5678", "0505-123-4567", "080-123-4567",
 ])
 def test_landline_is_blocked_before_extraction(phone):
     extract = Mock()
@@ -139,6 +148,15 @@ def test_expanded_normalized_query_is_blocked():
     result = parse_query("\ufdfa" * 500, today=TODAY, extract=extract)
     assert result["status"] == "llm_failed"
     extract.assert_not_called()
+
+
+@pytest.mark.parametrize("query", [
+    "내일 1800-2000 풋살", "내일 1600 1800 테니스", "11월 20일 1500-1700 4명",
+])
+def test_compact_time_range_reaches_extractor(query):
+    extract = Mock(return_value=CONDITIONS)
+    assert parse_query(query, today=TODAY, extract=extract)["status"] == "ok"
+    extract.assert_called_once_with(query, TODAY)
 
 
 @pytest.mark.parametrize("model", ["", "   "])
@@ -172,7 +190,7 @@ def test_unspecified_district_means_all_busan(districts):
     assert result["conditions"]["districts"] == []
 
 
-def test_retry_counts_towards_call_limit(monkeypatch):
+def test_retry_counts_towards_call_limit(monkeypatch, caplog):
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setattr(main, "monotonic", lambda: 100)
     main.gemini_calls.extend([100] * 14)
@@ -181,3 +199,15 @@ def test_retry_counts_towards_call_limit(monkeypatch):
     response = TestClient(main.app).post("/api/query/parse", json={"query": "풋살"})
     assert response.json()["status"] == "llm_failed"
     provider.assert_called_once()
+    assert "code=rate_limited limit=per_minute" in caplog.text
+
+
+def test_concurrent_call_limit_is_logged(monkeypatch, caplog):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(main, "gemini_slots", Mock(**{"acquire.return_value": False}))
+    provider = Mock()
+    monkeypatch.setattr(main, "GeminiExtractor", Mock(return_value=provider))
+    response = TestClient(main.app).post("/api/query/parse", json={"query": "풋살"})
+    assert response.json()["status"] == "llm_failed"
+    provider.assert_not_called()
+    assert "code=rate_limited limit=concurrency" in caplog.text
