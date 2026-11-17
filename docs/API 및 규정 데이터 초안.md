@@ -339,7 +339,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 |---|---|---|
 | `facility_id`, `name` | 시설 식별자와 이름 | 첫 통합 |
 | `source_id` | 시설 정보의 공식 출처 | 첫 통합 |
-| `holidays` | 공휴일 날짜 목록. 없는 평일 공휴일은 평일 요금으로 계산되므로 필요 | 첫 통합 |
+| `holidays` | 시설별로 두지 않고 백엔드의 공통 공휴일 목록(`backend/data/holidays_kr.json`)을 사용. 목록 기간 밖이면 공휴일 여부에 따라 요금이 달라질 때만 확인 필요 | 첫 통합 |
 | `address`, `district` | 주소와 지역 | 검색 |
 | `operating_hours`, `phone` | 운영시간과 연락처 | 검색 |
 | `reservation_url` | 공식 예약 링크 | 준비사항 |
@@ -368,6 +368,29 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `months` | 적용 월, 계절 기준이 시설마다 다를 수 있어 월로 표시. 전체면 `null` | `[11, 12, 1, 2]` |
 | `effective_from`, `effective_to` | 규정 적용 기간, 시행일을 시작일로 사용 | `2026-01-01`, `null` |
 | `source_id` | 근거 출처 | `S-01` |
+
+### 이용시간 규정
+
+예약할 수 있는 시간을 정한 규정입니다. 맞지 않는 시간은 요금을 계산하지 않고 `fee.status: "not_eligible"`과 사유를 반환합니다(PR #17의 입력 확장안 참고).
+시설에 이 규정이 없거나 이용일에 유효한 규정이 없으면 이용시간 제한을 확인하지 않습니다.
+
+| 항목 | 설명 | 예시 |
+|---|---|---|
+| `policy_id`, `sport` | 규정 식별자와 종목 | `T-HAEUNDAE-01`, `tennis` |
+| `selection` | 지정 회차만 가능 또는 허용 이용시간 안에서 자유 선택 | `fixed_slot`, `flexible` |
+| `slots` | 지정 회차의 시작·종료 시간. `fixed_slot`에서 필수 | `[{"start_time": "07:00", "end_time": "09:00"}]` |
+| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 필수 | `[60, 120]` |
+| `open_time`, `close_time` | 운영시간. 없으면 확인하지 않음 | `08:00`, `22:00` |
+| `effective_from`, `effective_to` | 규정 적용 기간. 동절기·하절기 회차를 구분 | `2026-10-01`, `2027-03-31` |
+| `source_id` | 근거 출처 | `S-01` |
+
+| 사유 코드 | 상황 |
+|---|---|
+| `slot_mismatch` | 지정 회차와 시간이 다름. 사유에 가능한 회차 목록을 포함 |
+| `duration_not_allowed` | `allowed_minutes`에 없는 이용시간 |
+| `outside_hours` | 운영시간 밖 |
+
+같은 종목에 유효한 규정이 둘 이상이면 `needs_review`와 `rule_conflict`(`target: "time"`)를 반환합니다.
 
 ### 감면 규정
 
