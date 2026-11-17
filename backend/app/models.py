@@ -256,11 +256,35 @@ class TimePolicy(EffectivePeriod):
         return self
 
 
+class OperatingHours(BaseModel):
+    open_time: ClockTime | None = None
+    close_time: BandTime | None = None
+    note: str | None = None
+
+
+class FacilityInfo(BaseModel):
+    """시설 기본정보. 요금 계산에는 쓰지 않고 상세 화면에만 보여 준다."""
+
+    address: str | None = None
+    phone: str | None = None
+    booking_url: str | None = None
+    operating_hours: OperatingHours = OperatingHours()
+
+
+class PeriodNote(EffectivePeriod):
+    """규정 기간마다 다른 안내 문구(휴장 안내 등)."""
+
+    note: str
+    source_id: str
+
+
 class FacilityRules(BaseModel):
     facility_id: str
     name: str
     district: str | None = None
     source_id: str
+    info: FacilityInfo = FacilityInfo()
+    closure_notes: list[PeriodNote] = []
     # 공통 공휴일 목록을 저장소에서 붙인다. 없으면 모든 날짜의 공휴일 여부를 알 수 없다.
     holiday_calendar: HolidayCalendar | None = None
     fee_rules: list[FeeRule] = []
@@ -298,7 +322,7 @@ class FacilityRules(BaseModel):
     @model_validator(mode="after")
     def check_sources(self) -> "FacilityRules":
         known = {source.source_id for source in self.sources}
-        rules = [*self.fee_rules, *self.discount_rules, *self.time_policies]
+        rules = [*self.fee_rules, *self.discount_rules, *self.time_policies, *self.closure_notes]
         used = {self.source_id, *(rule.source_id for rule in rules)}
         used |= {terms.source_id for terms in [self.terms, *self.terms_by_period] if terms.source_id is not None}
         if used - known:
@@ -402,3 +426,34 @@ class CompareResult(BaseModel):
 
 class CompareResponse(BaseModel):
     results: list[CompareResult]
+
+
+# 시설 상세
+
+
+class TimeOption(BaseModel):
+    """이용일에 유효한 이용시간 규정. 화면의 회차·이용시간 선택지로 쓴다."""
+
+    sport: str
+    selection: Literal["fixed_slot", "flexible"]
+    slots: list[Slot]
+    allowed_minutes: list[int]
+    max_minutes: int | None
+    open_time: str | None
+    close_time: str | None
+    source_id: str
+
+
+class FacilityDetail(BaseModel):
+    facility_id: str
+    name: str
+    sports: list[str]
+    district: str | None
+    address: str | None
+    phone: str | None
+    operating_hours: OperatingHours
+    closure_note: str | None
+    booking_url: str | None
+    time_options: list[TimeOption]
+    source_id: str
+    sources: list[Source]
