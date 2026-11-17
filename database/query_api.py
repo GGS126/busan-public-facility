@@ -499,6 +499,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             return {'status':'option_rule_inconsistent','reason':'필수 조명 포함 회차의 옵션 규칙이 일치하지 않음'}
     optional=optional_lighting_quote(db,facility_id,use_date,optional_lighting_minutes,options=facility_option_records)
     if optional['status']!='priced':return optional
+    options=[]
     if optional_lighting_minutes:
         if typ!='fixed_slot' or optional_lighting_minutes>duration:
             return {'status':'invalid_optional_lighting','reason':'선택 조명은 고정 회차의 이용시간 이내에서만 사용 가능'}
@@ -516,22 +517,30 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
     # 확정된 옵션 금액과 결제 시점은 별개의 정보다.
     # 결제 방식 미확인(NULL)을 현장 결제라고 추정하지 않는다.
     optional_amount=optional['optional_lighting_fee_won']
-    online_prepay_won=p['base_fee_won']
-    onsite_payment=0
-    payment_unverified_won=0
+    payment_buckets={
+        'online_prepay_won':p['base_fee_won'],
+        'onsite_payment':0,
+        'payment_unverified_won':0,
+    }
+    payment_type_buckets={
+        'online_prepay':'online_prepay_won',
+        'onsite':'onsite_payment',
+    }
     review_items=[]
 
-    def assign_option_payment(amount, rule):
-        nonlocal online_prepay_won, onsite_payment, payment_unverified_won
+    # 기존에 조회한 옵션 규칙을 재사용하고, 결제 방식별 버킷에 금액을 합산한다.
+    if typ=='fixed_slot':
+        mandatory_rule=included[0] if p['mandatory_light_won'] else None
+    else:
+        mandatory_rule=records[0] if records else None
+    optional_rule=options[0] if optional_amount else None
+    for amount, rule in ((light, mandatory_rule), (optional_amount, optional_rule)):
         if not amount:
-            return
+            continue
         payment_type=rule['payment_type'] if rule is not None else None
-        if payment_type=='online_prepay':
-            online_prepay_won+=amount
-        elif payment_type=='onsite':
-            onsite_payment+=amount
-        else:
-            payment_unverified_won+=amount
+        bucket=payment_type_buckets.get(payment_type,'payment_unverified_won')
+        payment_buckets[bucket]+=amount
+        if bucket=='payment_unverified_won':
             review_items.append({
                 'code':'option_payment_type_unverified',
                 'target':'option_payment',
@@ -540,21 +549,13 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
                 'amount_won':amount,
             })
 
-    if light:
-        # 고정 회차 포함 조명료와 자유시간형 조명료 모두 결제방식에 따라 분리한다.
-        if typ=='fixed_slot':
-            mandatory_rule=included[0] if p['mandatory_light_won'] else None
-        else:
-            mandatory_rule=records[0] if records else None
-        assign_option_payment(light,mandatory_rule)
-    if optional_amount:
-        unverified_before_optional=payment_unverified_won
-        optional_rule=next((r for r in facility_option_records
-                            if r['option_id']=='lighting' and r['application_type']=='optional'),None)
-        assign_option_payment(optional_amount,optional_rule)
-        optional_unverified=payment_unverified_won-unverified_before_optional
-    else:
-        optional_unverified=0
+    optional_lighting_on_site_won=(optional_amount if optional_rule is not None
+                                   and optional_rule['payment_type']=='onsite' else 0)
+    optional_unverified=(optional_amount if optional_rule is not None
+                         and optional_rule['payment_type'] is None else 0)
+    online_prepay_won=payment_buckets['online_prepay_won']
+    onsite_payment=payment_buckets['onsite_payment']
+    payment_unverified_won=payment_buckets['payment_unverified_won']
 
     # 단일 감면은 이 함수에서 적용하지 않는다: 반환 금액은 감면 전 금액이다.
     single_discount_selected=bool(discount_category_ids)
@@ -564,7 +565,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'lighting_minutes':light_minutes,'lighting_fee_won':light,
             'total_won':p['base_fee_won']+light+optional_amount,
             'optional_lighting_minutes':optional_lighting_minutes,
-            'optional_lighting_on_site_won':onsite_payment if optional_amount else 0,
+            'optional_lighting_on_site_won':optional_lighting_on_site_won,
             'optional_lighting_payment_unverified_won':optional_unverified,
             # 백엔드 계약: 결제 시점이 하나라도 미확인이면 최초 납부액을 확정할 수 없다.
             'payment_due':None if review_items else p['base_fee_won']+light+optional_amount,

@@ -514,7 +514,7 @@ def upgrade_existing_schema(con):
     expected = {
         'facilities': [('district', "TEXT NOT NULL DEFAULT ''")],
         'sources': [('license', 'TEXT')],
-        'facility_options': [('payment_type', 'TEXT')],
+        'facility_options': [('payment_type', "TEXT CHECK(payment_type IN ('online_prepay','onsite'))")],
         'facility_discounts': [
             ('guardian_max_count', 'INTEGER'), ('guardian_condition', 'TEXT'),
             ('guardian_evidence_note', 'TEXT'), ('discount_rounding_policy', 'TEXT'),

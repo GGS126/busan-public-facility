@@ -97,7 +97,7 @@ python database/audit_checks.py
 
 ## SQLite DB 생성 및 검증
 
-시설별 JSON(`seed.json`, `samrak_winter_2026_2027.json`, `gudeok_winter_2026_2027.json`)을 **검토 가능한 원본 데이터**로 관리합니다. `facilities.sqlite3`는 이 자료와 `schema.sql`에서 생성되는 결과물이므로 Git에는 포함하지 않습니다.
+시설별 JSON(`build_db.py`의 `DEFAULT_FILES`에 등록된 전체 JSON)을 **검토 가능한 원본 데이터**로 관리합니다. `facilities.sqlite3`는 이 자료와 `schema.sql`에서 생성되는 결과물이므로 Git에는 포함하지 않습니다.
 
 프로젝트 루트에서 다음 명령으로 DB를 새로 생성할 수 있습니다.
 
@@ -111,7 +111,7 @@ python database/audit_checks.py
 새로운 시설을 추가한 경우 해당 JSON을 목록에 포함하도록 `build_db.py`의 `DEFAULT_FILES`를 갱신하거나, 다음과 같이 모든 파일을 명시합니다.
 
 ```bash
-python database/build_db.py --data database/seed.json database/samrak_winter_2026_2027.json database/gudeok_winter_2026_2027.json
+python database/build_db.py --data database/seed.json database/samrak_winter_2026_2027.json database/gudeok_winter_2026_2027.json database/hwamyeong_winter_2026_2027.json database/samrak_soccer_winter_2026_2027.json database/hwamyeong_soccer_winter_2026_2027.json database/hwamyeong_night_soccer_winter_2026_2027.json database/haeundae_soccer_2026h2.json
 ```
 
 `database/.gitignore`는 생성된 SQLite 파일과 Python 임시 파일을 새로 커밋하지 않도록 합니다. **이미 Git에 올라간 `facilities.sqlite3`와 중복 `README_database_content.md`는 GitHub 브랜치에서 별도로 삭제 커밋해야 합니다.**
