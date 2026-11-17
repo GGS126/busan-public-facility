@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots
+from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots, read_search_time_policies
 from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -22,7 +22,7 @@ from app.models import (
     FacilitySearchRequest,
     OptionsResponse,
     QueryParseRequest,
-    QueryParseResponse,
+    QueryParseResponse, to_minutes,
 )
 from app.options import build_options
 from app.query_parser import parse_query
@@ -113,6 +113,7 @@ def search_facilities(request: FacilitySearchRequest):
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
     fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    time_policies = read_search_time_policies(DB_PATH, conditions.date.isoformat())
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
@@ -122,8 +123,19 @@ def search_facilities(request: FacilitySearchRequest):
         if slots and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
+        policy = time_policies.get(facility["facility_id"])
+        if policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
+            start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
+            opens = policy["available_start_time"] or policy["open_time"]
+            closes = policy["available_end_time"] or policy["close_time"]
+            minimum, maximum = policy["min_minutes"], policy["max_minutes"]
+            if ((opens and start < to_minutes(opens)) or (closes and end > to_minutes(closes))
+                    or (minimum is not None and end - start < minimum)
+                    or (maximum is not None and end - start > maximum)):
+                time_status = "not_eligible"
         results.append({
             **facility,
+            "slot_status": "no_slots" if not slots and policy and policy["fixed_slot_known"] else None,
             "time_options": {"selection": "fixed_slot", "slots": slots} if slots else None,
             "time_check": {"status": time_status},
         })
@@ -157,15 +169,29 @@ def reserve_gemini_call() -> bool:
         return True
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=1)
 def gemini_provider(key, model, sports, discounts, districts):
     return GeminiExtractor(
         key, model=model, sport_codes=dict(sports), discount_codes=dict(discounts), districts=list(districts),
     )
 
 
+def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
+    return (
+        tuple((option.code, option.label) for option in catalog.sports),
+        tuple((option.code, option.label) for option in catalog.discount_types),
+        tuple(catalog.districts),
+    )
+
+
+DEFAULT_GEMINI_CATALOG_KEY = gemini_catalog_key(available_options)
+
+
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
+    limited = False
+
     def extract(query, today):
+        nonlocal limited
         key = os.getenv("GEMINI_API_KEY", "").strip()
         if not key:
             logger.warning("Gemini extraction failed: code=missing_api_key")
@@ -174,9 +200,7 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             provider = gemini_provider(
                 key,
                 os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
-                tuple((option.code, option.label) for option in catalog.sports),
-                tuple((option.code, option.label) for option in catalog.discount_types),
-                tuple(catalog.districts),
+                *(DEFAULT_GEMINI_CATALOG_KEY if catalog is available_options else gemini_catalog_key(catalog)),
             )
         except ValueError:
             logger.warning("Gemini extraction failed: code=invalid_model_configuration")
@@ -184,9 +208,13 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
 
         for attempt in (1, 2):
             if not gemini_slots.acquire(blocking=False):
+                logger.warning("Gemini extraction failed: code=rate_limited limit=concurrency")
+                limited = True
                 return None
             try:
                 if not reserve_gemini_call():
+                    logger.warning("Gemini extraction failed: code=rate_limited limit=per_minute")
+                    limited = True
                     return None
                 return provider(query, today)
             except GeminiResponseError as error:
@@ -206,6 +234,8 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
         return None
 
     result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
+    if limited:
+        result["message"] = "자연어 요청이 많습니다. 잠시 후 다시 시도하거나 직접 입력해 주세요."
     if result["status"] == "llm_failed":
         result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
     return result

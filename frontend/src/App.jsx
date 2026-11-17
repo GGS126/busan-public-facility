@@ -24,15 +24,19 @@ function App() {
   // 이용조건 입력 상태
   const [sport, setSport] = useState('')
   const [options, setOptions] = useState(null)
+  const [optionsError, setOptionsError] = useState('')
+  const [optionsAttempt, setOptionsAttempt] = useState(0)
   const [source, setSource] = useState('direct')
   const [alternatives, setAlternatives] = useState([])
   const [extractedOptions, setExtractedOptions] = useState(null)
-  const [district, setDistrict] = useState('전체')
+  const [districts, setDistricts] = useState([])
+  const district = districts.length > 1 ? 'multiple' : districts[0] ?? '전체'
   const [date, setDate] = useState('')
   const [startTime, setStartTime] = useState('')
   const [endTime, setEndTime] = useState('')
   const [people, setPeople] = useState('1')
-  const [discountType, setDiscountType] = useState('none')
+  const [discountTypes, setDiscountTypes] = useState([])
+  const discountType = discountTypes.length > 1 ? 'multiple' : discountTypes[0] ?? 'none'
   const [eligibleCount, setEligibleCount] = useState('0')
 
   // 시설 검색 및 비교 상태
@@ -56,9 +60,9 @@ function App() {
         setOptions(catalog)
         setSport(current => current || catalog.sports[0]?.code || '')
       }
-    }).catch(() => {})
+    }).catch(err => { if (active) setOptionsError(err.message) })
     return () => { active = false }
-  }, [])
+  }, [optionsAttempt])
 
   // 입력 조건 변경 시 이전 검색 및 비교 결과 초기화
   function clearResult() {
@@ -75,6 +79,7 @@ function App() {
 
   // 이용조건 유효성 검사
   function validateConditions() {
+    if (!options) return optionsError || '시설 검색 선택지를 불러오는 중입니다.'
     if (!sport) {
       return '이용 종목을 선택해 주세요.'
     }
@@ -128,6 +133,10 @@ function App() {
     }
 
     const facility = searchResults.find(item => item.id === facilityId)
+    if (facility?.time_check?.status === 'not_eligible') return ''
+    if (facility?.time_options?.selection === 'fixed_slot' && facility.time_check) {
+      return facility.time_check.status === 'eligible' ? `${startTime}|${endTime}` : ''
+    }
     const slots = getFacilitySlots(facilityId, facility?.time_options)
 
     const matched = slots.find(
@@ -155,7 +164,7 @@ function App() {
     try {
       const { results, alternatives } = await searchFacilities({
         sport,
-        districts: district === '전체' ? [] : [district],
+        districts,
         date,
         ...(startTime && endTime ? { start_time: startTime, end_time: endTime } : {}),
         source,
@@ -222,10 +231,12 @@ function App() {
     setSource('llm')
     setExtractedOptions({
       sports: [{ code: conditions.sport, label: conditions.sportLabel }],
-      districts: conditions.district === '전체' ? [] : [conditions.district],
+      districts: conditions.districts,
     })
     setSport(conditions.sport)
-    setDistrict(conditions.district || '전체')
+    setDistricts(conditions.districts)
+    setDiscountTypes(conditions.discount_types)
+    setEligibleCount('0')
     setDate(conditions.date || '')
     setStartTime(conditions.start_time || '')
     setEndTime(conditions.end_time || '')
@@ -265,6 +276,11 @@ function App() {
       return
     }
 
+    if (discountTypes.length && Number(eligibleCount) === 0) {
+      setCompareError('감면 대상 인원을 입력하거나 감면 없음을 선택해 주세요.')
+      return
+    }
+
     const missingTime = selectedIds.some(
       (id) => !facilityTimes[id]
     )
@@ -288,8 +304,7 @@ function App() {
             facility_ids: [facilityId],
             conditions: {
               sport,
-              districts:
-                district === '전체' ? [] : [district],
+              districts,
               date,
               start_time: selectedStart,
               end_time: selectedEnd,
@@ -298,7 +313,7 @@ function App() {
                 discountType === 'none' ||
                 Number(eligibleCount) === 0
                   ? []
-                  : [discountType],
+                  : discountTypes,
               source,
             },
           }
@@ -355,10 +370,13 @@ function App() {
 
         <SearchForm
           sport={sport}
-          options={options ?? extractedOptions}
+          options={options ? { ...options, districts: [...new Set([...options.districts, ...districts])] } : extractedOptions}
+          optionsError={optionsError}
+          onRetryOptions={() => { setOptionsError(''); setOptionsAttempt(count => count + 1) }}
           setSport={setSport}
           district={district}
-          setDistrict={setDistrict}
+          setDistrict={value => setDistricts(value === '전체' ? [] : [value])}
+          selectedDistricts={districts}
           date={date}
           setDate={setDate}
           startTime={startTime}
@@ -368,7 +386,8 @@ function App() {
           people={people}
           setPeople={setPeople}
           discountType={discountType}
-          setDiscountType={setDiscountType}
+          setDiscountType={value => setDiscountTypes(value === 'none' ? [] : [value])}
+          selectedDiscounts={discountTypes}
           eligibleCount={eligibleCount}
           setEligibleCount={setEligibleCount}
           onSearch={handleSearch}

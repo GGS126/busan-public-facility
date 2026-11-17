@@ -115,8 +115,9 @@ function FacilityList({
                         </select>
                       ) : (
                         <p className="error-message">
-                          {facilitySlots[facility.id]?.message ||
-                            '예약 회차 정보 확인이 필요합니다.'}
+                          {facility.slot_status === 'no_slots'
+                            ? '선택한 날짜에 적용되는 예약 회차 정보가 없습니다.'
+                            : facilitySlots[facility.id]?.message || '예약 회차 정보 확인이 필요합니다.'}
                         </p>
                       )}
                     </div>
