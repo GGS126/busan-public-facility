@@ -169,6 +169,10 @@ class Terms(BaseModel):
     source_id: str | None = None
 
 
+class PeriodTerms(Terms, EffectivePeriod):
+    """규정 기간마다 다른 예약·취소 조건. 이용일에 유효한 조건을 응답에 쓴다."""
+
+
 class Holiday(BaseModel):
     date: date
     name: str
@@ -209,6 +213,8 @@ class TimePolicy(EffectivePeriod):
     selection: Literal["fixed_slot", "flexible"]
     slots: list[Slot] = []
     allowed_minutes: list[Annotated[int, Field(gt=0)]] = []
+    # 한 번에 이용할 수 있는 최대 시간. allowed_minutes 없이 상한만 확인된 시설에 쓴다.
+    max_minutes: int | None = Field(default=None, gt=0)
     open_time: ClockTime | None = None
     close_time: BandTime | None = None
     source_id: str
@@ -217,8 +223,8 @@ class TimePolicy(EffectivePeriod):
     def check_selection(self) -> "TimePolicy":
         if self.selection == "fixed_slot" and not self.slots:
             raise ValueError("지정 회차 시설은 slots가 필요합니다.")
-        if self.selection == "flexible" and not self.allowed_minutes:
-            raise ValueError("자유 선택 시설은 allowed_minutes가 필요합니다.")
+        if self.selection == "flexible" and not self.allowed_minutes and self.max_minutes is None:
+            raise ValueError("자유 선택 시설은 allowed_minutes나 max_minutes가 필요합니다.")
         for slot in self.slots:
             if to_minutes(slot.end_time) <= to_minutes(slot.start_time):
                 raise ValueError("회차의 종료 시간은 시작 시간보다 늦어야 합니다.")
@@ -241,7 +247,27 @@ class FacilityRules(BaseModel):
     # 비어 있으면 이용시간 제한을 확인하지 않는다.
     time_policies: list[TimePolicy] = []
     terms: Terms = Terms()
+    # 규정 기간별 예약·취소 조건. 있으면 terms 대신 이용일에 유효한 조건을 쓴다.
+    terms_by_period: list[PeriodTerms] = []
     sources: list[Source]
+
+    def _period_terms(self, day: date) -> PeriodTerms | None:
+        matched = [terms for terms in self.terms_by_period if terms.in_effect(day)]
+        return matched[0] if len(matched) == 1 else None
+
+    def terms_on(self, day: date) -> Terms:
+        """이용일의 예약·취소 조건. 기간별 조건 중 유효한 것이 없으면 모든 값을 모르는 것으로 둔다."""
+        if not self.terms_by_period:
+            return self.terms
+        period = self._period_terms(day)
+        if period is None:
+            return Terms()
+        return Terms(**period.model_dump(exclude={"effective_from", "effective_to"}))
+
+    def source_on(self, day: date) -> str:
+        """근거 규정이 없을 때 안내할 공식 출처. 규정 기간별 출처가 있으면 이용일의 출처를 쓴다."""
+        period = self._period_terms(day)
+        return period.source_id if period is not None and period.source_id is not None else self.source_id
 
     @property
     def sports(self) -> set[str]:
@@ -253,8 +279,7 @@ class FacilityRules(BaseModel):
         known = {source.source_id for source in self.sources}
         rules = [*self.fee_rules, *self.discount_rules, *self.time_policies]
         used = {self.source_id, *(rule.source_id for rule in rules)}
-        if self.terms.source_id is not None:
-            used.add(self.terms.source_id)
+        used |= {terms.source_id for terms in [self.terms, *self.terms_by_period] if terms.source_id is not None}
         if used - known:
             raise ValueError(f"등록되지 않은 출처: {sorted(used - known)}")
         return self

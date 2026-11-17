@@ -1,12 +1,15 @@
 """팀 DB(SQLite)의 실제 규정을 규칙 엔진으로 계산해 database/의 정답 사례와 비교한다(AC-006)."""
 
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 
 import pytest
 
+from app.compare import compare_facility
 from app.engine import calculate
 from app.models import Conditions
 from app.repository import load_sqlite_rule_data
@@ -35,14 +38,18 @@ CASE_TIMES = {
 }
 
 
-@pytest.fixture(scope="module")
-def facilities(tmp_path_factory):
+def build_database(directory: Path) -> Path:
     sys.path.insert(0, str(DATABASE_DIR))
     try:
         from build_db import build
     finally:
         sys.path.remove(str(DATABASE_DIR))
-    path = build(tmp_path_factory.mktemp("db") / "facilities.sqlite3")
+    return build(directory / "facilities.sqlite3")
+
+
+@pytest.fixture(scope="module")
+def facilities(tmp_path_factory):
+    path = build_database(tmp_path_factory.mktemp("db"))
     return {facility.facility_id: facility for facility in load_sqlite_rule_data(path).facilities}
 
 
@@ -154,7 +161,77 @@ def test_discount_types_without_count_needs_review(facilities):
 
 def test_terms_and_sources_from_database(facilities):
     rules = facilities["busan_samrak_ecopark_tennis"]
+    terms = rules.terms_on(WEEKDAY)
 
-    assert rules.terms.booking_open == "이용일 60일 전부터 2일 전까지 온라인 신청"
-    assert rules.terms.refund == "3일 전까지 취소 100%, 2일 전 취소 90%, 1일 전 취소 80%, 당일 취소 0%"
+    assert terms.booking_open == "이용일 60일 전부터 2일 전까지 온라인 신청"
+    assert terms.refund == "3일 전까지 취소 100%, 2일 전 취소 90%, 1일 전 취소 80%, 당일 취소 0%"
     assert [source.source_id for source in rules.sources] == ["busan_reserve_395_winter_2026"]
+
+
+@pytest.mark.parametrize(("start", "end"), [("10:00", "13:00"), ("08:00", "11:00")])
+def test_gudeok_over_two_hours_not_eligible(facilities, start, end):
+    rules = facilities["busan_gudeok_stadium_tennis"]
+    result = calculate(rules, Conditions(sport="tennis", date=WEEKDAY, start_time=start, end_time=end, source="direct"))
+
+    assert result.status == "not_eligible"
+    assert result.review_items[0].code == "duration_not_allowed"
+    assert result.review_items[0].source_id == "busan_reserve_472_2026winter"
+
+
+def test_gudeok_outside_operating_hours_not_eligible(facilities):
+    rules = facilities["busan_gudeok_stadium_tennis"]
+    result = calculate(rules, Conditions(sport="tennis", date=WEEKDAY, start_time="07:00", end_time="09:00", source="direct"))
+
+    assert result.status == "not_eligible"
+    assert result.review_items[0].code == "outside_hours"
+
+
+@pytest.fixture(scope="module")
+def two_period_facility(tmp_path_factory):
+    """같은 출처를 쓰는 규정 기간이 둘이고, 출처와 예약 조건이 다른 기간이 하나 더 있는 시설."""
+    path = build_database(tmp_path_factory.mktemp("db"))
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute(
+            "INSERT INTO sources (id, url, title, checked_on, verification_level) VALUES (?, ?, ?, ?, ?)",
+            ("haeundae_2027h1", "https://example.com/2027h1", "2027년 상반기", "2026-12-20", "official_page_verified"),
+        )
+        con.executemany(
+            "INSERT INTO rule_sets (id, facility_id, source_id, effective_from, effective_to, status)"
+            " VALUES (?, ?, ?, ?, ?, 'confirmed')",
+            [
+                ("haeundae_2026h1", "busan_haeundae_arboretum_tennis", "busan_reserve_619_2026h2", "2026-01-01", "2026-06-30"),
+                ("haeundae_2027h1", "busan_haeundae_arboretum_tennis", "haeundae_2027h1", "2027-01-01", "2027-06-30"),
+            ],
+        )
+        con.execute("INSERT INTO reservation_rules VALUES ('haeundae_2027h1', 30, 2, 5, NULL)")
+    return {f.facility_id: f for f in load_sqlite_rule_data(path).facilities}["busan_haeundae_arboretum_tennis"]
+
+
+def test_rule_sets_sharing_source_load(two_period_facility):
+    ids = [source.source_id for source in two_period_facility.sources]
+
+    assert sorted(ids) == ["busan_reserve_619_2026h2", "haeundae_2027h1"]
+
+
+def test_terms_and_source_follow_use_date(two_period_facility):
+    rules = two_period_facility
+    later = date(2027, 2, 1)
+
+    assert rules.terms_on(WEEKDAY).booking_open == "이용일 14일 전부터 1일 전까지 온라인 신청"
+    assert rules.terms_on(WEEKDAY).source_id == "busan_reserve_619_2026h2"
+    assert rules.terms_on(later).booking_open == "이용일 30일 전부터 2일 전까지 온라인 신청"
+    assert rules.terms_on(later).source_id == "haeundae_2027h1"
+    # 근거 규정이 없을 때 안내하는 출처도 이용일의 규정 기간을 따른다.
+    assert rules.source_on(WEEKDAY) == "busan_reserve_619_2026h2"
+    assert rules.source_on(later) == "haeundae_2027h1"
+
+
+def test_compare_shows_terms_and_sources_of_use_date(two_period_facility):
+    later = Conditions(sport="tennis", date=date(2027, 2, 1), start_time="07:00", end_time="09:00", source="direct")
+    result = compare_facility(two_period_facility, later)
+
+    assert result.terms.source_id == "haeundae_2027h1"
+    assert result.terms.cancel_deadline == "이용일 5일 전까지 온라인 취소"
+    # 2027년 요금 규정은 없으므로 '확인 필요'의 근거로 만료된 요금 규정의 출처도 함께 보인다.
+    assert result.fee.review_items[0].code == "rule_not_in_effect"
+    assert {source.source_id for source in result.sources} == {"haeundae_2027h1", "busan_reserve_619_2026h2"}
