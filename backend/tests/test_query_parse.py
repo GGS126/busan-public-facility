@@ -40,7 +40,7 @@ def test_valid_conditions():
 
 
 @pytest.mark.parametrize(("field", "value"), [
-    ("date", None), ("date", "2026-11-08"), ("headcount", 0),
+    ("date", None), ("date", "2026-11-08"), ("date", "2099-11-10"), ("headcount", 0),
     ("end_time", "19:00"), ("end_time", "18:00"), ("discount_types", None), ("districts", "해운대구"),
 ])
 def test_invalid_field_preserves_other_conditions(field, value):
@@ -85,6 +85,7 @@ def test_gemini_rejects_unknown_sport(monkeypatch, model, level):
         extractor("풋살", TODAY)
     payload = json.loads(connection.request.call_args.args[2])
     assert payload["generationConfig"]["thinkingConfig"] == {"thinkingLevel": level}
+    assert payload["generationConfig"]["maxOutputTokens"] == (4096 if level == "low" else 1024)
 
 
 def test_unconfigured_gemini_3_model_is_rejected():
@@ -134,7 +135,7 @@ def test_api_keeps_partial_conditions_in_response(monkeypatch):
 
 @pytest.mark.parametrize("phone", [
     "051-123-4567", "02-1234-5678", "0311234567", "+82-51-123-4567",
-    "070-1234-5678", "0505-123-4567", "080-123-4567",
+    "070-1234-5678", "0505-123-4567", "080-123-4567", "문의/02-1234-5678",
 ])
 def test_landline_is_blocked_before_extraction(phone):
     extract = Mock()
@@ -150,8 +151,16 @@ def test_expanded_normalized_query_is_blocked():
     extract.assert_not_called()
 
 
+def test_long_raw_query_returns_llm_failed():
+    response = TestClient(main.app).post("/api/query/parse", json={"query": "가" * 501})
+    assert response.status_code == 200
+    assert response.json()["status"] == "llm_failed"
+    assert "500자" in response.json()["message"]
+
+
 @pytest.mark.parametrize("query", [
     "내일 1800-2000 풋살", "내일 1600 1800 테니스", "11월 20일 1500-1700 4명",
+    "11.02 1800-2000 풋살", "11/02 1900 2100 테니스", "2026.11.02 1800-2000",
 ])
 def test_compact_time_range_reaches_extractor(query):
     extract = Mock(return_value=CONDITIONS)

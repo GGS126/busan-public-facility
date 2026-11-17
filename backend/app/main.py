@@ -107,11 +107,22 @@ def reserve_gemini_call() -> bool:
         return True
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=1)
 def gemini_provider(key, model, sports, discounts, districts):
     return GeminiExtractor(
         key, model=model, sport_codes=dict(sports), discount_codes=dict(discounts), districts=list(districts),
     )
+
+
+def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
+    return (
+        tuple((option.code, option.label) for option in catalog.sports),
+        tuple((option.code, option.label) for option in catalog.discount_types),
+        tuple(catalog.districts),
+    )
+
+
+DEFAULT_GEMINI_CATALOG_KEY = gemini_catalog_key(available_options)
 
 
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
@@ -124,9 +135,7 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             provider = gemini_provider(
                 key,
                 os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
-                tuple((option.code, option.label) for option in catalog.sports),
-                tuple((option.code, option.label) for option in catalog.discount_types),
-                tuple(catalog.districts),
+                *(DEFAULT_GEMINI_CATALOG_KEY if catalog is available_options else gemini_catalog_key(catalog)),
             )
         except ValueError:
             logger.warning("Gemini extraction failed: code=invalid_model_configuration")

@@ -89,7 +89,7 @@ class GeminiExtractor:
                 "responseMimeType": "application/json",
                 "responseJsonSchema": {"type": "object", "properties": self.properties,
                                        "required": list(self.properties), "additionalProperties": False},
-                "maxOutputTokens": 1024,
+                "maxOutputTokens": 4096 if self.model == "gemini-3.1-pro-preview" else 1024,
             },
         }
         thinking_level = THINKING_LEVELS.get(self.model)
