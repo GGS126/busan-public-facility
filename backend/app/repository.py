@@ -95,8 +95,8 @@ def _sqlite_facility(rows, facility: dict) -> dict:
                     **period,
                 }
             )
-        # 자유 선택 시설은 허용 이용시간이 확인되지 않아 이용시간 규정을 만들지 않는다(database/README.md).
-        # 확인되지 않은 이용시간은 요금 단위 미만으로 처리되어 '확인 필요'가 된다.
+        elif policy is not None:
+            time_policies += _flexible_time_policy(policy, facility, sport, period, source_id)
 
         for discount in rows("SELECT * FROM facility_discounts WHERE rule_set_id = ?", rule_set_id):
             discount_rules.append(
@@ -116,9 +116,9 @@ def _sqlite_facility(rows, facility: dict) -> dict:
                 }
             )
 
-    sources = rows(
-        f"SELECT * FROM sources WHERE id IN ({','.join('?' * len(source_ids))})", *dict.fromkeys(source_ids)
-    )
+    # 여러 규정 기간이 같은 출처를 쓰면 자리표시자와 값의 개수가 같도록 중복을 먼저 뺀다.
+    source_ids = list(dict.fromkeys(source_ids))
+    sources = rows(f"SELECT * FROM sources WHERE id IN ({','.join('?' * len(source_ids))})", *source_ids)
     latest = rule_sets[0]
     return {
         "facility_id": facility["id"],
@@ -128,7 +128,12 @@ def _sqlite_facility(rows, facility: dict) -> dict:
         "fee_rules": fee_rules,
         "discount_rules": discount_rules,
         "time_policies": time_policies,
-        "terms": _terms(rows, latest),
+        # 예약·취소 조건은 규정 기간마다 달라질 수 있어 기간별로 두고, 이용일에 맞는 것을 고른다.
+        "terms_by_period": [
+            _terms(rows, rule_set)
+            | {"effective_from": rule_set["effective_from"], "effective_to": rule_set["effective_to"]}
+            for rule_set in rule_sets
+        ],
         "sources": [
             {
                 "source_id": source["id"],
@@ -139,6 +144,30 @@ def _sqlite_facility(rows, facility: dict) -> dict:
             for source in sources
         ],
     }
+
+
+def _flexible_time_policy(policy: dict, facility: dict, sport: str, period: dict, source_id: str) -> list[dict]:
+    """자유 선택 시설의 운영시간과 1회 최대 이용시간. 허용 이용시간 목록은 확인되지 않아 만들지 않는다.
+
+    최대 시간 안의 이용시간은 요금 단위 미만으로 처리되어 '확인 필요'가 된다(database/README.md).
+    하루 이용 한도(daily_limit_minutes)는 예약 이력이 있어야 확인할 수 있어 여기서 다루지 않는다.
+    """
+    if policy["min_minutes"] is not None or policy["step_minutes"] is not None:
+        raise ValueError(f"변환할 수 없는 이용시간 규정: {policy['rule_set_id']}")
+    if policy["max_minutes"] is None:
+        return []
+    return [
+        {
+            "policy_id": f"{policy['rule_set_id']}_time",
+            "sport": sport,
+            "selection": "flexible",
+            "max_minutes": policy["max_minutes"],
+            "open_time": policy["available_start_time"] or facility["open_time"],
+            "close_time": policy["available_end_time"] or facility["close_time"],
+            "source_id": source_id,
+            **period,
+        }
+    ]
 
 
 def _base_rules(prices: list[dict], policy: dict | None, facility: dict, sport: str, period: dict, source_id: str) -> list[dict]:

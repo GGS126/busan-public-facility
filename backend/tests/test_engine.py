@@ -529,6 +529,24 @@ def test_per_person_discount_without_count_needs_review():
     assert "감면 대상 인원" in result.review_items[0].reason
 
 
+def test_per_person_discount_with_fractional_share_needs_review():
+    # 40,000원 × 50% ÷ 3명 = 6,666.66…원. 3명 합계는 20,000원으로 나눠 떨어져도 인당 끝전 기준이 없다.
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 3}], headcount=3))
+
+    assert_review(result, "discount", "rule_missing")
+    assert result.review_items[0].reason == "인당 감면액의 끝전 처리 방식을 확인할 수 없습니다."
+    assert result.net_cost_after_refund is None
+
+
+def test_per_person_discount_rounded_per_person():
+    # 인당 6,666.66…원을 1원 단위로 버린 뒤 3명을 곱한다.
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person", rounding="floor_1")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 3}], headcount=3))
+
+    assert amounts(result)["discount"] == -19998
+
+
 def test_holder_discount_applies_only_when_holder_eligible():
     rules = facility(discount_rules=[discount_rule(basis="holder_whole_fee")])
 
@@ -850,6 +868,22 @@ def test_flexible_duration_not_allowed():
     assert result.review_items[0].reason == "이용 시간은 60분, 120분 중에서 선택할 수 있습니다."
 
 
+def test_flexible_max_minutes_exceeded_not_eligible():
+    policy = flexible_policy(allowed_minutes=[], max_minutes=120)
+    result = calculate(facility(time_policies=[policy]), conditions(day=MONDAY, start="10:00", end="13:00"))
+
+    assert_not_eligible(result, "duration_not_allowed")
+    assert result.review_items[0].reason == "이용 시간은 최대 120분까지 선택할 수 있습니다."
+
+
+@pytest.mark.parametrize(("start", "end"), [("10:00", "11:00"), ("10:00", "12:00")])
+def test_flexible_within_max_minutes_calculated(start, end):
+    policy = flexible_policy(allowed_minutes=[], max_minutes=120)
+    result = calculate(facility(time_policies=[policy]), conditions(day=MONDAY, start=start, end=end))
+
+    assert result.status == "calculated"
+
+
 @pytest.mark.parametrize(("start", "end"), [("07:00", "09:00"), ("21:00", "23:00")])
 def test_outside_operating_hours_not_eligible(start, end):
     result = calculate(facility(time_policies=[flexible_policy()]), conditions(day=MONDAY, start=start, end=end))
@@ -890,7 +924,7 @@ def test_conflicting_policies_need_review():
     ("overrides", "message"),
     [
         (dict(slots=[]), "slots가 필요"),
-        (dict(selection="flexible", slots=[]), "allowed_minutes가 필요"),
+        (dict(selection="flexible", slots=[]), "allowed_minutes나 max_minutes가 필요"),
         (dict(slots=[{"start_time": "09:00", "end_time": "09:00"}]), "종료 시간은 시작 시간보다"),
         (dict(open_time="08:00"), "함께 입력"),
         (dict(open_time="22:00", close_time="08:00"), "운영시간의 종료 시간은 시작 시간보다"),

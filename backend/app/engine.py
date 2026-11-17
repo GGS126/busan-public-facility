@@ -59,7 +59,7 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
                 code="rule_missing",
                 target=_differing_target(results),
                 reason="이용일이 공휴일인지 확인할 수 없습니다.",
-                source_id=rules.source_id,
+                source_id=rules.source_on(conditions.date),
             )
         ],
     )
@@ -107,7 +107,7 @@ def _calculate(rules: FacilityRules, conditions: Conditions, day_types: set[str]
                     target=target,
                     reason=review.reason,
                     # 근거 규정이 없으면 시설의 공식 출처로 안내한다(AC-007).
-                    source_id=review.source_id or rules.source_id,
+                    source_id=review.source_id or rules.source_on(conditions.date),
                 )
             )
             return False
@@ -171,7 +171,10 @@ def _check_time(rules: FacilityRules, conditions: Conditions) -> FeeResult | Non
             choices = ", ".join(f"{slot_start}~{slot_end}" for slot_start, slot_end in slots)
             reason = f"정해진 회차로만 예약할 수 있습니다. 가능한 회차: {choices}"
             return _not_calculated("not_eligible", "slot_mismatch", reason, policy.source_id)
-    elif end - start not in policy.allowed_minutes:
+    elif policy.max_minutes is not None and end - start > policy.max_minutes:
+        reason = f"이용 시간은 최대 {policy.max_minutes}분까지 선택할 수 있습니다."
+        return _not_calculated("not_eligible", "duration_not_allowed", reason, policy.source_id)
+    elif policy.allowed_minutes and end - start not in policy.allowed_minutes:
         choices = ", ".join(f"{minutes}분" for minutes in policy.allowed_minutes)
         reason = f"이용 시간은 {choices} 중에서 선택할 수 있습니다."
         return _not_calculated("not_eligible", "duration_not_allowed", reason, policy.source_id)
@@ -433,12 +436,20 @@ def _uncapped_discount_amount(rule: DiscountRule, target: int, share: tuple[int,
     if rule.rate is None:
         raise NeedsReview("rule_missing", "감면율이나 감면액을 확인할 수 없습니다.", rule.source_id)
 
-    # 나눗셈을 마지막에 해야 6,000원 × 50% × 2명 ÷ 6명처럼 나눠 떨어지는 금액이 끝전으로 보이지 않는다.
     numerator, denominator = share
+    if rule.basis == "per_eligible_person":
+        # 감면은 대상자 한 명씩 적용되므로 인당 감면액의 끝전을 처리한 뒤 인원을 곱한다.
+        # 합계가 나눠 떨어져도(20,000원 ÷ 3명 × 3명) 인당 금액에 끝전이 있으면 추정하지 않는다.
+        per_person = Decimal(target) * rule.rate / denominator
+        return _rounded(rule, per_person, "인당 감면액의 끝전 처리 방식을 확인할 수 없습니다.") * numerator
     value = Decimal(target) * rule.rate * numerator / denominator
+    return _rounded(rule, value, "감면액의 끝전 처리 방식을 확인할 수 없습니다.")
+
+
+def _rounded(rule: DiscountRule, value: Decimal, reason: str) -> int:
     if rule.rounding is not None:
         mode, unit = rule.rounding.split("_")
         return int((value / int(unit)).to_integral_value(ROUNDING_MODES[mode]) * int(unit))
     if value != value.to_integral_value():
-        raise NeedsReview("rule_missing", "감면액의 끝전 처리 방식을 확인할 수 없습니다.", rule.source_id)
+        raise NeedsReview("rule_missing", reason, rule.source_id)
     return int(value)

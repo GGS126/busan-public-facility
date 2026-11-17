@@ -278,6 +278,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 
 - 감면 유형별로 금액 항목(`type: "discount"`)을 하나씩 반환하고, 조명료는 세 시설 모두 감면 대상에서 제외합니다.
 - 나눠 떨어지지 않는 금액은 규정의 `rounding`으로 처리하고, 끝전 기준이 없으면 '확인 필요'(`rule_missing`)로 반환합니다.
+- `per_eligible_person`은 **인당 감면액**(대상 요금 × 감면율 ÷ 전체 인원)의 끝전을 먼저 처리한 뒤 대상 인원을 곱합니다. 합계가 나눠 떨어져도(20,000원 ÷ 3명 × 3명) 인당 금액에 끝전이 있고 `rounding`이 없으면 '확인 필요'입니다.
 - `per_eligible_person`은 대표자 여부와 관계없이 인원으로 계산하고, `holder_whole_fee`는 `count`와 관계없이 대표자 여부로 계산합니다.
 
 ### 선택 조명
@@ -390,7 +391,8 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `policy_id`, `sport` | 규정 식별자와 종목 | `T-HAEUNDAE-01`, `tennis` |
 | `selection` | 지정 회차만 가능 또는 허용 이용시간 안에서 자유 선택 | `fixed_slot`, `flexible` |
 | `slots` | 지정 회차의 시작·종료 시간. `fixed_slot`에서 필수 | `[{"start_time": "07:00", "end_time": "09:00"}]` |
-| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 필수 | `[60, 120]` |
+| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 `max_minutes`가 없으면 필수 | `[60, 120]` |
+| `max_minutes` | 1회 최대 이용시간. 허용 이용시간 목록 없이 상한만 확인된 시설에 사용 | `120` |
 | `open_time`, `close_time` | 운영시간. 없으면 확인하지 않음 | `08:00`, `22:00` |
 | `effective_from`, `effective_to` | 규정 적용 기간. 동절기·하절기 회차를 구분 | `2026-10-01`, `2027-03-31` |
 | `source_id` | 근거 출처 | `S-01` |
@@ -398,7 +400,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 사유 코드 | 상황 |
 |---|---|
 | `slot_mismatch` | 지정 회차와 시간이 다름. 사유에 가능한 회차 목록을 포함 |
-| `duration_not_allowed` | `allowed_minutes`에 없는 이용시간 |
+| `duration_not_allowed` | `allowed_minutes`에 없거나 `max_minutes`보다 긴 이용시간 |
 | `outside_hours` | 운영시간 밖 |
 
 같은 종목에 유효한 규정이 둘 이상이면 `needs_review`와 `rule_conflict`(`target: "time"`)를 반환합니다.
@@ -461,9 +463,9 @@ SQLite DB를 새로 만들어 규칙 엔진으로 계산한 뒤 비교합니다.
 | `facility_options` (`mandatory_when_applicable`) | 조명료 규정(60분 단위) |
 | `facility_options` (`optional`) | 선택 조명료 규정(60분 단위, `extra_unit_*`는 추가 단위 요금, `payment_type` → `payment`) |
 | `time_selection_policies` (`fixed_slot`) | 이용시간 규정. 운영시간은 `facilities.open_time`, `close_time` |
-| `time_selection_policies` (`flexible_interval`) | 변환하지 않음. 허용 이용시간이 확인되지 않음 |
+| `time_selection_policies` (`flexible_interval`) | 이용시간 규정(`selection: flexible`, `max_minutes`). 운영시간은 `available_start_time`, `available_end_time`. 허용 이용시간 목록은 확인되지 않아 만들지 않으며, 하루 이용 한도(`daily_limit_minutes`)는 예약 이력이 필요해 확인하지 않음 |
 | `facility_discounts` | 감면 규정. `per_eligible_person_equal_split` → `basis: per_eligible_person` |
-| `reservation_rules`, `refund_rules` | `terms` 문구 |
+| `reservation_rules`, `refund_rules` | 규정 기간별 `terms` 문구(`terms_by_period`). 응답에는 이용일에 유효한 기간의 문구와 출처를 사용 |
 | `sources.license`가 `null` | `"이용허락범위 미확인"` |
 
 변환 표에 없는 값(새 감면 계산 방식, 새 조명 계산 방식 등)이 들어오면 추정하지 않고 읽기 단계에서 오류를 냅니다.
