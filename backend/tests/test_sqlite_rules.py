@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.compare import compare_facility
+from app.detail import facility_detail
 from app.engine import calculate
 from app.models import Conditions
 from app.repository import load_sqlite_rule_data
@@ -273,3 +274,40 @@ def test_optional_lighting_outside_its_band_needs_review(facilities):
 
     assert result.status == "needs_review"
     assert result.review_items[0].target == "lighting"
+
+
+def test_facility_detail_flexible(facilities):
+    detail = facility_detail(facilities["busan_gudeok_stadium_tennis"], WEEKDAY)
+
+    assert detail.address == "부산 서구 망양로 57 (서대신동3가, 구덕운동장)"
+    assert detail.booking_url == "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472"
+    assert (detail.operating_hours.open_time, detail.operating_hours.close_time) == ("08:00", "22:00")
+    assert detail.closure_note == "연중무휴(명절 등 별도 공지일 제외)"
+    [option] = detail.time_options
+    assert (option.selection, option.max_minutes, option.slots) == ("flexible", 120, [])
+    assert [source.source_id for source in detail.sources] == ["busan_reserve_472_2026winter"]
+
+
+def test_facility_detail_fixed_slots(facilities):
+    detail = facility_detail(facilities["busan_samrak_ecopark_tennis"], WEEKDAY)
+
+    [option] = detail.time_options
+    assert [(slot.start_time, slot.end_time) for slot in option.slots] == [
+        ("08:00", "10:00"), ("10:00", "12:00"), ("13:00", "15:00"), ("15:00", "17:00"),
+    ]
+
+
+def test_facility_detail_outside_rule_period_shows_unknown(facilities):
+    # 동절기 규정이 끝난 날에는 지난 회차나 휴장 안내를 보여 주지 않는다.
+    detail = facility_detail(facilities["busan_samrak_ecopark_tennis"], date(2027, 5, 1))
+
+    assert detail.time_options == []
+    assert detail.closure_note is None
+    assert detail.booking_url is not None
+
+
+def test_facility_detail_follows_use_date(two_period_facility):
+    detail = facility_detail(two_period_facility, date(2027, 2, 1))
+
+    assert detail.source_id == "haeundae_2027h1"
+    assert [source.source_id for source in detail.sources] == ["haeundae_2027h1"]

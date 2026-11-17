@@ -274,3 +274,34 @@ def test_unknown_discount_selection_type_rejected():
 
     assert response.status_code == 400
     assert response.json()["error"]["fields"][0]["field"] == "conditions.discounts.0.type"
+
+
+def test_facility_detail():
+    response = client.get("/api/facilities/F001", params={"date": next_saturday()})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["facility_id"] == "F001"
+    assert body["sports"] == ["futsal"]
+    # 가상 데이터에는 주소·예약 링크가 없으므로 모르는 값으로 둔다.
+    assert (body["address"], body["booking_url"], body["closure_note"]) == (None, None, None)
+    assert body["time_options"] == []
+    assert [source["source_id"] for source in body["sources"]] == [body["source_id"]]
+
+
+def test_facility_detail_defaults_to_today():
+    assert client.get("/api/facilities/F001").status_code == 200
+
+
+def test_facility_detail_unknown_facility():
+    response = client.get("/api/facilities/NOPE")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "facility_not_found"
+
+
+@pytest.mark.parametrize(("value", "code"), [("2020-01-01", "past_date"), ("abc", "invalid_value")])
+def test_facility_detail_invalid_date(value, code):
+    response = client.get("/api/facilities/F001", params={"date": value})
+
+    assert fields_of(response) == {"date": code}

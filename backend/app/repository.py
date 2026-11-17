@@ -125,6 +125,27 @@ def _sqlite_facility(rows, facility: dict) -> dict:
         "name": facility["name"],
         "district": facility["district"],
         "source_id": latest["source_id"],
+        "info": {
+            "address": facility["address"],
+            "phone": facility["phone"],
+            "booking_url": facility["booking_url"],
+            "operating_hours": {
+                "open_time": facility["open_time"],
+                "close_time": facility["close_time"],
+                "note": facility["holiday_note"],
+            },
+        },
+        "closure_notes": [
+            {
+                "note": reservation["closure_note"],
+                "source_id": rule_set["source_id"],
+                "effective_from": rule_set["effective_from"],
+                "effective_to": rule_set["effective_to"],
+            }
+            for rule_set in rule_sets
+            for reservation in rows("SELECT closure_note FROM reservation_rules WHERE rule_set_id = ?", rule_set["id"])
+            if reservation["closure_note"]
+        ],
         "fee_rules": fee_rules,
         "discount_rules": discount_rules,
         "time_policies": time_policies,
