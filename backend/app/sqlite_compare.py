@@ -2,14 +2,14 @@
 
 from pathlib import Path
 
-from app.facility_catalog import DB_PATH, facility_closures, load_query_api
+from app.facility_catalog import facility_closures, holiday_calendar, load_query_api
 from app.models import CompareResult, Conditions, FeeItem, FeeResult, ReviewItem, Source, Terms
 
 
 def compare_sqlite(
     path: Path, facility: dict[str, str], conditions: Conditions, *, closures: dict[str, dict] | None = None,
 ) -> CompareResult:
-    query = load_query_api(DB_PATH.with_name("query_api.py"))
+    query = load_query_api()
     facility_id = facility["facility_id"]
 
     day = conditions.date.isoformat()
@@ -21,8 +21,8 @@ def compare_sqlite(
         WHERE r.facility_id = ? AND ? BETWEEN r.effective_from AND r.effective_to
         ORDER BY r.effective_from DESC, r.id
     """, (facility_id, day))
-    rule = rules[0] if rules else None
-    source_id = rule["id"] if rule else facility_id
+    rule = rules[0] if len(rules) == 1 else None
+    source_id = rule["id"] if rule and rule["checked_on"] else None
     sources = []
     if rule and rule["checked_on"]:
         sources.append(Source(source_id=source_id, url=rule["url"],
@@ -42,26 +42,30 @@ def compare_sqlite(
 
     items = []
     reviews = []
-    if closures is None:
-        closures = facility_closures(path, conditions.date)
-    closure = closures.get(facility_id)
-    if closure is None or closure["is_closed"] is None:
-        reviews.append(ReviewItem(
-            code="rule_not_in_effect" if closure is None else "rule_missing",
-            target="base", source_id=source_id,
-            reason="적용기간 내 요금 규정 없음" if closure is None else "명절 휴장 여부를 확인해 주세요.",
-        ))
-    elif closure["is_closed"]:
-        reviews.append(ReviewItem(
-            code="rule_not_in_effect", target="base", source_id=source_id,
-            reason="정기 휴장일입니다. " + " / ".join(item["note"] for item in closure["matched_rules"]),
-        ))
-    elif len(rules) > 1:
+    invalid_time = False
+    if len(rules) > 1:
         reviews.append(ReviewItem(code="rule_conflict", target="base", source_id=source_id,
                                   reason="적용 기간이 겹치는 요금 규정이 있습니다."))
+    elif not rules:
+        reviews.append(ReviewItem(code="rule_not_in_effect", target="base", source_id=None,
+                                  reason="적용기간 내 요금 규정이 없습니다."))
     else:
+        if closures is None:
+            closures = facility_closures(path, conditions.date)
+        closure = closures.get(facility_id)
+        if closure is None or closure["is_closed"] is None:
+            reviews.append(ReviewItem(code="rule_missing", target="base", source_id=source_id,
+                                      reason="명절 휴장 여부를 확인해 주세요."))
+        elif closure["is_closed"]:
+            notes = " / ".join(dict.fromkeys(item["note"] for item in closure["matched_rules"]))
+            reviews.append(ReviewItem(code="rule_not_in_effect", target="base", source_id=source_id,
+                                      reason=f"정기 휴장일입니다. {notes}"))
+    if not reviews:
         args = (path, facility_id, day, conditions.start_time, conditions.end_time)
         weekend = conditions.date.weekday() >= 5
+        calendar = holiday_calendar()
+        covered = calendar.covers(conditions.date)
+        holiday_or_weekend = weekend or (covered and calendar.is_holiday(conditions.date))
         def read_quote(holiday_or_weekend):
             try:
                 return query.quote(*args, holiday_or_weekend)
@@ -72,9 +76,9 @@ def compare_sqlite(
                     "reason": "요금 규정이 중복됩니다." if conflict else "선택한 시간의 요금 규정을 확인할 수 없습니다.",
                 }
 
-        quote = read_quote(weekend)
+        quote = read_quote(holiday_or_weekend)
         if quote["status"] == "priced":
-            holiday = quote if weekend else read_quote(True)
+            holiday = quote if weekend or covered else read_quote(True)
             if holiday["status"] != "priced" or quote["total_won"] != holiday["total_won"]:
                 reviews.append(ReviewItem(
                     code="rule_conflict" if holiday["status"] == "rule_conflict" else "rule_missing",
@@ -85,16 +89,28 @@ def compare_sqlite(
                 items.append(FeeItem(type="base", amount=quote["base_fee_won"],
                                      rule_id=quote["price_rule_id"], source_id=source_id))
                 if quote["lighting_fee_won"]:
+                    lighting_rule = next(
+                        (option for option in query.facility_options(path, facility_id, day)
+                         if option["option_id"] == "lighting" and option["application_type"] in
+                         {"included_in_base_price", "mandatory_when_applicable"}),
+                        None,
+                    )
                     items.append(FeeItem(type="lighting", amount=quote["lighting_fee_won"],
-                                         rule_id=quote["price_rule_id"], source_id=source_id))
+                                         rule_id=lighting_rule["id"] if lighting_rule else quote["price_rule_id"],
+                                         source_id=source_id))
         else:
             details = quote.get("review_items", [])
             reason = details[0]["reason"] if details else quote.get("reason")
+            invalid_time = quote["status"] in {"invalid_time", "invalid_optional_lighting"}
+            code = {"not_available": "rule_not_in_effect", "rule_conflict": "rule_conflict",
+                    "invalid_time": "slot_mismatch" if quote.get("selection_type") == "fixed_slot"
+                    else "duration_not_allowed", "invalid_optional_lighting": "duration_not_allowed"}
+            target = "time" if invalid_time else (
+                "lighting" if quote["status"] in {"option_rule_inconsistent", "lighting_calculation_unavailable"} else "base"
+            )
             reviews.append(ReviewItem(
-                code={"not_available": "rule_not_in_effect", "rule_conflict": "rule_conflict"}.get(
-                    quote["status"], "rule_missing",
-                ),
-                target="base",
+                code=code.get(quote["status"], "rule_missing"),
+                target=target,
                 reason=reason or "선택한 시간에 적용할 요금 규정을 확인할 수 없습니다.",
                 source_id=source_id,
             ))
@@ -110,7 +126,7 @@ def compare_sqlite(
     return CompareResult(
         facility_id=facility_id, facility_name=facility["name"],
         fee=FeeResult(
-            status="needs_review" if reviews else "calculated",
+            status="not_eligible" if invalid_time else "needs_review" if reviews else "calculated",
             items=items, total=total, payment_due=total,
             expected_refund=None if reviews else 0, net_cost_after_refund=total,
             review_items=reviews,

@@ -6,6 +6,15 @@ import re
 from datetime import date
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
+THINKING_LEVELS = {
+    DEFAULT_MODEL: "minimal",
+    "gemini-3.1-flash-lite": "minimal",
+    "gemini-3.5-flash": "minimal",
+    "gemini-3-flash-preview": "minimal",
+    "gemini-3.1-pro-preview": "low",
+}
+BUSAN_DISTRICTS = ("중구", "서구", "동구", "영도구", "부산진구", "동래구", "남구", "북구", "해운대구",
+                   "사하구", "금정구", "강서구", "연제구", "수영구", "사상구", "기장군")
 NULLABLE_TEXT = {"type": ["string", "null"]}
 PROPERTIES = {
     "sport": NULLABLE_TEXT,
@@ -47,18 +56,19 @@ class GeminiResponseError(ValueError):
 class GeminiExtractor:
     def __init__(self, api_key: str, *, sport_codes: dict[str, str], discount_codes: dict[str, str],
                  districts: list[str], model: str = DEFAULT_MODEL):
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model) or (
+            model.lower().startswith(("gemini-3-", "gemini-3.")) and model not in THINKING_LEVELS
+        ):
             raise ValueError("invalid_model_configuration")
         self.api_key = api_key
         self.model = model
         self.sport_codes = sport_codes
         self.discount_codes = discount_codes
-        self.districts = districts
+        self.districts = list(dict.fromkeys([*districts, *BUSAN_DISTRICTS]))
         self.properties = {
             **PROPERTIES,
             "sport": {**NULLABLE_TEXT, "enum": [*sport_codes, None]},
-            "districts": {**PROPERTIES["districts"], "items": {"type": "string", "enum": districts}}
-            if districts else {**PROPERTIES["districts"], "maxItems": 0},
+            "districts": {**PROPERTIES["districts"], "items": {"type": "string", "enum": self.districts}},
             "discount_types": {
                 **PROPERTIES["discount_types"],
                 "items": {"type": "string", "enum": list(discount_codes)},
@@ -80,11 +90,12 @@ class GeminiExtractor:
                 "responseMimeType": "application/json",
                 "responseJsonSchema": {"type": "object", "properties": self.properties,
                                        "required": list(self.properties), "additionalProperties": False},
-                "maxOutputTokens": 1024,
+                "maxOutputTokens": 4096 if self.model == "gemini-3.1-pro-preview" else 1024,
             },
         }
-        if self.model == DEFAULT_MODEL:
-            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "minimal"}
+        thinking_level = THINKING_LEVELS.get(self.model)
+        if thinking_level is not None:
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
         connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=5)
         try:
             connection.request("POST", f"/v1beta/models/{self.model}:generateContent",

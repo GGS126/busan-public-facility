@@ -28,20 +28,19 @@ function NaturalLanguageInput({ onApply, onDirectInput, options: catalog }) {
       }
 
       const parsed = result.conditions
-      const districts = parsed.districts ?? []
+      const districts = parsed.districts
       const questions = Object.values(result.questions)
-      if (districts.length > 1) questions.push('검색할 지역을 한 곳 선택해 주세요.')
       const sports = catalog?.sports ?? []
       setOptions({
         sports: parsed.sport && !sports.some(({ code }) => code === parsed.sport)
           ? [...sports, { code: parsed.sport, label: parsed.sport }]
           : sports,
-        districts: [...new Set([...(catalog?.districts ?? []), ...districts])],
+        districts: [...new Set([...(catalog?.districts ?? []), ...(districts ?? [])])],
         discount_types: catalog?.discount_types ?? [],
       })
       setConditions({
         sport: parsed.sport ?? '',
-        district: districts.length === 1 ? districts[0] : districts.length === 0 ? '전체' : '',
+        districts,
         date: parsed.date ?? '',
         start_time: parsed.start_time ?? '',
         end_time: parsed.end_time ?? '',
@@ -68,7 +67,7 @@ function NaturalLanguageInput({ onApply, onDirectInput, options: catalog }) {
   // 수정한 조건을 직접 입력 폼에 전달
   function handleApply() {
     const sport = options.sports.find(({ code }) => code === conditions.sport)
-    if (!sport || !conditions.district) {
+    if (!sport || !conditions.districts) {
       setMessage('이용 종목과 지역을 선택해 주세요.')
       return
     }
@@ -190,13 +189,14 @@ function NaturalLanguageInput({ onApply, onDirectInput, options: catalog }) {
               </label>
               <select
                 id="ai-district"
-                value={conditions.district}
+                value={conditions.districts?.length > 1 ? 'multiple' : conditions.districts?.[0] ?? (conditions.districts ? '전체' : '')}
                 onChange={(event) =>
-                  updateCondition('district', event.target.value)
+                  updateCondition('districts', event.target.value === '전체' ? [] : event.target.value ? [event.target.value] : undefined)
                 }
               >
                 <option value="">지역 선택</option>
                 <option value="전체">부산 전체</option>
+                {conditions.districts?.length > 1 && <option value="multiple">{conditions.districts.join(", ")}</option>}
                 {options.districts.map((district) => (
                   <option key={district} value={district}>{district}</option>
                 ))}

@@ -7,7 +7,7 @@ from datetime import date
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.models import BandTime, ClockTime, to_minutes
+from app.models import BandTime, ClockTime, Headcount, validate_not_past, validate_time_order
 
 QUESTIONS = {
     "sport": "어떤 종목을 이용하시나요?",
@@ -22,11 +22,13 @@ REQUIRED_FIELDS = ("sport", "date", "start_time", "end_time")
 DATE_FORMAT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 START_TIME = TypeAdapter(ClockTime)
 END_TIME = TypeAdapter(BandTime)
+HEADCOUNT = TypeAdapter(Headcount)
+MAX_EXTRACTED_DATE_DAYS = 365
 SENSITIVE_PATTERN = re.compile(
     r"(?<!\d)(?:\d{6}[-.\s]?\d{7}|(?:\+82[-.\s]?|0)1[016789][- .]?\d{3,4}[- .]?\d{4})(?!\d)"
-    r"|(?<!\d)(?:0(?:2|[3-6][1-5])|\+82[- .]?(?:2|[3-6][1-5]))[- .]?\d{3,4}[- .]?\d{4}(?!\d)"
+    r"|(?<!\d)(?<!\d[./])0(?:2|[3-6][1-5])[- .]?\d{3,4}[- .]?\d{4}(?!\d)"
+    r"|(?<!\d)\+82[- .]?(?:2|[3-6][1-5])[- .]?\d{3,4}[- .]?\d{4}(?!\d)"
     r"|(?<!\d)(?:0|\+82[- .]?)(?:[78]0|50[2-8])[- .]?\d{3,4}[- .]?\d{4}(?!\d)"
-    r"|(?<!\d)1[568]\d{2}[- .]?\d{4}(?!\d)"
     r"|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"
 )
 
@@ -38,9 +40,9 @@ def parse_query(
     extract: Callable[[str, date], Mapping[str, object]],
 ) -> dict:
     """Normalize extracted fields; `ok` still requires user confirmation in the UI."""
-    query = unicodedata.normalize("NFKC", query).strip()
     if len(query) > 500:
         return {**_result("llm_failed", {}), "message": "이용 조건은 500자 이내로 입력해 주세요."}
+    query = unicodedata.normalize("NFKC", query).strip()
     if not query:
         return _result("need_more", {}, list(REQUIRED_FIELDS))
     if SENSITIVE_PATTERN.search(query):
@@ -77,7 +79,10 @@ def parse_query(
 
     start = conditions.get("start_time")
     end = conditions.get("end_time")
-    if start and end and to_minutes(end) <= to_minutes(start):
+    try:
+        if end is not None:
+            validate_time_order(start, end)
+    except ValueError:
         conditions.pop("end_time")
         missing.append("end_time")
         result = _result("need_more", conditions, missing)
@@ -95,18 +100,19 @@ def _valid(field: str, value: object, today: date) -> bool:
             isinstance(value, list)
             and all(isinstance(item, str) and item.strip() for item in value)
         )
-    if field == "headcount":
-        return type(value) is int and value > 0
-    if field in {"start_time", "end_time"}:
+    if field in {"start_time", "end_time", "headcount"}:
+        adapter = {"start_time": START_TIME, "end_time": END_TIME, "headcount": HEADCOUNT}[field]
         try:
-            (END_TIME if field == "end_time" else START_TIME).validate_python(value, strict=True)
+            adapter.validate_python(value, strict=True)
             return True
         except ValidationError:
             return False
     if not isinstance(value, str) or not DATE_FORMAT.fullmatch(value):
         return False
     try:
-        return date.fromisoformat(value) >= today
+        extracted_date = date.fromisoformat(value)
+        validate_not_past(extracted_date, today)
+        return (extracted_date - today).days <= MAX_EXTRACTED_DATE_DAYS
     except ValueError:
         return False
 

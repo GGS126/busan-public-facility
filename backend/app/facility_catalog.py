@@ -1,6 +1,8 @@
 """Read the SQLite catalog shared by facility search and AI extraction."""
 
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import date
 from functools import cache, lru_cache
 from importlib import import_module
@@ -15,7 +17,7 @@ SPORT_LABELS = {"tennis": "테니스"}
 
 
 @cache
-def load_query_api(path: Path):
+def load_query_api(path: Path = DB_PATH.with_name("query_api.py")):
     package_name = "_facility_database"
     spec = spec_from_file_location(package_name, path.parent / "__init__.py")
     if spec is None or spec.loader is None:
@@ -26,18 +28,23 @@ def load_query_api(path: Path):
 
 
 @cache
-def _holiday_calendar() -> HolidayCalendar:
+def holiday_calendar() -> HolidayCalendar:
     return HolidayCalendar.model_validate_json(HOLIDAYS_PATH.read_text(encoding="utf-8"))
 
 
 def facility_closures(path: Path, day: date) -> dict[str, dict]:
-    calendar = _holiday_calendar()
+    return _facility_closures(path, day, _file_version(path))
+
+
+@lru_cache(maxsize=32)
+def _facility_closures(path: Path, day: date, _version) -> dict[str, dict]:
+    calendar = holiday_calendar()
     codes = None
     if calendar.covers(day):
         holiday_codes = {"설날": "lunar_new_year_day", "추석": "chuseok_day"}
         codes = [holiday_codes[item.name] for item in calendar.holidays
                  if item.date == day and item.name in holiday_codes]
-    return load_query_api(DB_PATH.with_name("query_api.py")).closure_statuses(path, day.isoformat(), codes)
+    return load_query_api().closure_statuses(path, day.isoformat(), codes)
 
 
 def read_catalog(path: Path) -> tuple[list[dict[str, str]], OptionsResponse]:
@@ -51,7 +58,7 @@ def _file_version(path: Path) -> tuple[int, int, int]:
 
 @lru_cache(maxsize=4)
 def _read_catalog(path, _file_version):
-    query = load_query_api(DB_PATH.with_name("query_api.py"))
+    query = load_query_api()
     facilities = [
         {"facility_id": row["id"], "name": row["name"], "sport": row["facility_type"],
          "district": row["district"], "address": row["address"], "booking_url": row["booking_url"]}
@@ -72,4 +79,29 @@ def read_fixed_slots(path: Path, use_date: str) -> dict[str, list[dict[str, str]
 
 @lru_cache(maxsize=32)
 def _read_fixed_slots(path, use_date, _version):
-    return load_query_api(DB_PATH.with_name("query_api.py")).fixed_slots_by_facility(path, use_date)
+    return load_query_api().fixed_slots_by_facility(path, use_date)
+
+
+def read_search_time_policies(path: Path, use_date: str) -> dict[str, dict]:
+    return _read_search_time_policies(path, use_date, _file_version(path))
+
+
+@lru_cache(maxsize=32)
+def _read_search_time_policies(path, use_date, _version):
+    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """SELECT f.id, f.open_time, f.close_time, t.selection_type, t.available_start_time,
+                      t.available_end_time, t.min_minutes, t.max_minutes,
+                      EXISTS(SELECT 1 FROM rule_sets h JOIN time_selection_policies p ON p.rule_set_id = h.id
+                             WHERE h.facility_id = f.id AND p.selection_type = 'fixed_slot') AS fixed_slot_known
+               FROM facilities f
+               LEFT JOIN rule_sets r ON r.facility_id = f.id AND ? BETWEEN r.effective_from AND r.effective_to
+               LEFT JOIN time_selection_policies t ON t.rule_set_id = r.id""",
+            (use_date,),
+        ).fetchall()
+    policies = {}
+    for row in rows:
+        facility_id = row["id"]
+        policies[facility_id] = None if facility_id in policies else dict(row)
+    return policies
