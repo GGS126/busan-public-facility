@@ -567,8 +567,9 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'optional_lighting_minutes':optional_lighting_minutes,
             'optional_lighting_on_site_won':optional_lighting_on_site_won,
             'optional_lighting_payment_unverified_won':optional_unverified,
-            # 백엔드 계약: 결제 시점이 하나라도 미확인이면 최초 납부액을 확정할 수 없다.
-            'payment_due':None if review_items else p['base_fee_won']+light+optional_amount,
+            # 백엔드 #26 계약: payment_due는 온라인 선결제액이다.
+            # 결제 방식 미확인 옵션이 있으면 확정 결제액으로 표시하지 않는다.
+            'payment_due':None if review_items else online_prepay_won,
             'online_prepay_won':online_prepay_won,'onsite_payment':onsite_payment,
             'payment_unverified_won':payment_unverified_won,
             'payment_status':'needs_review' if review_items else 'confirmed',

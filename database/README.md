@@ -79,6 +79,23 @@ python database/audit_checks.py
 
 **환불:** 시설별 일반 취소 시점에 따른 환불률과 우천 등 별도 사유에 대한 규정은 `refund_rules`에 저장합니다. 같은 시설이라도 취소 사유에 따라 적용 규칙이 달라질 수 있습니다.
 
+## 견적 응답의 금액 필드 의미
+
+`query_api.quote()`의 금액 필드는 다음 의미로 구분합니다. #26 백엔드 엔진의 `payment_due`와 동일하게 **온라인 선결제액**을 `payment_due`로 반환합니다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `total_won` | 기본 이용료 + 필수 조명료 + 선택 조명료의 **전체 이용료**(감면 전) |
+| `payment_due` | 예약 단계에서 납부할 **온라인 선결제액**. 확인된 경우 `online_prepay_won`과 동일 |
+| `online_prepay_won` | 온라인 선결제로 분류된 금액 |
+| `onsite_payment` | 현장 결제 예정액 |
+| `payment_unverified_won` | 결제 시점·장소가 확인되지 않은 옵션 금액 |
+| `payment_status` | 결제 방식 전체가 확인되면 `confirmed`, 미확인 항목이 있으면 `needs_review` |
+
+결제 방식이 미확인된 옵션이 있으면 `payment_due`는 확정 선결제액으로 안내하지 않도록 `null`을 반환합니다. 다만 `online_prepay_won`은 확인된 온라인 선결제 금액을 별도로 보여 줍니다. 전체 금액은 `total_won`을 사용하고, `payment_due`를 총 납부액으로 해석하지 않습니다.
+
+예: 해운대수목원 축구장 평일 19:00~22:00, 선택 조명 60분이면 `total_won=150000`, `payment_due=online_prepay_won=140000`, `onsite_payment=10000`입니다.
+
 ## 데이터 구성 원칙
 
 - 요금과 규정은 `rule_set_id`를 통해 **시설·적용기간·출처**에 연결됩니다.

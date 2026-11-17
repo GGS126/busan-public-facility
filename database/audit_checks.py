@@ -453,10 +453,10 @@ with tempfile.TemporaryDirectory() as tmp:
  assert unknown['optional_lighting_payment_unverified_won']==10000,unknown
  assert unknown['review_items'][0]['code']=='option_payment_type_unverified',unknown
  known=q.quote(db,'busan_haeundae_arboretum_tennis','2026-11-09','18:00','20:00',False,60)
- assert known['payment_status']=='confirmed' and known['onsite_payment']==10000,known
+ assert known['payment_status']=='confirmed' and known['onsite_payment']==10000 and known['payment_due']==known['online_prepay_won']==8000,known
  assert known['optional_lighting_on_site_won']==10000 and known['online_prepay_won']==8000,known
  included_light=q.quote(db,'busan_haeundae_arboretum_tennis','2026-11-09','20:00','22:00',False)
- assert included_light['payment_status']=='confirmed' and included_light['payment_due']==28000,included_light
+ assert included_light['payment_status']=='confirmed' and included_light['payment_due']==included_light['online_prepay_won']==28000,included_light
  assert included_light['onsite_payment']==0 and included_light['payment_unverified_won']==0,included_light
  unknown_mandatory=q.quote(db,'busan_gudeok_stadium_tennis','2026-11-09','18:00','20:00',False)
  assert unknown_mandatory['payment_status']=='needs_review',unknown_mandatory
@@ -790,7 +790,7 @@ with tempfile.TemporaryDirectory() as night_tmp:
   assert result['status']=='priced',result
   assert result['total_won']==total,result
   assert result['lighting_fee_won']==30000,result
-  assert result['payment_due']==total and result['payment_status']=='confirmed',result
+  assert result['payment_due']==result['online_prepay_won'] and result['payment_status']=='confirmed',result
   assert result['online_prepay_won']==total and result['onsite_payment']==0,result
   assert result['payment_unverified_won']==0 and not result['review_items'],result
  print('PASS: 화명 야간축구장 요금/필수 조명/결제방식 및 8개 시설')
@@ -822,7 +822,7 @@ with tempfile.TemporaryDirectory() as hs_tmp:
   r=q.quote(hs_db,hs,'2026-11-17','19:00','22:00',False,minutes)
   assert r['status']=='priced' and r['total_won']==total,r
   assert r['online_prepay_won']==140000 and r['onsite_payment']==onsite,r
-  assert r['payment_status']=='confirmed' and r['payment_due']==total,r
+  assert r['payment_status']=='confirmed' and r['payment_due']==r['online_prepay_won']==140000,r
   assert r['optional_lighting_on_site_won']==onsite and r['payment_unverified_won']==0,r
  assert q.quote(hs_db,hs,'2026-11-17','19:00','22:00',False,61)['status']=='invalid_optional_lighting'
  # 겹친 조명료가 우연히 같더라도 포함 규정의 종료 시각이 다르면 거부한다.
