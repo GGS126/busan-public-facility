@@ -404,7 +404,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             or (policy['min_minutes'] is not None and duration<policy['min_minutes'])
             or (policy['max_minutes'] is not None and duration>policy['max_minutes'])
             or (policy['daily_limit_minutes'] is not None and duration>policy['daily_limit_minutes'])):
-            return {'status':'invalid_time','reason':'해당 시설의 이용시간 정책에 맞지 않는 시간'}
+            return {'status':'invalid_time','selection_type':typ,'reason':'해당 시설의 이용시간 정책에 맞지 않는 시간'}
         matches=[r for r in prices if r['duration_minutes']==duration]
         if not matches:
             return {
@@ -423,7 +423,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
                 }],
                 'booking_availability_verified':False
             }
-    if not matches:return {'status':'invalid_time','reason':'해당 시설에서 선택할 수 없는 시간 또는 이용시간'}
+    if not matches:return {'status':'invalid_time','selection_type':typ,'reason':'해당 시설에서 선택할 수 없는 시간 또는 이용시간'}
     if len(matches)!=1:raise ValueError('중복된 요금 규정')
     discount_review=discount_selection_review(db,facility_id,use_date,discount_category_ids)
     if discount_review is not None:

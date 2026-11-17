@@ -52,6 +52,7 @@ def test_expired_rule_source_is_not_displayed(sqlite_db, gudeok):
         sport="tennis", date="2099-01-01", start_time="19:00", end_time="21:00", source="direct",
     ))
     assert result.sources == []
+    assert result.fee.review_items[0].source_id is None
     assert result.terms.booking_open is None
     assert result.fee.review_items[0].code == "rule_not_in_effect"
 
@@ -83,3 +84,22 @@ def test_sqlite_compare_handles_invalid_options_and_conflicts(sqlite_db, gudeok,
         fee = response.json()["results"][0]["fee"]
         assert fee["payment_due"] is None
         assert fee["review_items"][0]["code"] == code
+
+
+@pytest.mark.parametrize(("day", "amount"), [("2026-11-10", 6000), ("2026-12-25", 9000)])
+def test_samrak_uses_calendar_for_weekday_and_holiday(sqlite_db, day, amount):
+    catalog, _ = read_catalog(sqlite_db)
+    samrak = next(facility for facility in catalog if facility["facility_id"] == "busan_samrak_ecopark_tennis")
+    result = compare_sqlite(sqlite_db, samrak, Conditions(
+        sport="tennis", date=day, start_time="08:00", end_time="10:00", source="direct",
+    ))
+    assert result.fee.status == "calculated"
+    assert result.fee.payment_due == amount
+
+
+def test_gudeok_rejects_duration_over_limit(sqlite_db, gudeok):
+    result = compare_sqlite(sqlite_db, gudeok, Conditions(
+        sport="tennis", date="2026-11-10", start_time="10:00", end_time="14:00", source="direct",
+    ))
+    assert result.fee.status == "not_eligible"
+    assert result.fee.review_items[0].code == "duration_not_allowed"

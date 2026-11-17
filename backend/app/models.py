@@ -349,7 +349,7 @@ class ReviewItem(BaseModel):
     ]
     target: Literal["base", "lighting", "discount", "checklist", "time"]
     reason: str
-    source_id: str
+    source_id: str | None
 
 
 class FeeResult(BaseModel):

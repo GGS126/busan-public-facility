@@ -262,14 +262,15 @@ def check_against_options(conditions: Conditions, options: OptionsResponse) -> N
 
 @app.post("/api/compare", response_model=CompareResponse)
 def compare(request: CompareRequest) -> CompareResponse:
-    has_sqlite = DB_PATH.is_file()
-    if not has_sqlite or any(facility_id in facilities for facility_id in request.facility_ids):
+    sample_ids = {facility_id for facility_id in request.facility_ids if facility_id in facilities}
+    sqlite_ids = set(request.facility_ids) - sample_ids
+    if sample_ids:
         check_against_options(request.conditions, available_options)
     sqlite_facilities = {}
-    if has_sqlite and any(facility_id not in facilities for facility_id in request.facility_ids):
+    if sqlite_ids and DB_PATH.is_file():
         catalog, options = read_catalog(DB_PATH)
         sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
-        if any(facility_id in sqlite_facilities for facility_id in request.facility_ids):
+        if sqlite_ids & sqlite_facilities.keys():
             check_against_options(request.conditions, options)
     results = []
     for facility_id in request.facility_ids:
