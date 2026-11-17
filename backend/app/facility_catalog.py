@@ -64,3 +64,27 @@ def _read_fixed_slots(path, use_date, _version):
     for facility_id, start_time, end_time in rows:
         slots.setdefault(facility_id, []).append({"start_time": start_time, "end_time": end_time})
     return slots
+
+def read_search_time_policies(path: Path, use_date: str) -> dict[str, dict]:
+    return _read_search_time_policies(path, use_date, _file_version(path))
+
+
+@lru_cache(maxsize=32)
+def _read_search_time_policies(path, use_date, _version):
+    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """SELECT f.id, f.open_time, f.close_time, t.selection_type, t.available_start_time,
+                      t.available_end_time, t.min_minutes, t.max_minutes,
+                      EXISTS(SELECT 1 FROM rule_sets h JOIN time_selection_policies p ON p.rule_set_id = h.id
+                             WHERE h.facility_id = f.id AND p.selection_type = 'fixed_slot') AS fixed_slot_known
+               FROM facilities f
+               LEFT JOIN rule_sets r ON r.facility_id = f.id AND ? BETWEEN r.effective_from AND r.effective_to
+               LEFT JOIN time_selection_policies t ON t.rule_set_id = r.id""",
+            (use_date,),
+        ).fetchall()
+    policies = {}
+    for row in rows:
+        facility_id = row["id"]
+        policies[facility_id] = None if facility_id in policies else dict(row)
+    return policies

@@ -1,13 +1,4 @@
 
-const discounts = [
-  ['none', '감면 없음'],
-  ['disabled', '장애인'],
-  ['multi_child', '다자녀 가정'],
-  ['low_income', '기초생활수급자'],
-  ['national_merit', '국가유공자'],
-  ['independence_merit', '독립유공자'],
-]
-
 // 30분 단위 이용시간 목록 생성
 const timeOptions = Array.from({ length: 48 }, (_, index) => {
   const hour = String(Math.floor(index / 2)).padStart(2, '0')
@@ -24,6 +15,10 @@ function withSelectedTime(time) {
 function SearchForm({
   sport,
   options,
+  optionsError,
+  onRetryOptions,
+  selectedDistricts,
+  selectedDiscounts,
   setSport,
   district,
   setDistrict,
@@ -88,6 +83,7 @@ function SearchForm({
             onChange={(e) => update(setDistrict, e.target.value)}
           >
             <option value="전체">부산 전체</option>
+            {selectedDistricts.length > 1 && <option value="multiple">{selectedDistricts.join(", ")}</option>}
             {options?.districts.map(value => (
               <option key={value} value={value}>{value}</option>
             ))}
@@ -161,7 +157,11 @@ function SearchForm({
               clearResult()
             }}
           >
-            {discounts.map(([value, label]) => (
+            <option value="none">감면 없음</option>
+            {selectedDiscounts.length > 1 && (
+              <option value="multiple">{selectedDiscounts.map(code => options?.discount_types?.find(item => item.code === code)?.label ?? code).join(', ')}</option>
+            )}
+            {options?.discount_types?.map(({ code: value, label }) => (
               <option key={value} value={value}>
                 {label}
               </option>
@@ -186,6 +186,9 @@ function SearchForm({
         )}
       </div>
 
+      {optionsError && (
+        <p role="alert">{optionsError} <button type="button" onClick={onRetryOptions}>다시 불러오기</button></p>
+      )}
       {error && <p className="error-message">{error}</p>}
 
       <button

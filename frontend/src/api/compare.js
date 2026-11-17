@@ -143,18 +143,20 @@ export async function searchFacilities(conditions) {
     const results = candidates.filter(facility =>
       !conditions.districts.length || conditions.districts.includes(facility.district)
     ).map(facility => {
-      if (facility.district !== '사상구' || conditions.date < '2026-10-01' || conditions.date > '2027-03-31') {
+      if (facility.district !== '사상구') {
         return facility
       }
       const slots = ['08:00|10:00', '10:00|12:00', '13:00|15:00', '15:00|17:00'].map(slot => {
         const [start_time, end_time] = slot.split('|')
         return { start_time, end_time }
       })
-      return { ...facility, time_options: { selection: 'fixed_slot', slots } }
+      const requested = conditions.start_time && conditions.end_time
+      const matches = slots.some(slot => slot.start_time === conditions.start_time && slot.end_time === conditions.end_time)
+      return { ...facility, time_options: { selection: 'fixed_slot', slots }, time_check: { status: requested ? (matches ? 'eligible' : 'not_eligible') : 'unknown' } }
     })
     return {
       results,
-      alternatives: results.length ? null : { districts: candidates.map(facility => facility.district) },
+      alternatives: results.length ? null : { districts: [...new Set(candidates.map(facility => facility.district))].sort() },
     }
   }
   const result = await requestAPI('/api/facilities/search', {
