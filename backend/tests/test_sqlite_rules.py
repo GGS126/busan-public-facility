@@ -333,9 +333,10 @@ def test_facility_detail_outside_rule_period_shows_unknown(facilities):
     assert detail.time_options == []
     assert detail.closure_note is None
     assert detail.booking_url is not None
-    # 만료된 동절기 규정의 출처도 보여 주지 않는다.
+    # 만료된 동절기 규정의 출처와 종목도 보여 주지 않는다.
     assert detail.source_id is None
     assert detail.sources == []
+    assert detail.sports == []
 
 
 def test_facility_detail_follows_use_date(two_period_facility):

@@ -296,8 +296,10 @@ def test_facility_detail_defaults_to_today():
     assert client.get("/api/facilities/F001").status_code == 200
 
 
-def test_facility_detail_unknown_facility():
-    response = client.get("/api/facilities/NOPE")
+@pytest.mark.parametrize("params", [{}, {"date": "2020-01-01"}])
+def test_facility_detail_unknown_facility(params):
+    # 지난 날짜여도 없는 시설이면 404다.
+    response = client.get("/api/facilities/NOPE", params=params)
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "facility_not_found"

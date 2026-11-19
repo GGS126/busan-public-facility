@@ -19,7 +19,8 @@ def facility_detail(rules: FacilityRules, day: date) -> FacilityDetail:
     return FacilityDetail(
         facility_id=rules.facility_id,
         name=rules.name,
-        sports=sorted(rules.sports),
+        # 이용일에 유효한 기본요금 규정이 있는 종목만. 규정 기간 밖이면 빈 배열이다.
+        sports=sorted({r.sport for r in rules.fee_rules if r.type == "base" and r.in_effect(day)}),
         district=rules.district,
         address=rules.info.address,
         phone=rules.info.phone,

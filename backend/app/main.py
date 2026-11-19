@@ -122,12 +122,13 @@ def compare(request: CompareRequest) -> CompareResponse:
 # 경로 매개변수라서 /api/facilities/options 같은 고정 경로보다 뒤에 둔다.
 @app.get("/api/facilities/{facility_id}", response_model=FacilityDetail)
 def facility(facility_id: str, day: IsoDate | None = Query(default=None, alias="date")) -> FacilityDetail:
+    # 없는 시설이면 날짜와 관계없이 404다.
+    rules = facilities.get(facility_id)
+    if rules is None:
+        raise FacilityNotFound
     today = datetime.now(KST).date()
     if day is not None and day < today:
         raise RequestValidationError(
             [{"type": "past_date", "loc": ("query", "date"), "msg": "지난 날짜는 선택할 수 없습니다."}]
         )
-    rules = facilities.get(facility_id)
-    if rules is None:
-        raise FacilityNotFound
     return facility_detail(rules, day or today)
