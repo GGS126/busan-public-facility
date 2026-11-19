@@ -22,6 +22,7 @@ BandTime = Annotated[str, StringConstraints(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|
 Rounding = Annotated[str, StringConstraints(pattern=r"^(floor|ceil|round)_(1|10|100|1000)$")]
 DayType = Literal["weekday", "weekend", "holiday"]
 DiscountMethod = Literal["onsite", "prepay_refund"]
+DiscountBasis = Literal["whole_fee", "per_eligible_person", "holder_whole_fee"]
 
 
 def to_minutes(value: str) -> int:
@@ -32,6 +33,14 @@ def to_minutes(value: str) -> int:
 # 이용 조건
 
 
+class DiscountSelection(BaseModel):
+    """감면 대상자 입력. 이름·증빙 번호 같은 개인정보는 받지 않고 인원수만 받는다."""
+
+    type: str = Field(min_length=1)
+    count: int = Field(ge=1)
+    holder: bool = False
+
+
 class Conditions(BaseModel):
     sport: str = Field(min_length=1)
     districts: list[str] = []
@@ -39,7 +48,9 @@ class Conditions(BaseModel):
     start_time: ClockTime
     end_time: BandTime
     headcount: int | None = Field(default=None, ge=1)
+    # 인원을 모르는 감면 선택. 인원 비례 감면 시설은 discounts로 받아야 계산한다.
     discount_types: list[str] = []
+    discounts: list[DiscountSelection] = []
     source: Literal["direct", "llm"]
 
     @field_validator("end_time")
@@ -49,6 +60,26 @@ class Conditions(BaseModel):
         if start is not None and to_minutes(value) <= to_minutes(start):
             raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
         return value
+
+    @model_validator(mode="after")
+    def check_discounts(self) -> "Conditions":
+        types = [*dict.fromkeys(self.discount_types), *(d.type for d in self.discounts)]
+        if len(set(types)) != len(types):
+            raise PydanticCustomError("invalid_discount", "같은 감면 유형을 두 번 선택할 수 없습니다.")
+        if sum(d.holder for d in self.discounts) > 1:
+            raise PydanticCustomError("invalid_discount", "예약 대표자는 감면 유형 하나에만 해당할 수 있습니다.")
+        if self.discounts and self.headcount is None:
+            raise PydanticCustomError("invalid_discount", "감면 대상 인원을 입력하면 전체 이용 인원도 입력해야 합니다.")
+        if self.discounts and sum(d.count for d in self.discounts) > self.headcount:
+            raise PydanticCustomError("invalid_discount", "감면 대상 인원이 전체 이용 인원보다 많습니다.")
+        return self
+
+    @property
+    def discount_selections(self) -> list[tuple[str, int | None, bool | None]]:
+        """(유형, 대상 인원, 대표자 여부). discount_types로 받은 감면은 인원과 대표자 여부를 모른다."""
+        return [(t, None, None) for t in dict.fromkeys(self.discount_types)] + [
+            (d.type, d.count, d.holder) for d in self.discounts
+        ]
 
 
 class RequestConditions(Conditions):
@@ -114,6 +145,9 @@ class DiscountRule(EffectivePeriod):
     fixed_amount: int | None = Field(default=None, ge=0)
     applies_to: Literal["base", "base_and_lighting"] | None = None
     method: DiscountMethod | None = None
+    # whole_fee: 대상 요금 전체, per_eligible_person: 대상 요금 ÷ 전체 인원 × 대상 인원,
+    # holder_whole_fee: 예약 대표자가 대상일 때만 대상 요금 전체
+    basis: DiscountBasis = "whole_fee"
     stackable: bool | None = None
     rounding: Rounding | None = None
     required_documents: list[str] | None = None
@@ -123,6 +157,8 @@ class DiscountRule(EffectivePeriod):
     def check_amount(self) -> "DiscountRule":
         if self.rate is not None and self.fixed_amount is not None:
             raise ValueError("rate와 fixed_amount는 함께 입력할 수 없습니다.")
+        if self.fixed_amount is not None and self.basis != "whole_fee":
+            raise ValueError("fixed_amount는 basis가 whole_fee일 때만 입력할 수 있습니다.")
         return self
 
 
@@ -131,6 +167,10 @@ class Terms(BaseModel):
     cancel_deadline: str | None = None
     refund: str | None = None
     source_id: str | None = None
+
+
+class PeriodTerms(Terms, EffectivePeriod):
+    """규정 기간마다 다른 예약·취소 조건. 이용일에 유효한 조건을 응답에 쓴다."""
 
 
 class Holiday(BaseModel):
@@ -173,6 +213,8 @@ class TimePolicy(EffectivePeriod):
     selection: Literal["fixed_slot", "flexible"]
     slots: list[Slot] = []
     allowed_minutes: list[Annotated[int, Field(gt=0)]] = []
+    # 한 번에 이용할 수 있는 최대 시간. allowed_minutes 없이 상한만 확인된 시설에 쓴다.
+    max_minutes: int | None = Field(default=None, gt=0)
     open_time: ClockTime | None = None
     close_time: BandTime | None = None
     source_id: str
@@ -181,8 +223,8 @@ class TimePolicy(EffectivePeriod):
     def check_selection(self) -> "TimePolicy":
         if self.selection == "fixed_slot" and not self.slots:
             raise ValueError("지정 회차 시설은 slots가 필요합니다.")
-        if self.selection == "flexible" and not self.allowed_minutes:
-            raise ValueError("자유 선택 시설은 allowed_minutes가 필요합니다.")
+        if self.selection == "flexible" and not self.allowed_minutes and self.max_minutes is None:
+            raise ValueError("자유 선택 시설은 allowed_minutes나 max_minutes가 필요합니다.")
         for slot in self.slots:
             if to_minutes(slot.end_time) <= to_minutes(slot.start_time):
                 raise ValueError("회차의 종료 시간은 시작 시간보다 늦어야 합니다.")
@@ -205,7 +247,27 @@ class FacilityRules(BaseModel):
     # 비어 있으면 이용시간 제한을 확인하지 않는다.
     time_policies: list[TimePolicy] = []
     terms: Terms = Terms()
+    # 규정 기간별 예약·취소 조건. 있으면 terms 대신 이용일에 유효한 조건을 쓴다.
+    terms_by_period: list[PeriodTerms] = []
     sources: list[Source]
+
+    def _period_terms(self, day: date) -> PeriodTerms | None:
+        matched = [terms for terms in self.terms_by_period if terms.in_effect(day)]
+        return matched[0] if len(matched) == 1 else None
+
+    def terms_on(self, day: date) -> Terms:
+        """이용일의 예약·취소 조건. 기간별 조건 중 유효한 것이 없으면 모든 값을 모르는 것으로 둔다."""
+        if not self.terms_by_period:
+            return self.terms
+        period = self._period_terms(day)
+        if period is None:
+            return Terms()
+        return Terms(**period.model_dump(exclude={"effective_from", "effective_to"}))
+
+    def source_on(self, day: date) -> str:
+        """근거 규정이 없을 때 안내할 공식 출처. 규정 기간별 출처가 있으면 이용일의 출처를 쓴다."""
+        period = self._period_terms(day)
+        return period.source_id if period is not None and period.source_id is not None else self.source_id
 
     @property
     def sports(self) -> set[str]:
@@ -217,8 +279,7 @@ class FacilityRules(BaseModel):
         known = {source.source_id for source in self.sources}
         rules = [*self.fee_rules, *self.discount_rules, *self.time_policies]
         used = {self.source_id, *(rule.source_id for rule in rules)}
-        if self.terms.source_id is not None:
-            used.add(self.terms.source_id)
+        used |= {terms.source_id for terms in [self.terms, *self.terms_by_period] if terms.source_id is not None}
         if used - known:
             raise ValueError(f"등록되지 않은 출처: {sorted(used - known)}")
         return self

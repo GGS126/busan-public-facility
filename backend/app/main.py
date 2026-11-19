@@ -37,7 +37,7 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
     fields = []
     for error in exc.errors():
         code = error["type"]
-        custom = code in ("invalid_time_range", "past_date", "invalid_option")
+        custom = code in ("invalid_time_range", "past_date", "invalid_option", "invalid_discount")
         # JSON 형식 오류의 위치는 항목이 아니라 문자 위치이므로 요청 본문 전체의 오류로 표시한다.
         location = [] if code == "json_invalid" else error["loc"][1:]
         fields.append(
@@ -83,7 +83,8 @@ def check_against_options(conditions: Conditions) -> None:
         errors.append(
             {"type": "invalid_option", "loc": ("body", "conditions", "sport"), "msg": "선택할 수 없는 종목입니다."}
         )
-    if not set(conditions.discount_types) <= {option.code for option in available_options.discount_types}:
+    discount_codes = {option.code for option in available_options.discount_types}
+    if not set(conditions.discount_types) <= discount_codes:
         errors.append(
             {
                 "type": "invalid_option",
@@ -91,6 +92,15 @@ def check_against_options(conditions: Conditions) -> None:
                 "msg": "선택할 수 없는 감면 유형입니다.",
             }
         )
+    for index, discount in enumerate(conditions.discounts):
+        if discount.type not in discount_codes:
+            errors.append(
+                {
+                    "type": "invalid_option",
+                    "loc": ("body", "conditions", "discounts", index, "type"),
+                    "msg": "선택할 수 없는 감면 유형입니다.",
+                }
+            )
     if errors:
         raise RequestValidationError(errors)
 

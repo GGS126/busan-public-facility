@@ -480,6 +480,101 @@ def test_multiple_discounts_are_not_calculated(stackable):
     assert amounts(result) == {"base": 40000}
 
 
+def selection_conditions(discounts, headcount=4, **overrides) -> Conditions:
+    values = dict(
+        sport="futsal", date=MONDAY, start_time="10:00", end_time="12:00",
+        headcount=headcount, discounts=discounts, source="direct",
+    )
+    return Conditions(**(values | overrides))
+
+
+def test_per_person_discount_prorated_by_headcount():
+    # 기본요금 40,000원 ÷ 4명 × 1명 × 50%
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 1}]))
+
+    assert amounts(result)["discount"] == -5000
+    assert result.net_cost_after_refund == 35000
+
+
+def test_per_person_discount_exact_after_division():
+    # 40,000원 × 50% × 2명 ÷ 6명은 나눠 떨어지지 않지만, 30,000원 × 50% × 2명 ÷ 6명은 5,000원이다.
+    rules = facility([base_rule(amount=15000)], [discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 2}], headcount=6))
+
+    assert amounts(result)["discount"] == -5000
+
+
+def test_per_person_discounts_for_different_people_calculated_separately():
+    rules = facility(
+        discount_rules=[
+            discount_rule(basis="per_eligible_person"),
+            discount_rule(rule_id="DISABLED", discount_type="disabled", basis="per_eligible_person"),
+        ]
+    )
+    result = calculate(
+        rules, selection_conditions([{"type": "multi_child", "count": 1}, {"type": "disabled", "count": 2}])
+    )
+
+    assert [item.amount for item in result.items if item.type == "discount"] == [-5000, -10000]
+    assert result.expected_refund == 15000
+
+
+def test_per_person_discount_without_count_needs_review():
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, conditions(day=MONDAY, discounts=["multi_child"]))
+
+    assert_review(result, "discount", "rule_missing")
+    assert "감면 대상 인원" in result.review_items[0].reason
+
+
+def test_per_person_discount_with_fractional_share_needs_review():
+    # 40,000원 × 50% ÷ 3명 = 6,666.66…원. 3명 합계는 20,000원으로 나눠 떨어져도 인당 끝전 기준이 없다.
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 3}], headcount=3))
+
+    assert_review(result, "discount", "rule_missing")
+    assert result.review_items[0].reason == "인당 감면액의 끝전 처리 방식을 확인할 수 없습니다."
+    assert result.net_cost_after_refund is None
+
+
+def test_per_person_discount_rounded_per_person():
+    # 인당 6,666.66…원을 1원 단위로 버린 뒤 3명을 곱한다.
+    rules = facility(discount_rules=[discount_rule(basis="per_eligible_person", rounding="floor_1")])
+    result = calculate(rules, selection_conditions([{"type": "multi_child", "count": 3}], headcount=3))
+
+    assert amounts(result)["discount"] == -19998
+
+
+def test_holder_discount_applies_only_when_holder_eligible():
+    rules = facility(discount_rules=[discount_rule(basis="holder_whole_fee")])
+
+    holder = calculate(rules, selection_conditions([{"type": "multi_child", "count": 1, "holder": True}]))
+    companion = calculate(rules, selection_conditions([{"type": "multi_child", "count": 3}]))
+
+    assert amounts(holder)["discount"] == -20000
+    assert amounts(companion)["discount"] == 0
+
+
+def test_fixed_amount_discount_must_cover_whole_fee():
+    with pytest.raises(ValueError, match="fixed_amount"):
+        discount_rule(rate=None, fixed_amount=1000, basis="per_eligible_person")
+
+
+@pytest.mark.parametrize(
+    ("discounts", "headcount", "message"),
+    [
+        ([{"type": "multi_child", "count": 1}, {"type": "multi_child", "count": 1}], 4, "두 번"),
+        ([{"type": "multi_child", "count": 1, "holder": True}, {"type": "disabled", "count": 1, "holder": True}], 4, "대표자"),
+        ([{"type": "multi_child", "count": 1}], None, "전체 이용 인원"),
+        ([{"type": "multi_child", "count": 3}, {"type": "disabled", "count": 2}], 4, "보다 많습니다"),
+    ],
+)
+def test_invalid_discount_selection_rejected(discounts, headcount, message):
+    with pytest.raises(ValueError, match=message):
+        selection_conditions(discounts, headcount=headcount)
+
+
 def test_repeated_discount_type_applied_once():
     rules = facility(discount_rules=[discount_rule()])
     result = calculate(rules, conditions(discounts=["multi_child", "multi_child"]))
@@ -680,6 +775,22 @@ def test_flexible_duration_not_allowed():
     assert result.review_items[0].reason == "이용 시간은 60분, 120분 중에서 선택할 수 있습니다."
 
 
+def test_flexible_max_minutes_exceeded_not_eligible():
+    policy = flexible_policy(allowed_minutes=[], max_minutes=120)
+    result = calculate(facility(time_policies=[policy]), conditions(day=MONDAY, start="10:00", end="13:00"))
+
+    assert_not_eligible(result, "duration_not_allowed")
+    assert result.review_items[0].reason == "이용 시간은 최대 120분까지 선택할 수 있습니다."
+
+
+@pytest.mark.parametrize(("start", "end"), [("10:00", "11:00"), ("10:00", "12:00")])
+def test_flexible_within_max_minutes_calculated(start, end):
+    policy = flexible_policy(allowed_minutes=[], max_minutes=120)
+    result = calculate(facility(time_policies=[policy]), conditions(day=MONDAY, start=start, end=end))
+
+    assert result.status == "calculated"
+
+
 @pytest.mark.parametrize(("start", "end"), [("07:00", "09:00"), ("21:00", "23:00")])
 def test_outside_operating_hours_not_eligible(start, end):
     result = calculate(facility(time_policies=[flexible_policy()]), conditions(day=MONDAY, start=start, end=end))
@@ -720,7 +831,7 @@ def test_conflicting_policies_need_review():
     ("overrides", "message"),
     [
         (dict(slots=[]), "slots가 필요"),
-        (dict(selection="flexible", slots=[]), "allowed_minutes가 필요"),
+        (dict(selection="flexible", slots=[]), "allowed_minutes나 max_minutes가 필요"),
         (dict(slots=[{"start_time": "09:00", "end_time": "09:00"}]), "종료 시간은 시작 시간보다"),
         (dict(open_time="08:00"), "함께 입력"),
         (dict(open_time="22:00", close_time="08:00"), "운영시간의 종료 시간은 시작 시간보다"),

@@ -209,15 +209,14 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 ## API-06 입력 확장안
 
 작성일: 2026-11-09  
-상태: 팀 검토용 제안 (#7, #16)
+상태: 팀 검토용 제안 (#7, #16). `discounts`와 감면 계산 방식(`basis`)은 구현, `optional_lighting_minutes`는 미구현
 
 PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식으로는 정답 사례를 계산할 수 없어 입력을 확장합니다.
 이 절의 금액은 PR #12의 정답 사례를 기준으로 합니다.
 
 | 규정 | 시설 | 현재 형식의 문제 |
 |---|---|---|
-| 감면 대상 인원에 비례한 감면 | 해운대수목원, 삼락생태공원 | 감면 유형만 받아 기본요금 전체를 감면함 |
-| 예약 대표자가 대상일 때만 감면 | 구덕운동장 | 대표자 여부를 받지 않음 |
+| 감면 대상 인원에 비례한 감면 | 3곳 모두 | 감면 유형만 받아 기본요금 전체를 감면함 |
 | 사용자가 고르는 선택 조명 | 해운대수목원, 삼락생태공원 | 조명 사용 시간을 받지 않음 |
 | 지정 회차, 허용 이용시간 | 3곳 모두 | 선택할 수 없는 시간을 '확인 필요'로 잘못 안내함 |
 
@@ -253,9 +252,10 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `conditions.optional_lighting_minutes` | 아니요 | 0 이상의 정수, 기본값 0. 이용 시간보다 길 수 없음 |
 
 - `discounts[].count`의 합은 `headcount`를 넘을 수 없습니다. 대표자도 `count`에 포함합니다.
-- `discount_types`는 `discounts`로 대체합니다. 한 사람에게는 감면 유형 하나만 적용한다고 보고, 서로 다른 사람의 유형은 함께 받을 수 있습니다.
+- `discount_types`는 `discounts`로 대체합니다. 프론트엔드가 옮겨 갈 때까지 `discount_types`도 받지만, 인원을 모르므로 인원 비례 감면 시설에서는 '확인 필요'를 반환합니다.
+- 한 사람에게는 감면 유형 하나만 적용한다고 보고, 서로 다른 사람의 유형은 함께 받을 수 있습니다. 인원 비례(`per_eligible_person`) 감면끼리만 함께 계산하고, 그 밖의 조합은 '확인 필요'입니다.
 - 입력은 인원수와 유형 코드뿐이며 이름·증빙 번호 같은 개인정보는 받지 않습니다.
-- 위 항목을 위반하면 지금처럼 `400 validation_error`와 항목별 `fields`로 응답합니다.
+- 위 항목을 위반하면 지금처럼 `400 validation_error`와 항목별 `fields`로 응답합니다. `discounts` 조합 오류는 `code: "invalid_discount"`와 사유를 반환합니다.
 
 ### 감면 계산 방식
 
@@ -263,19 +263,20 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 
 | `basis` | 계산 | 시설 |
 |---|---|---|
-| `per_eligible_person` | 기본요금 ÷ `headcount` × `count` × 감면율 | 해운대수목원, 삼락생태공원 |
-| `holder_whole_fee` | 대표자가 대상(`holder: true`)이면 기본요금 × 감면율, 아니면 0원 | 구덕운동장 |
+| `per_eligible_person` | 기본요금 × 감면율 × `count` ÷ `headcount` | 해운대수목원, 삼락생태공원, 구덕운동장 |
+| `holder_whole_fee` | 대표자가 대상(`holder: true`)이면 기본요금 × 감면율, 아니면 0원 | 해당 시설 없음 |
 | `whole_fee` | 기본요금 × 감면율 (현재 엔진 방식) | 해당 시설 없음 |
 
 | 사례 | 조건 | 감면액 |
 |---|---|---|
 | T06 해운대 평일 07~09시 | 8,000원, 4명 중 감면 대상 2명 | 8,000 ÷ 4 × 2 × 50% = 2,000원 환급 |
 | S04 삼락 주말 15~17시 | 9,000원, 3명 중 1명 | 9,000 ÷ 3 × 1 × 50% = 1,500원 환급 |
-| 구덕 대표자 대상 | 8,000원, 대표자 장애인 | 8,000 × 50% = 4,000원 환급 |
-| 구덕 동반자만 대상 | 8,000원, 동반자 3명 | 0원 |
+| 구덕 대표자 대상 | 8,000원, 4명 중 대표자 1명 | 8,000 ÷ 4 × 1 × 50% = 1,000원 환급 |
+| 구덕 동반자만 대상 | 8,000원, 4명 중 동반자 3명 | 8,000 ÷ 4 × 3 × 50% = 3,000원 환급 |
 
 - 감면 유형별로 금액 항목(`type: "discount"`)을 하나씩 반환하고, 조명료는 세 시설 모두 감면 대상에서 제외합니다.
 - 나눠 떨어지지 않는 금액은 규정의 `rounding`으로 처리하고, 끝전 기준이 없으면 '확인 필요'(`rule_missing`)로 반환합니다.
+- `per_eligible_person`은 **인당 감면액**(대상 요금 × 감면율 ÷ 전체 인원)의 끝전을 먼저 처리한 뒤 대상 인원을 곱합니다. 합계가 나눠 떨어져도(20,000원 ÷ 3명 × 3명) 인당 금액에 끝전이 있고 `rounding`이 없으면 '확인 필요'입니다.
 - `per_eligible_person`은 대표자 여부와 관계없이 인원으로 계산하고, `holder_whole_fee`는 `count`와 관계없이 대표자 여부로 계산합니다.
 
 ### 선택 조명
@@ -379,7 +380,8 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `policy_id`, `sport` | 규정 식별자와 종목 | `T-HAEUNDAE-01`, `tennis` |
 | `selection` | 지정 회차만 가능 또는 허용 이용시간 안에서 자유 선택 | `fixed_slot`, `flexible` |
 | `slots` | 지정 회차의 시작·종료 시간. `fixed_slot`에서 필수 | `[{"start_time": "07:00", "end_time": "09:00"}]` |
-| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 필수 | `[60, 120]` |
+| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 `max_minutes`가 없으면 필수 | `[60, 120]` |
+| `max_minutes` | 1회 최대 이용시간. 허용 이용시간 목록 없이 상한만 확인된 시설에 사용 | `120` |
 | `open_time`, `close_time` | 운영시간. 없으면 확인하지 않음 | `08:00`, `22:00` |
 | `effective_from`, `effective_to` | 규정 적용 기간. 동절기·하절기 회차를 구분 | `2026-10-01`, `2027-03-31` |
 | `source_id` | 근거 출처 | `S-01` |
@@ -387,7 +389,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 사유 코드 | 상황 |
 |---|---|
 | `slot_mismatch` | 지정 회차와 시간이 다름. 사유에 가능한 회차 목록을 포함 |
-| `duration_not_allowed` | `allowed_minutes`에 없는 이용시간 |
+| `duration_not_allowed` | `allowed_minutes`에 없거나 `max_minutes`보다 긴 이용시간 |
 | `outside_hours` | 운영시간 밖 |
 
 같은 종목에 유효한 규정이 둘 이상이면 `needs_review`와 `rule_conflict`(`target: "time"`)를 반환합니다.
@@ -401,6 +403,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `rate` 또는 `fixed_amount` | 감면율 또는 감면액 | `0.5` |
 | `applies_to` | 감면 대상 요금 | `base`, `base_and_lighting` |
 | `method` | 현장 감면 또는 선결제 후 환급 | `onsite`, `prepay_refund` |
+| `basis` | 감면 계산 방식. [감면 계산 방식](#감면-계산-방식) 참고, 기본값 `whole_fee` | `per_eligible_person` |
 | `stackable` | 다른 감면과 중복 가능 여부, 미확인이면 `null` | `false` |
 | `rounding` | 끝전 처리 방식 | `floor_10` |
 | `required_documents` | 증빙서류, 체크리스트에 사용 | `["다자녀 가정 확인 서류"]` |
@@ -434,6 +437,26 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `expected_fee` | `total`, `payment_due`, `expected_refund`, `net_cost_after_refund` |
 | `calculation_note` | 공식 자료 기준 계산 과정 |
 | `source_id` | 근거 출처 |
+
+`database/`의 정답 사례(`test_cases.json`, `samrak_test_cases.json`, `gudeok_test_cases.json`)는 `backend/tests/test_sqlite_rules.py`가
+SQLite DB를 새로 만들어 규칙 엔진으로 계산한 뒤 비교합니다. 취소·환불 금액과 선택 조명 사례는 아직 계산하지 않아 건너뜁니다.
+
+### SQLite 규정 변환
+
+`app.repository.load_sqlite_rule_data()`가 SQLite 규정을 위 항목으로 바꿉니다.
+
+| SQLite | 변환 결과 |
+|---|---|
+| `pricing_rules` | 기본요금 규정. 평일과 주말·공휴일 요금이 다르면 규정 2개. 단위 미만 요금은 `partial_unit: null`(확인 필요) |
+| `pricing_rules.mandatory_light_won` | 같은 회차 시간대의 조명료 규정 |
+| `facility_options` (`mandatory_when_applicable`) | 조명료 규정(60분 단위). 선택 조명(`optional`)은 변환하지 않음 |
+| `time_selection_policies` (`fixed_slot`) | 이용시간 규정. 운영시간은 `facilities.open_time`, `close_time` |
+| `time_selection_policies` (`flexible_interval`) | 이용시간 규정(`selection: flexible`, `max_minutes`). 운영시간은 `available_start_time`, `available_end_time`. 허용 이용시간 목록은 확인되지 않아 만들지 않으며, 하루 이용 한도(`daily_limit_minutes`)는 예약 이력이 필요해 확인하지 않음 |
+| `facility_discounts` | 감면 규정. `per_eligible_person_equal_split` → `basis: per_eligible_person` |
+| `reservation_rules`, `refund_rules` | 규정 기간별 `terms` 문구(`terms_by_period`). 응답에는 이용일에 유효한 기간의 문구와 출처를 사용 |
+| `sources.license`가 `null` | `"이용허락범위 미확인"` |
+
+변환 표에 없는 값(새 감면 계산 방식, 새 조명 계산 방식 등)이 들어오면 추정하지 않고 읽기 단계에서 오류를 냅니다.
 
 ## SDD 대비 추가 제안
 
