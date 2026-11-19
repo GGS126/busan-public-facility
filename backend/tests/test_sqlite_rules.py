@@ -235,3 +235,24 @@ def test_compare_shows_terms_and_sources_of_use_date(two_period_facility):
     # 2027년 요금 규정은 없으므로 '확인 필요'의 근거로 만료된 요금 규정의 출처도 함께 보인다.
     assert result.fee.review_items[0].code == "rule_not_in_effect"
     assert {source.source_id for source in result.sources} == {"haeundae_2027h1", "busan_reserve_619_2026h2"}
+
+
+# 정답 사례가 아직 없는 시설(PR #27). DB 요금표 그대로 변환되는지 확인한다.
+@pytest.mark.parametrize(
+    ("facility_id", "sport", "day", "start", "end", "expected"),
+    [
+        ("busan_hwamyeong_ecopark_night_soccer", "soccer", WEEKDAY, "18:00", "21:00", (20000, 30000, 50000)),
+        ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "19:00", "22:00", (120000, 20000, 140000)),
+        ("busan_samrak_ecopark_soccer", "soccer", WEEKEND, "08:00", "11:00", (30000, 0, 30000)),
+        ("busan_hwamyeong_ecopark_tennis", "tennis", WEEKDAY, "08:00", "10:00", (6000, 0, 6000)),
+    ],
+)
+def test_added_facilities_follow_database(facilities, facility_id, sport, day, start, end, expected):
+    conditions = Conditions(sport=sport, date=day, start_time=start, end_time=end, source="direct")
+    result = calculate(facilities[facility_id], conditions)
+
+    by_type = {}
+    for item in result.items:
+        by_type[item.type] = by_type.get(item.type, 0) + item.amount
+    assert result.status == "calculated", result.review_items
+    assert (by_type["base"], by_type.get("lighting", 0), result.payment_due) == expected

@@ -17,7 +17,7 @@ HOLIDAYS_PATH = DATA_DIR / "holidays_kr.json"
 SQLITE_PATH = DATA_DIR.parent.parent / "database" / "facilities.sqlite3"
 
 # DB에는 종목 표시 이름이 없다.
-SPORT_LABELS = {"tennis": "테니스"}
+SPORT_LABELS = {"tennis": "테니스", "soccer": "축구"}
 DISCOUNT_BASIS = {"per_eligible_person_equal_split": "per_eligible_person"}
 DISCOUNT_TARGET = {"base_court_fee_only": "base"}
 DISCOUNT_METHOD = {"pay_full_then_refund": "prepay_refund"}
