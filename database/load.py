@@ -50,6 +50,8 @@ def validate_options(options):
         if o['calculation_type'] not in types: raise ValueError('옵션 계산방식 오류')
         if o['rounding_policy'] not in ('round_up','exact_units','proportional_if_exact'): raise ValueError('옵션 단위 정책 오류')
         if o['application_type'] not in ('optional','mandatory_when_applicable','included_in_base_price'): raise ValueError('옵션 적용 방식 오류')
+        if o.get('payment_type') not in (None, 'online_prepay', 'onsite'):
+            raise ValueError('옵션 결제 방식 오류 (online_prepay, onsite, null만 허용)')
         begin=o.get('applies_from'); finish=o.get('applies_to')
         if not isinstance(begin,str) or not isinstance(finish,str):
             raise ValueError('옵션 적용 시작·종료시간은 필수')
@@ -82,9 +84,9 @@ def insert_options(con,rid,options):
         con.execute('INSERT OR IGNORE INTO option_categories(id,name) VALUES(?,?)',(o['id'],o['name']))
         option_id=rid+'_'+o['id']+'_'+o['application_type']
         con.execute('''INSERT INTO facility_options
-          (id,rule_set_id,option_id,calculation_type,application_type,rounding_policy,applies_from,applies_to,note,hour_price,extra_unit_minutes,extra_unit_price)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-          (option_id,rid,o['id'],o['calculation_type'],o['application_type'],o['rounding_policy'],o.get('applies_from'),o.get('applies_to'),o.get('note'),o['hour_price'],o.get('extra_unit_minutes'),o.get('extra_unit_price')))
+          (id,rule_set_id,option_id,calculation_type,application_type,payment_type,rounding_policy,applies_from,applies_to,note,hour_price,extra_unit_minutes,extra_unit_price)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+          (option_id,rid,o['id'],o['calculation_type'],o['application_type'],o.get('payment_type'),o['rounding_policy'],o.get('applies_from'),o.get('applies_to'),o.get('note'),o['hour_price'],o.get('extra_unit_minutes'),o.get('extra_unit_price')))
 
 CLOSURE_HOLIDAY_CODES = frozenset(('lunar_new_year_day', 'chuseok_day'))
 
@@ -512,6 +514,7 @@ def upgrade_existing_schema(con):
     expected = {
         'facilities': [('district', "TEXT NOT NULL DEFAULT ''")],
         'sources': [('license', 'TEXT')],
+        'facility_options': [('payment_type', "TEXT CHECK(payment_type IN ('online_prepay','onsite'))")],
         'facility_discounts': [
             ('guardian_max_count', 'INTEGER'), ('guardian_condition', 'TEXT'),
             ('guardian_evidence_note', 'TEXT'), ('discount_rounding_policy', 'TEXT'),
