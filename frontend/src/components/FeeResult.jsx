@@ -144,6 +144,15 @@ function FeeResult({ results, facilities = [] }) {
                           </strong>
                         </div>
 
+                        {fee.onsite_payment > 0 && (
+                          <div className="fee-row">
+                            <span>현장 결제 예상액</span>
+                            <strong>
+                              {formatWon(fee.onsite_payment)}
+                            </strong>
+                          </div>
+                        )}
+
                         <div className="fee-row">
                           <span>예상 환급액</span>
                           <strong>

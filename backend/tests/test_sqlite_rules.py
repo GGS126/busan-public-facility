@@ -22,13 +22,12 @@ WEEKDAY, WEEKEND = date(2026, 11, 9), date(2026, 11, 7)
 NOT_FEE_CASES = {
     "T09", "T10", "T11", "T12", "S05", "S06", "S07", "gudeok_cancel_d1", "gudeok_rain_d0",
 }  # 취소·환불 금액은 계산하지 않고 terms 문구로만 안내한다.
-NOT_YET_SUPPORTED = {
-    "T08", "H_OPTION_30", "H_OPTION_60",
-}  # 선택 조명 사용 시간(optional_lighting_minutes)은 아직 입력받지 않는다.
 
 # 시간이 적혀 있지 않은 사례는 사례 설명의 요금(기본요금, 조명료 유무, 1시간 요금 미확인)에 맞는 시간으로 계산한다.
 CASE_TIMES = {
     "T_rounding_unverified": ("07:00", "09:00"),
+    "H_OPTION_30": ("07:00", "09:00"),
+    "H_OPTION_60": ("07:00", "09:00"),
     "S_rounding_unverified": ("08:00", "10:00"),
     "gudeok_discount": ("10:00", "12:00"),
     "gudeok_companion_eligible_only": ("10:00", "12:00"),
@@ -97,14 +96,15 @@ def conditions_for(case, facility) -> Conditions:
         end_time=end,
         headcount=headcount,
         discounts=discounts,
+        optional_lighting_minutes=inputs.get("optional_lighting_minutes") or inputs.get("lighting_minutes") or 0,
         source="direct",
     )
 
 
 @pytest.mark.parametrize("case", load_cases())
 def test_matches_official_case(case, facilities):
-    if case["id"] in NOT_FEE_CASES | NOT_YET_SUPPORTED:
-        pytest.skip("요금 계산 범위 밖이거나 아직 입력받지 않는 조건")
+    if case["id"] in NOT_FEE_CASES:
+        pytest.skip("요금 계산 범위 밖")
 
     expected = case["expected"]
     facility = facilities[case["inputs"]["facility_id"]]
@@ -116,14 +116,17 @@ def test_matches_official_case(case, facilities):
         return
 
     assert result.status == "calculated", result.review_items
+    optional_ids = {rule.rule_id for rule in facility.fee_rules if rule.type == "optional_lighting"}
     by_type = {}
     for item in result.items:
-        by_type[item.type] = by_type.get(item.type, 0) + item.amount
+        if item.rule_id not in optional_ids:
+            by_type[item.type] = by_type.get(item.type, 0) + item.amount
     checks = {
         "initial_payment_won": result.payment_due,
+        "optional_lighting_on_site_won": result.onsite_payment,
         "discount_refund_won": result.expected_refund,
         "final_expected_cost_won": result.net_cost_after_refund,
-        "total_fee_won": result.payment_due,
+        "total_fee_won": result.total,
         "base_court_won": by_type.get("base", 0),
         "mandatory_lighting_won": by_type.get("lighting", 0),
         "lighting_won": by_type.get("lighting", 0),
@@ -135,7 +138,7 @@ def test_matches_official_case(case, facilities):
 
 def test_every_case_is_checked_or_listed():
     ids = {param.id for param in load_cases()}
-    assert (NOT_FEE_CASES | NOT_YET_SUPPORTED | CASE_TIMES.keys()) <= ids
+    assert (NOT_FEE_CASES | CASE_TIMES.keys()) <= ids
 
 
 def test_slot_mismatch_not_eligible(facilities):
@@ -239,20 +242,45 @@ def test_compare_shows_terms_and_sources_of_use_date(two_period_facility):
 
 # 정답 사례가 아직 없는 시설(PR #27). DB 요금표 그대로 변환되는지 확인한다.
 @pytest.mark.parametrize(
-    ("facility_id", "sport", "day", "start", "end", "expected"),
+    ("facility_id", "sport", "day", "start", "end", "lighting_minutes", "expected"),
     [
-        ("busan_hwamyeong_ecopark_night_soccer", "soccer", WEEKDAY, "18:00", "21:00", (20000, 30000, 50000)),
-        ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "19:00", "22:00", (120000, 20000, 140000)),
-        ("busan_samrak_ecopark_soccer", "soccer", WEEKEND, "08:00", "11:00", (30000, 0, 30000)),
-        ("busan_hwamyeong_ecopark_tennis", "tennis", WEEKDAY, "08:00", "10:00", (6000, 0, 6000)),
+        ("busan_hwamyeong_ecopark_night_soccer", "soccer", WEEKDAY, "18:00", "21:00", 0, (20000, 30000, 50000, 0)),
+        ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "19:00", "22:00", 0, (120000, 20000, 140000, 0)),
+        ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "16:00", "19:00", 60, (120000, 10000, 120000, 10000)),
+        # 19:00~20:00 선택 조명 60분은 현장 결제, 20:00~22:00 필수 조명 20,000원은 회차 요금과 함께 선결제(database/README.md)
+        ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "19:00", "22:00", 60, (120000, 30000, 140000, 10000)),
+        ("busan_samrak_ecopark_soccer", "soccer", WEEKEND, "08:00", "11:00", 0, (30000, 0, 30000, 0)),
+        ("busan_hwamyeong_ecopark_tennis", "tennis", WEEKDAY, "08:00", "10:00", 0, (6000, 0, 6000, 0)),
     ],
 )
-def test_added_facilities_follow_database(facilities, facility_id, sport, day, start, end, expected):
-    conditions = Conditions(sport=sport, date=day, start_time=start, end_time=end, source="direct")
+def test_added_facilities_follow_database(facilities, facility_id, sport, day, start, end, lighting_minutes, expected):
+    conditions = Conditions(
+        sport=sport, date=day, start_time=start, end_time=end, optional_lighting_minutes=lighting_minutes, source="direct"
+    )
     result = calculate(facilities[facility_id], conditions)
 
     by_type = {}
     for item in result.items:
         by_type[item.type] = by_type.get(item.type, 0) + item.amount
     assert result.status == "calculated", result.review_items
-    assert (by_type["base"], by_type.get("lighting", 0), result.payment_due) == expected
+    assert (by_type["base"], by_type.get("lighting", 0), result.payment_due, result.onsite_payment) == expected
+
+
+def test_optional_lighting_longer_than_its_band_rejected(facilities):
+    # 해운대 축구 19:00~22:00 회차의 선택 조명은 시간대(07:00~20:00)와 겹치는 19:00~20:00의 60분까지다.
+    conditions = Conditions(
+        sport="soccer", date=WEEKDAY, start_time="19:00", end_time="22:00", optional_lighting_minutes=90, source="direct"
+    )
+    result = calculate(facilities["busan_haeundae_arboretum_soccer"], conditions)
+
+    assert result.status == "needs_review"
+    assert (result.review_items[0].target, result.review_items[0].code) == ("lighting", "duration_not_allowed")
+
+
+def test_gudeok_lighting_payment_unverified(facilities):
+    # 구덕 야간 조명료는 결제 시점·장소가 공식 자료에 없어 최초 납부액으로 확정하지 않는다.
+    conditions = Conditions(sport="tennis", date=WEEKDAY, start_time="18:00", end_time="20:00", source="direct")
+    result = calculate(facilities["busan_gudeok_stadium_tennis"], conditions)
+
+    assert result.status == "calculated"
+    assert (result.total, result.payment_due, result.onsite_payment, result.payment_unverified) == (28000, None, 0, 20000)
