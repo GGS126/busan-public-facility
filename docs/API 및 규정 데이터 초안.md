@@ -77,12 +77,13 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
         "status": "calculated",
         "items": [
           { "type": "base", "amount": 40000, "rule_id": "R-F001-01", "source_id": "S-01" },
-          { "type": "lighting", "amount": 10000, "rule_id": "R-F001-02", "source_id": "S-01" },
+          { "type": "lighting", "amount": 10000, "rule_id": "R-F001-02", "source_id": "S-01", "payment": "prepay" },
           { "type": "discount", "amount": -20000, "rule_id": "R-F001-05", "source_id": "S-02", "method": "prepay_refund" }
         ],
         "total": 30000,
         "payment_due": 50000,
         "onsite_payment": 0,
+        "payment_unverified": 0,
         "expected_refund": 20000,
         "net_cost_after_refund": 30000,
         "review_items": []
@@ -109,10 +110,11 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
 
 | 결과 | 계산 | 예시 |
 |---|---|---|
-| `payment_due` (최초 납부액, 온라인 선결제) | `prepay_refund`와 현장 결제(`payment: "onsite"`) 항목을 제외한 모든 항목의 합 | 40,000 + 10,000 = 50,000 |
+| `payment_due` (최초 납부액, 온라인 선결제) | `prepay_refund`와 현장 결제(`payment: "onsite"`)·결제 방식 미확인(`payment: "unverified"`) 항목을 제외한 모든 항목의 합. 미확인 항목이 있으면 `null` | 40,000 + 10,000 = 50,000 |
 | `onsite_payment` (현장 결제액) | `payment: "onsite"` 항목의 합 | 0 |
+| `payment_unverified` (결제 방식 미확인액) | `payment: "unverified"` 항목의 합 | 0 |
 | `expected_refund` (예상 환급액) | `prepay_refund` 항목의 합의 절댓값 | 20,000 |
-| `net_cost_after_refund` (환급 후 예상 부담액) | 최초 납부액 + 현장 결제액 − 예상 환급액 | 50,000 + 0 − 20,000 = 30,000 |
+| `net_cost_after_refund` (환급 후 예상 부담액) | 최초 납부액 + 현장 결제액 + 결제 방식 미확인액 − 예상 환급액 | 50,000 + 0 + 0 − 20,000 = 30,000 |
 | `total` | `net_cost_after_refund`와 같은 값 | 30,000 |
 
 납부 시 바로 깎는 현장 감면은 `method: "onsite"`로 표시하며, 음수 금액이 최초 납부액에 반영됩니다.
@@ -138,6 +140,8 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
         ],
         "total": null,
         "payment_due": null,
+        "onsite_payment": null,
+        "payment_unverified": null,
         "expected_refund": null,
         "net_cost_after_refund": null,
         "review_items": [
@@ -291,11 +295,12 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 삼락생태공원 | 08~17시 회차, 60분 단위 올림 10,000원, 결제 방식 미확인 |
 | 구덕운동장 | 없음 (조명은 18시 이후 필수 부과) |
 
-- 이용 시간 전체가 선택 조명 시간대 안에 있어야 계산합니다. 벗어나면(예: 해운대 20~22시 회차) '확인 필요'입니다.
-- 선택 조명료는 `type: "lighting"` 금액 항목으로 반환하고 결제 방식을 `payment`(`prepay`, `onsite`)로 표시합니다.
+- 선택 조명은 이용 시간 중 선택 조명 시간대와 겹치는 동안에만 쓸 수 있습니다. 예: 해운대 축구 19~22시 회차는 19~20시의 60분까지 선택할 수 있고, 20~22시 필수 조명료 20,000원은 회차 요금과 함께 선결제합니다. 겹치는 시간보다 길면 `duration_not_allowed`, 겹치지 않으면(예: 해운대 테니스 20~22시 회차) `rule_missing`으로 '확인 필요'입니다.
+- 조명료는 `type: "lighting"` 금액 항목으로 반환하고 결제 방식을 `payment`(`prepay`, `onsite`, `unverified`)로 표시합니다.
   현장 결제(해운대)는 `payment_due`(최초 납부액)에서 빼고 `onsite_payment`(현장 결제액)로 반환합니다.
   예: T08(평일 18~20시, 선택 조명 80분)은 `payment_due` 8,000, `onsite_payment` 13,200, `net_cost_after_refund` 21,200입니다.
-- 결제 방식을 모르면(삼락) 최초 납부액을 나눌 수 없어 '확인 필요'입니다.
+- 결제 방식을 모르는 조명료(삼락 선택 조명, 구덕 18시 이후 필수 조명)는 금액을 계산해 `payment: "unverified"`로 표시하고, `payment_unverified`에 합산합니다. 이때 `payment_due`는 선결제액으로 확정하지 않도록 `null`입니다(`database/README.md`의 결제 방식 기준).
+  예: 구덕 평일 18~20시는 `total` 28,000, `payment_due` null, `payment_unverified` 20,000입니다.
 - 해운대처럼 남은 시간이 추가 단위(10분)로 나눠 떨어지지 않으면 처리 기준이 없어 '확인 필요'입니다.
 
 ### 이용할 수 없는 시간

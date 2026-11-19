@@ -235,12 +235,14 @@ def _lighting_rules(prices: list[dict], options: list[dict], sport: str, period:
     """필수 조명료는 이용 시간으로, 선택 조명료는 사용자가 고른 조명 사용 시간으로 계산하는 규정을 만든다."""
     common = {"sport": sport, "type": "lighting", "day_types": ALL_DAYS, "source_id": source_id, **period}
     # 회차 요금에 포함된 필수 조명료는 회차와 같은 시간대의 조명 항목으로 따로 보여 준다.
+    # 회차 요금과 함께 예약 시 온라인으로 결제한다.
     rules = [
         {
             "rule_id": f"{price['id']}_lighting",
             "amount": price["mandatory_light_won"],
             "unit_minutes": price["duration_minutes"],
             "partial_unit": None,
+            "payment": "prepay",
             "time_from": price["start_time"],
             "time_to": price["end_time"],
             **common,
@@ -262,6 +264,7 @@ def _lighting_rules(prices: list[dict], options: list[dict], sport: str, period:
                 "amount": option["hour_price"],
                 "unit_minutes": 60,
                 "partial_unit": _mapped(LIGHTING_PARTIAL_UNIT, option["rounding_policy"], "조명료 단위 처리"),
+                "payment": _mapped(OPTION_PAYMENT, option["payment_type"], "조명료 결제 방식"),
                 "time_from": option["applies_from"],
                 "time_to": option["applies_to"],
                 **common,

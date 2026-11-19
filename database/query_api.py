@@ -373,17 +373,55 @@ def optional_lighting_quote(db,facility_id,use_date,lighting_minutes,options=Non
     return {'status':'priced','lighting_minutes':lighting_minutes,'optional_lighting_fee_won':result['amount_won'],
             'billed_lighting_minutes':result['billed_minutes'],'optional_before_time':rules[0]['applies_to']}
 
+def _clock_minutes(t, allow_24=False):
+    """00:00~23:59, 종료 시각에는 24:00까지 허용."""
+    if allow_24 and t == '24:00':
+        return 1440
+    if not isinstance(t, str) or len(t) != 5 or t[2] != ':':
+        raise ValueError('시간은 HH:MM 형식')
+    try:
+        h, m = int(t[:2]), int(t[3:])
+    except ValueError as exc:
+        raise ValueError('시간은 HH:MM 형식') from exc
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError('시간 범위 오류')
+    return h * 60 + m
+
+
+def _option_interval(rule):
+    """옵션의 NULL 적용 시간은 당일 00:00~24:00을 뜻한다."""
+    start = _clock_minutes(rule['applies_from']) if rule['applies_from'] else 0
+    end = _clock_minutes(rule['applies_to'], True) if rule['applies_to'] else 1440
+    if end <= start:
+        raise ValueError('옵션 적용시간 범위 오류')
+    return start, end
+
+
+def _overlap_minutes(start, end, interval_start, interval_end):
+    return max(0, min(end, interval_end) - max(start, interval_start))
+
+
+def _included_lighting_matches(start, end, rule):
+    """고정 회차 포함 조명: 전부 야간이거나 회차 끝에 필수 조명이 걸린 경우.
+
+    회차가 규칙 종료 이후로 뻗거나, 필수 조명 시간이 회차 뒤로 더 이어지면
+    단순히 겹친 시간의 금액이 같다는 이유로 정상 규칙으로 받아들이지 않는다.
+    """
+    rule_start, rule_end = _option_interval(rule)
+    if not (end <= rule_end and end > rule_start):
+        return 0
+    # 전체 포함 또는 필수 적용구간의 시작을 지난 뒤 회차가 규칙의 끝에서 종료
+    if start < rule_start and end != rule_end:
+        return 0
+    return _overlap_minutes(start, end, rule_start, rule_end)
+
+
 def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0,discount_category_ids=None):
     # 동일 요청 형식으로 고정 회차와 자유 선택의 기본요금 및 조명료를 계산.
     use_date=normalize_use_date(use_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('주말·공휴일 판정은 bool이어야 합니다')
     if type(optional_lighting_minutes) is not int or optional_lighting_minutes<0: raise ValueError('선택 조명 이용시간 오류')
-    def parse(t,allow_24=False):
-        if allow_24 and t=='24:00':return 1440
-        if len(t)!=5 or t[2]!=':':raise ValueError('시간은 HH:MM 형식')
-        h,m=int(t[:2]),int(t[3:]);
-        if not (0<=h<=23 and 0<=m<=59):raise ValueError('시간 범위 오류')
-        return h*60+m
+    parse = _clock_minutes
     start,end=parse(start_time),parse(end_time,True)
     if end<=start:raise ValueError('종료시간은 시작시간 이후여야 합니다')
     duration=end-start
@@ -436,9 +474,9 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
         records=[r for r in facility_option_records if r['option_id']=='lighting' and r['application_type']=='mandatory_when_applicable']
         if len(records)>1:raise ValueError('조명 옵션 중복')
         if records:
-            h=records[0];threshold=parse(h['applies_from']) if h['applies_from'] else 0
-            boundary=parse(h['applies_to'],True) if h['applies_to'] else 1440
-            light_minutes=max(0,min(end,boundary)-max(start,threshold))
+            h=records[0]
+            rule_start,rule_end=_option_interval(h)
+            light_minutes=_overlap_minutes(start,end,rule_start,rule_end)
             result=option_charge(light_minutes,h)
             if result['status']!='priced':
                 return {'status':'lighting_calculation_unavailable','base_fee_won':p['base_fee_won'],'lighting_fee_won':None,'total_won':None}
@@ -450,11 +488,9 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
         for r in facility_option_records:
             if r['option_id']!='lighting' or r['application_type']!='included_in_base_price':
                 continue
-            # 회차 전체가 야간일 수도, 19~22시 중 20~22시만 필수 조명일 수도 있다.
-            # 포함된 시간만 산정하여 이미 표시된 필수 조명료와 일치하는지 확인한다.
-            threshold=parse(r['applies_from']) if r['applies_from'] else 0
-            boundary=parse(r['applies_to'],True) if r['applies_to'] else 1440
-            overlap=max(0,min(end,boundary)-max(start,threshold))
+            # 회차 전체 또는 회차 끝의 필수 조명 적용 구간을 확인한다.
+            # 단순 시간 겹침의 금액만 같을 때는 규칙의 누락을 감지해야 한다.
+            overlap=_included_lighting_matches(start,end,r)
             if overlap:
                 charge=option_charge(overlap,r)
                 if charge['status']=='priced' and charge['amount_won']==p['mandatory_light_won']:
@@ -463,35 +499,48 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             return {'status':'option_rule_inconsistent','reason':'필수 조명 포함 회차의 옵션 규칙이 일치하지 않음'}
     optional=optional_lighting_quote(db,facility_id,use_date,optional_lighting_minutes,options=facility_option_records)
     if optional['status']!='priced':return optional
+    options=[]
     if optional_lighting_minutes:
-        if typ!='fixed_slot' or p['mandatory_light_won'] or optional_lighting_minutes>duration:
-            return {'status':'invalid_optional_lighting','reason':'선택 조명은 필수 조명료가 포함되지 않은 고정 회차에서만 사용 가능'}
+        if typ!='fixed_slot' or optional_lighting_minutes>duration:
+            return {'status':'invalid_optional_lighting','reason':'선택 조명은 고정 회차의 이용시간 이내에서만 사용 가능'}
         options=[r for r in facility_option_records
                  if r['option_id']=='lighting' and r['application_type']=='optional']
         if len(options)!=1:
             return {'status':'invalid_optional_lighting','reason':'선택 조명 규칙 없음'}
         r=options[0]
-        if start<parse(r['applies_from']) or end>parse(r['applies_to']):
-            return {'status':'invalid_optional_lighting','reason':'선택 조명 가능 시간 밖의 회차'}
+        rule_start,rule_end=_option_interval(r)
+        # 예: 19:00~22:00 회차의 선택 조명은 19:00~20:00 최대 60분.
+        # 필수 조명 구간과 겹치는 선택 조명 시간은 승인하지 않는다.
+        selectable_minutes=_overlap_minutes(start,end,rule_start,rule_end)
+        if optional_lighting_minutes>selectable_minutes:
+            return {'status':'invalid_optional_lighting','reason':'선택 조명 가능 시간의 최대 분을 초과'}
     # 확정된 옵션 금액과 결제 시점은 별개의 정보다.
     # 결제 방식 미확인(NULL)을 현장 결제라고 추정하지 않는다.
     optional_amount=optional['optional_lighting_fee_won']
-    payment_due=p['base_fee_won']
-    onsite_payment=0
-    payment_unverified_won=0
+    payment_buckets={
+        'online_prepay_won':p['base_fee_won'],
+        'onsite_payment':0,
+        'payment_unverified_won':0,
+    }
+    payment_type_buckets={
+        'online_prepay':'online_prepay_won',
+        'onsite':'onsite_payment',
+    }
     review_items=[]
 
-    def assign_option_payment(amount, rule):
-        nonlocal payment_due, onsite_payment, payment_unverified_won
+    # 기존에 조회한 옵션 규칙을 재사용하고, 결제 방식별 버킷에 금액을 합산한다.
+    if typ=='fixed_slot':
+        mandatory_rule=included[0] if p['mandatory_light_won'] else None
+    else:
+        mandatory_rule=records[0] if records else None
+    optional_rule=options[0] if optional_amount else None
+    for amount, rule in ((light, mandatory_rule), (optional_amount, optional_rule)):
         if not amount:
-            return
+            continue
         payment_type=rule['payment_type'] if rule is not None else None
-        if payment_type=='online_prepay':
-            payment_due+=amount
-        elif payment_type=='onsite':
-            onsite_payment+=amount
-        else:
-            payment_unverified_won+=amount
+        bucket=payment_type_buckets.get(payment_type,'payment_unverified_won')
+        payment_buckets[bucket]+=amount
+        if bucket=='payment_unverified_won':
             review_items.append({
                 'code':'option_payment_type_unverified',
                 'target':'option_payment',
@@ -500,21 +549,13 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
                 'amount_won':amount,
             })
 
-    if light:
-        # 고정 회차 포함 조명료와 자유시간형 조명료 모두 결제방식에 따라 분리한다.
-        if typ=='fixed_slot':
-            mandatory_rule=included[0] if p['mandatory_light_won'] else None
-        else:
-            mandatory_rule=records[0] if records else None
-        assign_option_payment(light,mandatory_rule)
-    if optional_amount:
-        unverified_before_optional=payment_unverified_won
-        optional_rule=next((r for r in facility_option_records
-                            if r['option_id']=='lighting' and r['application_type']=='optional'),None)
-        assign_option_payment(optional_amount,optional_rule)
-        optional_unverified=payment_unverified_won-unverified_before_optional
-    else:
-        optional_unverified=0
+    optional_lighting_on_site_won=(optional_amount if optional_rule is not None
+                                   and optional_rule['payment_type']=='onsite' else 0)
+    optional_unverified=(optional_amount if optional_rule is not None
+                         and optional_rule['payment_type'] is None else 0)
+    online_prepay_won=payment_buckets['online_prepay_won']
+    onsite_payment=payment_buckets['onsite_payment']
+    payment_unverified_won=payment_buckets['payment_unverified_won']
 
     # 단일 감면은 이 함수에서 적용하지 않는다: 반환 금액은 감면 전 금액이다.
     single_discount_selected=bool(discount_category_ids)
@@ -524,9 +565,12 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'lighting_minutes':light_minutes,'lighting_fee_won':light,
             'total_won':p['base_fee_won']+light+optional_amount,
             'optional_lighting_minutes':optional_lighting_minutes,
-            'optional_lighting_on_site_won':onsite_payment if optional_amount else 0,
+            'optional_lighting_on_site_won':optional_lighting_on_site_won,
             'optional_lighting_payment_unverified_won':optional_unverified,
-            'payment_due':payment_due,'onsite_payment':onsite_payment,
+            # 백엔드 #26 계약: payment_due는 온라인 선결제액이다.
+            # 결제 방식 미확인 옵션이 있으면 확정 결제액으로 표시하지 않는다.
+            'payment_due':None if review_items else online_prepay_won,
+            'online_prepay_won':online_prepay_won,'onsite_payment':onsite_payment,
             'payment_unverified_won':payment_unverified_won,
             'payment_status':'needs_review' if review_items else 'confirmed',
             'review_items':review_items,

@@ -23,6 +23,8 @@ Rounding = Annotated[str, StringConstraints(pattern=r"^(floor|ceil|round)_(1|10|
 DayType = Literal["weekday", "weekend", "holiday"]
 DiscountMethod = Literal["onsite", "prepay_refund"]
 PaymentMethod = Literal["prepay", "onsite"]
+# 금액 항목의 결제 방식. unverified: 공식 자료에서 결제 시점·장소를 확인하지 못함
+ItemPayment = Literal["prepay", "onsite", "unverified"]
 DiscountBasis = Literal["whole_fee", "per_eligible_person", "holder_whole_fee"]
 
 
@@ -136,7 +138,7 @@ class FeeRule(EffectivePeriod):
     extra_unit_minutes: int | None = Field(default=None, gt=0)
     extra_unit_amount: int | None = Field(default=None, ge=0)
     partial_unit: Literal["round_up", "prorate"] | None = None
-    # 선택 조명료를 온라인으로 선결제하는지 현장에서 결제하는지. 모르면 None
+    # 조명료를 온라인으로 선결제하는지 현장에서 결제하는지. 모르면 None
     payment: PaymentMethod | None = None
     day_types: list[DayType] | None = None
     months: list[Annotated[int, Field(ge=1, le=12)]] | None = None
@@ -154,8 +156,8 @@ class FeeRule(EffectivePeriod):
             raise ValueError("extra_unit_minutes와 extra_unit_amount는 함께 입력해야 합니다.")
         if self.extra_unit_minutes is not None and self.type != "optional_lighting":
             raise ValueError("추가 단위 요금은 선택 조명 규정에만 입력할 수 있습니다.")
-        if self.payment is not None and self.type != "optional_lighting":
-            raise ValueError("결제 방식은 선택 조명 규정에만 입력할 수 있습니다.")
+        if self.payment is not None and self.type == "base":
+            raise ValueError("결제 방식은 조명 규정에만 입력할 수 있습니다.")
         return self
 
 
@@ -376,8 +378,8 @@ class FeeItem(BaseModel):
     rule_id: str
     source_id: str
     method: DiscountMethod | None = None
-    # 선택 조명료만. 다른 금액 항목은 온라인 선결제다.
-    payment: PaymentMethod | None = None
+    # 조명료만. 다른 금액 항목은 온라인 선결제다.
+    payment: ItemPayment | None = None
 
     @model_serializer(mode="wrap")
     def omit_empty_method(self, handler):
@@ -409,6 +411,8 @@ class FeeResult(BaseModel):
     payment_due: int | None
     # 이용 당일 현장에서 따로 내는 금액. payment_due에는 들어가지 않는다.
     onsite_payment: int | None
+    # 결제 방식을 확인하지 못한 금액. 0보다 크면 payment_due는 None이다.
+    payment_unverified: int | None
     expected_refund: int | None
     net_cost_after_refund: int | None
     review_items: list[ReviewItem]

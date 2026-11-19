@@ -127,7 +127,7 @@ def test_matches_official_case(case, facilities):
         "optional_lighting_on_site_won": result.onsite_payment,
         "discount_refund_won": result.expected_refund,
         "final_expected_cost_won": result.net_cost_after_refund,
-        "total_fee_won": result.payment_due,
+        "total_fee_won": result.total,
         "base_court_won": by_type.get("base", 0),
         "mandatory_lighting_won": by_type.get("lighting", 0),
         "lighting_won": by_type.get("lighting", 0),
@@ -248,6 +248,8 @@ def test_compare_shows_terms_and_sources_of_use_date(two_period_facility):
         ("busan_hwamyeong_ecopark_night_soccer", "soccer", WEEKDAY, "18:00", "21:00", 0, (20000, 30000, 50000, 0)),
         ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "19:00", "22:00", 0, (120000, 20000, 140000, 0)),
         ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "16:00", "19:00", 60, (120000, 10000, 120000, 10000)),
+        # 19:00~20:00 선택 조명 60분은 현장 결제, 20:00~22:00 필수 조명 20,000원은 회차 요금과 함께 선결제(database/README.md)
+        ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "19:00", "22:00", 60, (120000, 30000, 140000, 10000)),
         ("busan_samrak_ecopark_soccer", "soccer", WEEKEND, "08:00", "11:00", 0, (30000, 0, 30000, 0)),
         ("busan_hwamyeong_ecopark_tennis", "tennis", WEEKDAY, "08:00", "10:00", 0, (6000, 0, 6000, 0)),
     ],
@@ -265,15 +267,24 @@ def test_added_facilities_follow_database(facilities, facility_id, sport, day, s
     assert (by_type["base"], by_type.get("lighting", 0), result.payment_due, result.onsite_payment) == expected
 
 
-def test_optional_lighting_outside_its_band_needs_review(facilities):
-    # 해운대 축구 19:00~22:00 회차는 선택 조명 시간대(07:00~20:00)를 벗어나므로 금액을 추정하지 않는다.
+def test_optional_lighting_longer_than_its_band_rejected(facilities):
+    # 해운대 축구 19:00~22:00 회차의 선택 조명은 시간대(07:00~20:00)와 겹치는 19:00~20:00의 60분까지다.
     conditions = Conditions(
-        sport="soccer", date=WEEKDAY, start_time="19:00", end_time="22:00", optional_lighting_minutes=60, source="direct"
+        sport="soccer", date=WEEKDAY, start_time="19:00", end_time="22:00", optional_lighting_minutes=90, source="direct"
     )
     result = calculate(facilities["busan_haeundae_arboretum_soccer"], conditions)
 
     assert result.status == "needs_review"
-    assert result.review_items[0].target == "lighting"
+    assert (result.review_items[0].target, result.review_items[0].code) == ("lighting", "duration_not_allowed")
+
+
+def test_gudeok_lighting_payment_unverified(facilities):
+    # 구덕 야간 조명료는 결제 시점·장소가 공식 자료에 없어 최초 납부액으로 확정하지 않는다.
+    conditions = Conditions(sport="tennis", date=WEEKDAY, start_time="18:00", end_time="20:00", source="direct")
+    result = calculate(facilities["busan_gudeok_stadium_tennis"], conditions)
+
+    assert result.status == "calculated"
+    assert (result.total, result.payment_due, result.onsite_payment, result.payment_unverified) == (28000, None, 0, 20000)
 
 
 def test_facility_detail_flexible(facilities):
