@@ -665,13 +665,22 @@ def test_optional_lighting_only_within_selectable_time():
     assert result.review_items[0].reason == "선택 조명은 19:00~20:00 사이 최대 60분까지 사용할 수 있습니다."
 
 
-def test_optional_lighting_outside_selectable_time_needs_review():
+def test_optional_lighting_outside_selectable_time_not_allowed():
     result = calculate(
         facility([base_rule(), optional_lighting_rule()]), lighting_conditions(30, start="20:00", end="22:00")
     )
 
-    assert_review(result, "lighting", "rule_missing")
-    assert result.review_items[0].reason == "이용 시간에 선택할 수 있는 조명 규정이 없습니다."
+    assert_review(result, "lighting", "duration_not_allowed")
+    assert result.review_items[0].reason == "이 이용 시간에는 선택 조명을 사용할 수 없습니다. 선택 조명 시간대: 07:00~20:00"
+
+
+def test_facility_without_optional_lighting_ignores_minutes():
+    # 여러 시설을 함께 비교할 때 선택 조명이 없는 시설은 입력한 조명 시간과 관계없이 계산한다.
+    rules = facility([base_rule(), lighting_rule()])
+    result = calculate(rules, lighting_conditions(60, start="18:00", end="20:00"))
+
+    assert result.status == "calculated"
+    assert amounts(result) == {"base": 40000, "lighting": 10000}
 
 
 def test_no_optional_lighting_selected_ignores_rule():
