@@ -695,8 +695,8 @@ GET /api/facilities/{facility_id}?date=2026-11-11
 - 모르는 값은 `null`이며 화면에는 '확인 필요'로 표시합니다(FR-004).
 - `time_options`는 이용일에 유효한 이용시간 규정입니다. 규정 기간이 아닌 날짜는 빈 배열이고, `closure_note`도 그 기간의 안내만 보여 줍니다.
 - 구덕처럼 허용 이용시간 목록 없이 상한만 확인된 시설은 `allowed_minutes: []`, `max_minutes: 120`입니다.
-- `source_id`는 이용일의 규정 기간 출처이고, `sources`에는 응답에 쓴 출처만 넣습니다. 이용허락범위가 기록되지 않은 출처의 `license`는 API-06과 같이 `"이용허락범위 미확인"`입니다.
-- 날짜 형식이 틀리면 `400 invalid_value`, 지난 날짜면 `400 past_date`(`field: "date"`)입니다.
+- `source_id`는 이용일의 규정 기간 출처이고, `sources`에는 응답에 쓴 출처만 넣습니다. 이용일이 규정 기간 밖이면 지난 기간의 출처를 보여 주지 않도록 `source_id`는 `null`, `sources`는 빈 배열입니다. 이용허락범위가 기록되지 않은 출처의 `license`는 API-06과 같이 `"이용허락범위 미확인"`입니다.
+- `date`는 `YYYY-MM-DD`만 받습니다. 시각이 붙은 값(`2026-11-11T00:00:00`), 숫자 타임스탬프, 없는 날짜는 `400 invalid_value`, 지난 날짜면 `400 past_date`(`field: "date"`)입니다. `POST /api/compare`의 `conditions.date`도 같습니다.
 - `booking_url`이 `null`이면 공식 예약 링크 대신 '공식 예약 링크 확인 필요'를 표시합니다(FR-012).
 - 등록되지 않은 시설은 `404 facility_not_found`입니다.
 - 요금·예약·취소 조건은 API-06이 맡고, 상세 API에는 넣지 않습니다.

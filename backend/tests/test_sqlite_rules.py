@@ -315,6 +315,9 @@ def test_facility_detail_outside_rule_period_shows_unknown(facilities):
     assert detail.time_options == []
     assert detail.closure_note is None
     assert detail.booking_url is not None
+    # 만료된 동절기 규정의 출처도 보여 주지 않는다.
+    assert detail.source_id is None
+    assert detail.sources == []
 
 
 def test_facility_detail_follows_use_date(two_period_facility):
@@ -322,3 +325,21 @@ def test_facility_detail_follows_use_date(two_period_facility):
 
     assert detail.source_id == "haeundae_2027h1"
     assert [source.source_id for source in detail.sources] == ["haeundae_2027h1"]
+
+
+def test_facility_detail_api_with_database(facilities, monkeypatch):
+    # 실제 DB의 모든 시설을 API로 조회한다. 날짜를 생략하면 오늘 기준이다.
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    monkeypatch.setattr(main, "facilities", facilities)
+    client = TestClient(main.app)
+    for facility_id in facilities:
+        response = client.get(f"/api/facilities/{facility_id}")
+
+        assert response.status_code == 200, facility_id
+        detail = response.json()
+        assert detail["facility_id"] == facility_id
+        used = {detail["source_id"], *(option["source_id"] for option in detail["time_options"])} - {None}
+        assert used == {source["source_id"] for source in detail["sources"]}

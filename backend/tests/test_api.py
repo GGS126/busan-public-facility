@@ -187,6 +187,8 @@ def test_missing_required_fields_reported_together():
     ("overrides", "field"),
     [
         ({"date": "2026-13-40"}, "conditions.date"),
+        ({"date": "2099-01-01T00:00:00"}, "conditions.date"),
+        ({"date": 4070908800}, "conditions.date"),
         ({"start_time": "25:00"}, "conditions.start_time"),
         ({"end_time": "24:01"}, "conditions.end_time"),
         ({"start_time": "24:00"}, "conditions.start_time"),
@@ -301,7 +303,18 @@ def test_facility_detail_unknown_facility():
     assert response.json()["error"]["code"] == "facility_not_found"
 
 
-@pytest.mark.parametrize(("value", "code"), [("2020-01-01", "past_date"), ("abc", "invalid_value")])
+@pytest.mark.parametrize(
+    ("value", "code"),
+    [
+        ("2020-01-01", "past_date"),
+        ("abc", "invalid_value"),
+        # 명세의 YYYY-MM-DD 외 형식은 날짜로 바꿀 수 있어도 받지 않는다.
+        ("2099-01-01T00:00:00", "invalid_value"),
+        ("20990101", "invalid_value"),
+        ("4070908800", "invalid_value"),
+        ("2099-02-30", "invalid_value"),
+    ],
+)
 def test_facility_detail_invalid_date(value, code):
     response = client.get("/api/facilities/F001", params={"date": value})
 

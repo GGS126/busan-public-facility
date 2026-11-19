@@ -11,8 +11,8 @@ def facility_detail(rules: FacilityRules, day: date) -> FacilityDetail:
     # 기간이 겹쳐 안내가 둘 이상이면 어느 쪽인지 알 수 없으므로 표시하지 않는다.
     closure = notes[0] if len(notes) == 1 else None
 
-    source_id = rules.source_on(day)
-    used = {source_id, *(p.source_id for p in policies)}
+    source_id = rules.period_source_on(day)
+    used = {source_id, *(p.source_id for p in policies)} - {None}
     if closure is not None:
         used.add(closure.source_id)
 
