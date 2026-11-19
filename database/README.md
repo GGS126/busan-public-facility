@@ -79,6 +79,23 @@ python database/audit_checks.py
 
 **환불:** 시설별 일반 취소 시점에 따른 환불률과 우천 등 별도 사유에 대한 규정은 `refund_rules`에 저장합니다. 같은 시설이라도 취소 사유에 따라 적용 규칙이 달라질 수 있습니다.
 
+## 견적 응답의 금액 필드 의미
+
+`query_api.quote()`의 금액 필드는 다음 의미로 구분합니다. #26 백엔드 엔진의 `payment_due`와 동일하게 **온라인 선결제액**을 `payment_due`로 반환합니다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `total_won` | 기본 이용료 + 필수 조명료 + 선택 조명료의 **전체 이용료**(감면 전) |
+| `payment_due` | 예약 단계에서 납부할 **온라인 선결제액**. 확인된 경우 `online_prepay_won`과 동일 |
+| `online_prepay_won` | 온라인 선결제로 분류된 금액 |
+| `onsite_payment` | 현장 결제 예정액 |
+| `payment_unverified_won` | 결제 시점·장소가 확인되지 않은 옵션 금액 |
+| `payment_status` | 결제 방식 전체가 확인되면 `confirmed`, 미확인 항목이 있으면 `needs_review` |
+
+결제 방식이 미확인된 옵션이 있으면 `payment_due`는 확정 선결제액으로 안내하지 않도록 `null`을 반환합니다. 다만 `online_prepay_won`은 확인된 온라인 선결제 금액을 별도로 보여 줍니다. 전체 금액은 `total_won`을 사용하고, `payment_due`를 총 납부액으로 해석하지 않습니다.
+
+예: 해운대수목원 축구장 평일 19:00~22:00, 선택 조명 60분이면 `total_won=150000`, `payment_due=online_prepay_won=140000`, `onsite_payment=10000`입니다.
+
 ## 데이터 구성 원칙
 
 - 요금과 규정은 `rule_set_id`를 통해 **시설·적용기간·출처**에 연결됩니다.
@@ -97,7 +114,7 @@ python database/audit_checks.py
 
 ## SQLite DB 생성 및 검증
 
-시설별 JSON(`seed.json`, `samrak_winter_2026_2027.json`, `gudeok_winter_2026_2027.json`)을 **검토 가능한 원본 데이터**로 관리합니다. `facilities.sqlite3`는 이 자료와 `schema.sql`에서 생성되는 결과물이므로 Git에는 포함하지 않습니다.
+시설별 JSON(`build_db.py`의 `DEFAULT_FILES`에 등록된 전체 JSON)을 **검토 가능한 원본 데이터**로 관리합니다. `facilities.sqlite3`는 이 자료와 `schema.sql`에서 생성되는 결과물이므로 Git에는 포함하지 않습니다.
 
 프로젝트 루트에서 다음 명령으로 DB를 새로 생성할 수 있습니다.
 
@@ -111,7 +128,7 @@ python database/audit_checks.py
 새로운 시설을 추가한 경우 해당 JSON을 목록에 포함하도록 `build_db.py`의 `DEFAULT_FILES`를 갱신하거나, 다음과 같이 모든 파일을 명시합니다.
 
 ```bash
-python database/build_db.py --data database/seed.json database/samrak_winter_2026_2027.json database/gudeok_winter_2026_2027.json
+python database/build_db.py --data database/seed.json database/samrak_winter_2026_2027.json database/gudeok_winter_2026_2027.json database/hwamyeong_winter_2026_2027.json database/samrak_soccer_winter_2026_2027.json database/hwamyeong_soccer_winter_2026_2027.json database/hwamyeong_night_soccer_winter_2026_2027.json database/haeundae_soccer_2026h2.json
 ```
 
 `database/.gitignore`는 생성된 SQLite 파일과 Python 임시 파일을 새로 커밋하지 않도록 합니다. **이미 Git에 올라간 `facilities.sqlite3`와 중복 `README_database_content.md`는 GitHub 브랜치에서 별도로 삭제 커밋해야 합니다.**

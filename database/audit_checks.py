@@ -450,15 +450,15 @@ with tempfile.TemporaryDirectory() as tmp:
  unknown=q.quote(db,'busan_samrak_ecopark_tennis','2026-11-09','08:00','10:00',False,60)
  assert unknown['status']=='priced' and unknown['total_won']==16000,unknown
  assert unknown['payment_status']=='needs_review' and unknown['payment_unverified_won']==10000,unknown
- assert unknown['payment_due']==6000 and unknown['onsite_payment']==0,unknown
+ assert unknown['payment_due'] is None and unknown['online_prepay_won']==6000 and unknown['onsite_payment']==0,unknown
  assert unknown['optional_lighting_on_site_won']==0,unknown
  assert unknown['optional_lighting_payment_unverified_won']==10000,unknown
  assert unknown['review_items'][0]['code']=='option_payment_type_unverified',unknown
  known=q.quote(db,'busan_haeundae_arboretum_tennis','2026-11-09','18:00','20:00',False,60)
- assert known['payment_status']=='confirmed' and known['onsite_payment']==10000,known
- assert known['optional_lighting_on_site_won']==10000 and known['payment_due']==8000,known
+ assert known['payment_status']=='confirmed' and known['onsite_payment']==10000 and known['payment_due']==known['online_prepay_won']==8000,known
+ assert known['optional_lighting_on_site_won']==10000 and known['online_prepay_won']==8000,known
  included_light=q.quote(db,'busan_haeundae_arboretum_tennis','2026-11-09','20:00','22:00',False)
- assert included_light['payment_status']=='confirmed' and included_light['payment_due']==28000,included_light
+ assert included_light['payment_status']=='confirmed' and included_light['payment_due']==included_light['online_prepay_won']==28000,included_light
  assert included_light['onsite_payment']==0 and included_light['payment_unverified_won']==0,included_light
  unknown_mandatory=q.quote(db,'busan_gudeok_stadium_tennis','2026-11-09','18:00','20:00',False)
  assert unknown_mandatory['payment_status']=='needs_review',unknown_mandatory
@@ -741,17 +741,23 @@ with tempfile.TemporaryDirectory() as new_tmp:
  print('PASS: 화명생태공원 테니스장 추가, 동절기 4회차·요금·환불·감면·휴장·예약기간, 4시설 무결성')
 
 
+# 확장 시설 검증은 동일한 기본 DB를 공유하고 변경이 필요한 사례만 복사한다.
+import build_db as full_build
+_full_db_dir=tempfile.TemporaryDirectory()
+_shared_db=pathlib.Path(_full_db_dir.name)/'all_facilities.sqlite3'
+full_build.build(_shared_db)
+_expected_facility_count=len(full_build.DEFAULT_FILES)
+
 # 삼락생태공원 축구장 동절기 다종목 공용 DB 검증
 with tempfile.TemporaryDirectory() as soccer_tmp:
  soccer_db=pathlib.Path(soccer_tmp)/'soccer.sqlite3'
- import build_db as soccer_build
- soccer_build.build(soccer_db)
+ soccer_db=_shared_db
  soc='busan_samrak_ecopark_soccer'
  rid='samrak_soccer_winter_2026_2027'
  with closing(sqlite3.connect(soccer_db)) as c:
   assert c.execute('PRAGMA integrity_check').fetchone()[0]=='ok'
   assert c.execute('PRAGMA foreign_key_check').fetchall()==[]
-  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==8
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==_expected_facility_count
   assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(soc,)).fetchone()==('soccer','사상구')
   assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',(rid,)).fetchone()[0]==3
   assert c.execute('SELECT COUNT(*) FROM facility_options WHERE rule_set_id=?',(rid,)).fetchone()[0]==0
@@ -770,12 +776,11 @@ with tempfile.TemporaryDirectory() as soccer_tmp:
 # 야간 축구장 별도 추가: 3시간 의무 조명 요금 분리와 중복 청구 방지 검증
 with tempfile.TemporaryDirectory() as night_tmp:
  night_db=pathlib.Path(night_tmp)/'night.sqlite3'
- import build_db as night_build
- night_build.build(night_db)
+ night_db=_shared_db
  night='busan_hwamyeong_ecopark_night_soccer'
  nrid='hwamyeong_night_soccer_winter_2026_2027'
  with closing(sqlite3.connect(night_db)) as c:
-  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==8
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==_expected_facility_count
   assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(night,)).fetchone()==('soccer','북구')
   assert c.execute('SELECT weekday_base_won,weekend_holiday_base_won,mandatory_light_won FROM pricing_rules WHERE rule_set_id=?',(nrid,)).fetchone()==(20000,30000,30000)
   assert c.execute('SELECT application_type,payment_type,hour_price FROM facility_options WHERE rule_set_id=?',(nrid,)).fetchone()==('included_in_base_price','online_prepay',10000)
@@ -787,18 +792,20 @@ with tempfile.TemporaryDirectory() as night_tmp:
   assert result['status']=='priced',result
   assert result['total_won']==total,result
   assert result['lighting_fee_won']==30000,result
- print('PASS: 화명 야간축구장 요금/필수 조명/결제방식 및 6개 시설')
+  assert result['payment_due']==result['online_prepay_won'] and result['payment_status']=='confirmed',result
+  assert result['online_prepay_won']==total and result['onsite_payment']==0,result
+  assert result['payment_unverified_won']==0 and not result['review_items'],result
+ print('PASS: 화명 야간축구장 요금/필수 조명/결제방식 및 8개 시설')
 
 
 # 해운대수목원 축구장 추가: 주간 4회차 / 야간 1회차 / 포함 조명료 / 감면 / 환불
 with tempfile.TemporaryDirectory() as hs_tmp:
  hs_db=pathlib.Path(hs_tmp)/'haeundae_soccer.sqlite3'
- import build_db as hs_build
- hs_build.build(hs_db)
+ shutil.copyfile(_shared_db,hs_db)
  hs='busan_haeundae_arboretum_soccer'
  hrid='haeundae_soccer_2026h2'
  with closing(sqlite3.connect(hs_db)) as c:
-  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==8
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==_expected_facility_count
   assert c.execute('SELECT facility_type,district FROM facilities WHERE id=?',(hs,)).fetchone()==('soccer','해운대구')
   assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',(hrid,)).fetchone()[0]==5
   assert c.execute('SELECT weekday_base_won,weekend_holiday_base_won,mandatory_light_won FROM pricing_rules WHERE rule_set_id=? AND start_time=?',(hrid,'19:00')).fetchone()==(120000,180000,20000)
@@ -812,19 +819,48 @@ with tempfile.TemporaryDirectory() as hs_tmp:
   assert r['status']=='priced' and r['total_won']==total and r['lighting_fee_won']==light,r
  assert q.discount_proration_check(str(hs_db),hs,'2026-11-17',120000,20,2,'multi_child')['discount_refund_won']==6000
  assert q.quote(str(hs_db),hs,'2026-11-17','18:00','21:00',False)['status']=='invalid_time'
+ # 선택/포함 조명 경계와 결제 금액을 각각 검증한다.
+ for minutes, total, onsite in [(0,140000,0),(10,141600,1600),(60,150000,10000)]:
+  r=q.quote(hs_db,hs,'2026-11-17','19:00','22:00',False,minutes)
+  assert r['status']=='priced' and r['total_won']==total,r
+  assert r['online_prepay_won']==140000 and r['onsite_payment']==onsite,r
+  assert r['payment_status']=='confirmed' and r['payment_due']==r['online_prepay_won']==140000,r
+  assert r['optional_lighting_on_site_won']==onsite and r['payment_unverified_won']==0,r
+ assert q.quote(hs_db,hs,'2026-11-17','19:00','22:00',False,61)['status']=='invalid_optional_lighting'
+ # 겹친 조명료가 우연히 같더라도 포함 규정의 종료 시각이 다르면 거부한다.
+ with closing(sqlite3.connect(hs_db)) as c:
+  c.execute("UPDATE facility_options SET applies_to='23:00' WHERE rule_set_id=? AND application_type='included_in_base_price'",(hrid,))
+  c.commit()
+ assert q.quote(hs_db,hs,'2026-11-17','19:00','22:00',False)['status']=='option_rule_inconsistent'
+ with closing(sqlite3.connect(hs_db)) as c:
+  c.execute("UPDATE facility_options SET applies_from='20:00',applies_to='22:00' WHERE rule_set_id=? AND application_type='included_in_base_price'",(hrid,))
+  c.commit()
+ # 필수 조명까지 현장 결제로 변경한 테스트 DB: 선택 조명 필드에 필수료가 섞이면 안 된다.
+ with closing(sqlite3.connect(hs_db)) as c:
+  c.execute("UPDATE facility_options SET payment_type='onsite' WHERE rule_set_id=? AND application_type='included_in_base_price'",(hrid,))
+  c.commit()
+ for optional_minutes, optional_fee in [(0,0),(10,1600),(60,10000)]:
+  r=q.quote(str(hs_db),hs,'2026-11-17','19:00','22:00',False,optional_minutes)
+  assert r['status']=='priced',r
+  assert r['optional_lighting_on_site_won']==optional_fee,r
+  assert r['onsite_payment']==20000+optional_fee,r
+  assert r['online_prepay_won']==120000,r
+  assert r['total_won']==140000+optional_fee,r
+ assert q.quote(str(hs_db),hs,'2026-11-17','19:00','22:00',False,61)['status']=='invalid_optional_lighting'
+ print('PASS: 필수/선택 조명 모두 현장 결제여도 선택 조명 현장액은 선택분만 집계')
+
  print('PASS: 해운대수목원 축구장 5회차/야간 포함 조명/감면/전체 8개 시설')
 
 
 # 화명생태공원 주간 축구장: 신규 종목 공용 구조 및 기존 야간 축구장과의 분리 검증
 with tempfile.TemporaryDirectory() as hw_soccer_tmp:
  hw_db=pathlib.Path(hw_soccer_tmp)/'hwamyeong_soccer.sqlite3'
- import build_db as hw_build
- hw_build.build(hw_db)
+ hw_db=_shared_db
  fid='busan_hwamyeong_ecopark_soccer'
  rule='hwamyeong_soccer_winter_2026_2027'
  booking='https://reserve.busan.go.kr/rent/view?resveGroupSn=55&progrmSn=185'
  with closing(sqlite3.connect(hw_db)) as c:
-  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==8
+  assert c.execute('SELECT COUNT(*) FROM facilities').fetchone()[0]==_expected_facility_count
   assert c.execute('SELECT facility_type,district,booking_url FROM facilities WHERE id=?',(fid,)).fetchone()==('soccer','북구',booking)
   assert c.execute('SELECT COUNT(*) FROM pricing_rules WHERE rule_set_id=?',(rule,)).fetchone()[0]==3
   assert c.execute('SELECT COUNT(*) FROM facility_options WHERE rule_set_id=?',(rule,)).fetchone()[0]==0
@@ -844,3 +880,5 @@ with tempfile.TemporaryDirectory() as hw_soccer_tmp:
  assert q.closure_status(hw_db,fid,'2027-02-07',['lunar_new_year_day'])['status']=='closed'
  assert q.quote(hw_db,'busan_hwamyeong_ecopark_night_soccer','2026-11-17','18:00','21:00',False)['total_won']==50000
  print('PASS: 화명 주간 축구장 3회차/기본요금/감면/환불/휴장·야간축구장 분리 및 8개 시설')
+
+_full_db_dir.cleanup()
