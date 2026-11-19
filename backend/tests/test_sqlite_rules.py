@@ -277,6 +277,24 @@ def test_optional_lighting_longer_than_its_band_rejected(facilities):
     assert (result.review_items[0].target, result.review_items[0].code) == ("lighting", "duration_not_allowed")
 
 
+@pytest.mark.parametrize(
+    ("facility_id", "start", "end", "minutes", "expected"),
+    [
+        # 구덕은 선택 조명이 없어 입력한 조명 시간을 쓰지 않고 필수 조명료만 계산한다.
+        ("busan_gudeok_stadium_tennis", "18:00", "20:00", 60, ("calculated", None)),
+        # 해운대 20:00~22:00 회차는 조명이 회차 요금에 포함돼 선택 조명을 고를 수 없다.
+        ("busan_haeundae_arboretum_tennis", "20:00", "22:00", 30, ("needs_review", "duration_not_allowed")),
+    ],
+)
+def test_optional_lighting_minutes_in_multi_facility_compare(facilities, facility_id, start, end, minutes, expected):
+    conditions = Conditions(
+        sport="tennis", date=WEEKDAY, start_time=start, end_time=end, optional_lighting_minutes=minutes, source="direct"
+    )
+    result = calculate(facilities[facility_id], conditions)
+
+    assert (result.status, result.review_items[0].code if result.review_items else None) == expected
+
+
 def test_gudeok_lighting_payment_unverified(facilities):
     # 구덕 야간 조명료는 결제 시점·장소가 공식 자료에 없어 최초 납부액으로 확정하지 않는다.
     conditions = Conditions(sport="tennis", date=WEEKDAY, start_time="18:00", end_time="20:00", source="direct")

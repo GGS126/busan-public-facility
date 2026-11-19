@@ -343,10 +343,21 @@ def _optional_lighting_items(rules: FacilityRules, conditions: Conditions, day_t
     minutes = conditions.optional_lighting_minutes
     if not minutes:
         return []
+    options = [r for r in rules.fee_rules if r.type == "optional_lighting" and r.sport == conditions.sport]
+    # 선택 조명이 없는 시설(예: 18시 이후 조명이 필수인 구덕)은 여러 시설을 비교할 때 입력한 조명 시간을 쓰지 않는다.
+    if not options:
+        return []
     start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
     active = _active_fee_rules(rules, conditions, "optional_lighting", day_types)
     if not active:
-        raise NeedsReview("rule_missing", "이용 시간에 선택할 수 있는 조명 규정이 없습니다.")
+        # 규정은 있지만 이용 시간과 겹치지 않는다. 데이터 누락이 아니라 이 시간에 고를 수 없는 것이다.
+        current = [r for r in options if r.in_effect(conditions.date) and r.time_from is not None] or options
+        bands = ", ".join(sorted({f"{r.time_from}~{r.time_to}" for r in current if r.time_from is not None}))
+        raise NeedsReview(
+            "duration_not_allowed",
+            f"이 이용 시간에는 선택 조명을 사용할 수 없습니다. 선택 조명 시간대: {bands}",
+            current[0].source_id,
+        )
     if len(active) > 1:
         raise NeedsReview("rule_conflict", "이용 시간에 적용되는 선택 조명 규정이 충돌합니다.", active[0].source_id)
 
