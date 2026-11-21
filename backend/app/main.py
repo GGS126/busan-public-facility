@@ -118,6 +118,8 @@ def search_facilities(request: FacilitySearchRequest):
         if conditions.districts and facility["district"] not in conditions.districts:
             continue
         slots = fixed_slots.get(facility["facility_id"])
+        if time_policies.get(facility["facility_id"]) is None:
+            slots = None
         time_status = "unknown"
         policy = time_policies.get(facility["facility_id"])
         if slots and policy is not None and conditions.start_time:
