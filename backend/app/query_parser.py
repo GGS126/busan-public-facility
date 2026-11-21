@@ -7,7 +7,7 @@ from datetime import date
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.models import BandTime, ClockTime, Headcount, validate_not_past, validate_time_order
+from app.models import BandTime, ClockTime, Headcount, SportCode, validate_not_past, validate_time_order
 
 QUESTIONS = {
     "sport": "어떤 종목을 이용하시나요?",
@@ -23,6 +23,7 @@ DATE_FORMAT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 START_TIME = TypeAdapter(ClockTime)
 END_TIME = TypeAdapter(BandTime)
 HEADCOUNT = TypeAdapter(Headcount)
+SPORT = TypeAdapter(SportCode)
 MAX_EXTRACTED_DATE_DAYS = 365
 SENSITIVE_PATTERN = re.compile(
     r"(?<!\d)(?:\d{6}[-.\s]?\d{7}|(?:\+82[-.\s]?|0)1[016789][- .]?\d{3,4}[- .]?\d{4})(?!\d)"
@@ -95,17 +96,15 @@ def parse_query(
 
 
 def _valid(field: str, value: object, today: date) -> bool:
-    if field == "sport":
-        return isinstance(value, str) and bool(value.strip())
     if field in {"districts", "discount_types"}:
         return (
             isinstance(value, list)
             and all(isinstance(item, str) and item.strip() for item in value)
         )
-    if field in {"start_time", "end_time", "headcount"}:
-        adapter = {"start_time": START_TIME, "end_time": END_TIME, "headcount": HEADCOUNT}[field]
+    if field in {"start_time", "end_time", "headcount", "sport"}:
+        adapter = {"start_time": START_TIME, "end_time": END_TIME, "headcount": HEADCOUNT, "sport": SPORT}[field]
         try:
-            adapter.validate_python(value, strict=True)
+            adapter.validate_python(value.strip() if isinstance(value, str) else value, strict=True)
             return True
         except ValidationError:
             return False
