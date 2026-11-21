@@ -293,7 +293,7 @@ def compare(request: CompareRequest) -> CompareResponse:
     if sample_ids:
         check_against_options(request.conditions, available_options)
     sqlite_facilities = {}
-    if sqlite_ids and not DB_PATH.is_file():
+    if any(facility_id.startswith("busan_") for facility_id in sqlite_ids) and not DB_PATH.is_file():
         return error_response(503, "facility_catalog_unavailable", "시설 DB를 생성한 뒤 다시 시도해 주세요.")
     if sqlite_ids and DB_PATH.is_file():
         catalog, options = read_catalog(DB_PATH)
