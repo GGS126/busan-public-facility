@@ -75,13 +75,16 @@ function FacilityList({
                   <h3>{facility.name}</h3>
                   <p>{facility.address}</p>
                   {facility.closure?.is_closed && (
-                    <p>정기 휴장일입니다. {facility.closure.matched_rules.map(rule => rule.note).join(' / ')}</p>
+                    <div>
+                      <p>정기 휴장일입니다. {facility.closure.matched_rules.map(rule => rule.note).join(' / ')}</p>
+                      {facility.closure.source_url && <a href={facility.closure.source_url} target="_blank" rel="noopener noreferrer">휴장 규정 출처</a>}
+                    </div>
                   )}
                   {facility.closure?.status === 'needs_calendar_resolution' && (
                     <p>명절 휴장 여부는 공식 예약 안내에서 확인해 주세요.</p>
                   )}
                   {!facility.closure?.is_closed && facility.time_check?.status === 'not_eligible' && (
-                    <p>희망 시간과 일치하는 회차가 없습니다. 다른 회차를 선택해 주세요.</p>
+                    <p>희망 시간이 시설의 이용시간 규정과 맞지 않습니다. 시간을 다시 확인해 주세요.</p>
                   )}
 
                   <label className="facility-check">
@@ -100,7 +103,15 @@ function FacilityList({
                         이용시간 선택
                       </label>
 
-                      {slots.length > 0 ? (
+                      {facility.time_options?.selection === 'flexible' ? (
+                        <div>
+                          <input aria-label="시설 이용 시작시간" type="time" value={selectedTime.split('|')[0] || ''}
+                            onChange={event => onTimeChange(facility.id, `${event.target.value}|${selectedTime.split('|')[1] || ''}`)} />
+                          <input aria-label="시설 이용 종료시간" type="time" value={selectedTime.split('|')[1] || ''}
+                            onChange={event => onTimeChange(facility.id, `${selectedTime.split('|')[0] || ''}|${event.target.value}`)} />
+                          <p>운영시간과 이용시간 제한을 확인한 뒤 비교해 주세요.</p>
+                        </div>
+                      ) : slots.length > 0 ? (
                         <select
                           id={`time-${facility.id}`}
                           value={selectedTime}

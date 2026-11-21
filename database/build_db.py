@@ -14,6 +14,11 @@ DEFAULT_FILES = [
     ROOT / 'seed.json',
     ROOT / 'samrak_winter_2026_2027.json',
     ROOT / 'gudeok_winter_2026_2027.json',
+    ROOT / 'hwamyeong_winter_2026_2027.json',
+    ROOT / 'samrak_soccer_winter_2026_2027.json',
+    ROOT / 'hwamyeong_soccer_winter_2026_2027.json',
+    ROOT / 'hwamyeong_night_soccer_winter_2026_2027.json',
+    ROOT / 'haeundae_soccer_2026h2.json',
 ]
 
 
@@ -39,7 +44,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='JSON 원본에서 DB 새로 생성')
     parser.add_argument('--db', type=Path, default=ROOT / 'facilities.sqlite3')
     parser.add_argument('--data', nargs='+', type=Path,
-                        help='기본값: 현재 등록된 시설 JSON 3개')
+                        help='기본값: 현재 등록된 시설 JSON 8개')
     args = parser.parse_args()
     result = build(args.db, args.data)
     print('DB 생성 및 무결성 검사 완료:', result)

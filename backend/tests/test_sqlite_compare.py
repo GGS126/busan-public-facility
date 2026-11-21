@@ -124,7 +124,7 @@ def test_search_and_compare_agree_on_holiday_closure(
     assert comparison.status_code == 200
     fee = comparison.json()["results"][0]["fee"]
     assert fee["payment_due"] == expected_fee
-    assert fee["status"] == ("needs_review" if expected_fee is None else "calculated")
+    assert fee["status"] == ("not_eligible" if closure_status == "closed" else "needs_review" if expected_fee is None else "calculated")
 
 
 @pytest.mark.parametrize(("day", "amount"), [("2026-11-10", 6000), ("2026-12-25", 9000)])
@@ -144,3 +144,15 @@ def test_gudeok_rejects_duration_over_limit(sqlite_db, gudeok):
     ))
     assert result.fee.status == "not_eligible"
     assert result.fee.review_items[0].code == "duration_not_allowed"
+
+
+def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path):
+    from app.facility_catalog import read_search_time_policies
+    path = tmp_path / "overlap.sqlite3"
+    path.write_bytes(sqlite_db.read_bytes())
+    with closing(sqlite3.connect(path)) as con, con:
+        row = con.execute("SELECT id, facility_id, source_id, effective_from, effective_to, status FROM rule_sets WHERE facility_id='busan_gudeok_stadium_tennis'").fetchone()
+        for suffix, starts in (("second", "2026-10-02"), ("third", "2026-10-03")):
+            con.execute("INSERT INTO rule_sets VALUES(?,?,?,?,?,?)", (suffix, row[1], row[2], starts, row[4], row[5]))
+            con.execute("INSERT INTO time_selection_policies SELECT ?, selection_type, available_start_time, available_end_time, min_minutes, max_minutes, step_minutes, daily_limit_minutes, status, note FROM time_selection_policies WHERE rule_set_id=?", (suffix,row[0]))
+    assert read_search_time_policies(path,"2026-11-30")["busan_gudeok_stadium_tennis"] is None

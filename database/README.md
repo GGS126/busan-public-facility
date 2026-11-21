@@ -67,6 +67,8 @@ python database/audit_checks.py
 
 **추가 옵션:** `option_categories`에는 옵션 종류만, `facility_options`에는 시설별 계산 규칙을 저장합니다. 현재 조명 규정은 다음과 같습니다.
 
+`facility_options.payment_type`은 옵션 요금의 **결제 방식**입니다. `onsite`는 현장 결제, `online_prepay`는 온라인 선결제이며, `null`은 공식 결제 방식 미확인입니다. 해운대수목원의 **선택 조명(20시 이전)**은 현장 결제(`onsite`)로, **20:00~22:00 회차에 이미 포함된 필수 조명료**는 예약 시 자동 포함되는 온라인 선결제(`online_prepay`)로 저장했습니다. 포함 조명료는 별도 옵션으로 중복 청구하지 않습니다. 삼락 선택 조명 및 별도 확인되지 않은 옵션은 `null`로 유지합니다. 삼락 공식 예약 안내의 **예약 시 이용료 납부**는 기본 시설 이용료의 선결제 근거지만, **선택 조명료의 결제 시점·장소까지 확정하는 근거는 아니므로** 조명 옵션의 `payment_type`은 `null`로 유지합니다. 구덕운동장 안내에도 코트 기본요금의 **통합예약시스템 결제 후 예약 확정**은 명시되어 있지만, 야간 조명료의 결제 시점·장소는 별도로 명시되지 않아 옵션의 `payment_type`을 `null`로 둡니다. 조명료의 결제 방식은 공식 확인 전까지 `online_prepay` 또는 `onsite`로 단정하지 않습니다. 이 컬럼은 온라인 선결제액(`initial_payment_won`/백엔드 `payment_due`)과 현장 결제 예정액을 구분하기 위한 기초 데이터이며, 실제 금액 합산과 API 응답은 백엔드가 담당합니다. 원래 요금에 포함된 조명은 옵션을 다시 부과하지 않습니다.
+
 - **해운대수목원:** 20시 이전 선택 조명 사용은 60분 10,000원과 추가 10분당 1,600원 기준. 20:00~22:00 회차의 필수 조명료 20,000원은 기본 회차 총요금에 포함되므로 중복 부과하지 않습니다.
 - **삼락생태공원:** 조명 사용시간을 60분 단위로 올림하여 시간당 10,000원 적용.
 - **구덕운동장:** 동절기 18:00~22:00 중 이용시간과 겹치는 야간 시간에 시간당 10,000원 적용.
@@ -76,6 +78,23 @@ python database/audit_checks.py
 **감면 끝전 처리 미확인:** 세 시설의 `discount_common.rounding_policy`는 모두 `null`이며, `facility_discounts.discount_rounding_policy`로 저장합니다. 공식 반올림/절사 기준이 미확인이라는 뜻이며 조명료 옵션의 `rounding_policy`와는 별개입니다. `query_api.discounts()`는 `rounding_status: unverified`를 반환합니다. `discount_proration_check(...)`는 세 시설 모두 **인원별 감면액에 원 미만이 생길 때** `needs_review`와 환급액 `null`을 반환합니다. 인원별 감면액이 정확한 정수인 사례는 감면액을 계산합니다. 예를 들어 구덕 8,000원·4명 중 1명 50% 감면은 1,000원 반환입니다. 예약 차단이나 HTTP 오류 응답은 이 DB의 책임이 아닙니다.
 
 **환불:** 시설별 일반 취소 시점에 따른 환불률과 우천 등 별도 사유에 대한 규정은 `refund_rules`에 저장합니다. 같은 시설이라도 취소 사유에 따라 적용 규칙이 달라질 수 있습니다.
+
+## 견적 응답의 금액 필드 의미
+
+`query_api.quote()`의 금액 필드는 다음 의미로 구분합니다. #26 백엔드 엔진의 `payment_due`와 동일하게 **온라인 선결제액**을 `payment_due`로 반환합니다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `total_won` | 기본 이용료 + 필수 조명료 + 선택 조명료의 **전체 이용료**(감면 전) |
+| `payment_due` | 예약 단계에서 납부할 **온라인 선결제액**. 확인된 경우 `online_prepay_won`과 동일 |
+| `online_prepay_won` | 온라인 선결제로 분류된 금액 |
+| `onsite_payment` | 현장 결제 예정액 |
+| `payment_unverified_won` | 결제 시점·장소가 확인되지 않은 옵션 금액 |
+| `payment_status` | 결제 방식 전체가 확인되면 `confirmed`, 미확인 항목이 있으면 `needs_review` |
+
+결제 방식이 미확인된 옵션이 있으면 `payment_due`는 확정 선결제액으로 안내하지 않도록 `null`을 반환합니다. 다만 `online_prepay_won`은 확인된 온라인 선결제 금액을 별도로 보여 줍니다. 전체 금액은 `total_won`을 사용하고, `payment_due`를 총 납부액으로 해석하지 않습니다.
+
+예: 해운대수목원 축구장 평일 19:00~22:00, 선택 조명 60분이면 `total_won=150000`, `payment_due=online_prepay_won=140000`, `onsite_payment=10000`입니다.
 
 ## 데이터 구성 원칙
 
@@ -95,7 +114,7 @@ python database/audit_checks.py
 
 ## SQLite DB 생성 및 검증
 
-시설별 JSON(`seed.json`, `samrak_winter_2026_2027.json`, `gudeok_winter_2026_2027.json`)을 **검토 가능한 원본 데이터**로 관리합니다. `facilities.sqlite3`는 이 자료와 `schema.sql`에서 생성되는 결과물이므로 Git에는 포함하지 않습니다.
+시설별 JSON(`build_db.py`의 `DEFAULT_FILES`에 등록된 전체 JSON)을 **검토 가능한 원본 데이터**로 관리합니다. `facilities.sqlite3`는 이 자료와 `schema.sql`에서 생성되는 결과물이므로 Git에는 포함하지 않습니다.
 
 프로젝트 루트에서 다음 명령으로 DB를 새로 생성할 수 있습니다.
 
@@ -109,7 +128,7 @@ python database/audit_checks.py
 새로운 시설을 추가한 경우 해당 JSON을 목록에 포함하도록 `build_db.py`의 `DEFAULT_FILES`를 갱신하거나, 다음과 같이 모든 파일을 명시합니다.
 
 ```bash
-python database/build_db.py --data database/seed.json database/samrak_winter_2026_2027.json database/gudeok_winter_2026_2027.json
+python database/build_db.py --data database/seed.json database/samrak_winter_2026_2027.json database/gudeok_winter_2026_2027.json database/hwamyeong_winter_2026_2027.json database/samrak_soccer_winter_2026_2027.json database/hwamyeong_soccer_winter_2026_2027.json database/hwamyeong_night_soccer_winter_2026_2027.json database/haeundae_soccer_2026h2.json
 ```
 
 `database/.gitignore`는 생성된 SQLite 파일과 Python 임시 파일을 새로 커밋하지 않도록 합니다. **이미 Git에 올라간 `facilities.sqlite3`와 중복 `README_database_content.md`는 GitHub 브랜치에서 별도로 삭제 커밋해야 합니다.**

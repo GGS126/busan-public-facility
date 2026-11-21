@@ -57,6 +57,7 @@ def compare_sqlite(
             reviews.append(ReviewItem(code="rule_missing", target="base", source_id=source_id,
                                       reason="명절 휴장 여부를 확인해 주세요."))
         elif closure["is_closed"]:
+            invalid_time = True
             notes = " / ".join(dict.fromkeys(item["note"] for item in closure["matched_rules"]))
             reviews.append(ReviewItem(code="rule_not_in_effect", target="base", source_id=source_id,
                                       reason=f"정기 휴장일입니다. {notes}"))

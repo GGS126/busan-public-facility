@@ -45,7 +45,8 @@ def parse_query(
     query = unicodedata.normalize("NFKC", query).strip()
     if not query:
         return _result("need_more", {}, list(REQUIRED_FIELDS))
-    if SENSITIVE_PATTERN.search(query):
+    privacy_query = re.sub(r"(?<!\d)(?:\d{4}[-./])?\d{1,2}(?:[-./]|월\s*)\d{1,2}(?:일)?(?=\s)", "", query)
+    if SENSITIVE_PATTERN.search(privacy_query):
         return {**_result("llm_failed", {}), "message": "개인정보를 빼고 다시 입력하거나 직접 입력해 주세요."}
 
     try:

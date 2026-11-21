@@ -17,7 +17,7 @@
     "title": "부산광역시 통합예약 - 삼락생태공원 테니스장 동절기",
     "checked_on": "2026-11-10",
     "verification_level": "user_transcribed_official",
-    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06). 공휴일 요금은 낙동강관리본부 공식 이용안내(https://www.busan.go.kr/nakdong/ndreservation, 2026-11-10 확인)의 테니스장 1면/2시간 평일 6,000원, 주말 및 공휴일 9,000원 표를 추가 근거로 확인.",
+    "note": "부산광역시 통합예약 상세정보를 사용자가 확인하여 제공한 동절기 규정(2026-11-06). 공휴일 요금은 낙동강관리본부 공식 이용안내(https://www.busan.go.kr/nakdong/ndreservation, 2026-11-10 확인)의 테니스장 1면/2시간 평일 6,000원, 주말 및 공휴일 9,000원 표를 추가 근거로 확인. 추가로 사용자가 제공한 예약 상세정보에는 실시간 인터넷 예약 시 시설 이용료를 납부해야 예약이 확정된다고 명시되어 있으나, 조명료의 결제 장소·시점은 별도로 명시되어 있지 않아 선택 조명 payment_type은 null로 유지.",
     "license": null
   },
   "rule_set": {
@@ -182,11 +182,12 @@
       "rounding_policy": "round_up",
       "applies_from": "08:00",
       "applies_to": "17:00",
-      "note": "동절기 운영시간 08:00~17:00 중 선택 조명 사용. 조명료는 1시간당 10,000원, 1시간 미만은 1시간으로 올림.",
+      "note": "동절기 운영시간 08:00~17:00 중 선택 조명 사용. 조명료는 1시간당 10,000원, 1시간 미만은 1시간으로 올림. 조명료의 결제 장소·시점은 해당 안내문에 명시되지 않아 미확인.",
       "name": "조명시설",
       "hour_price": 10000,
       "extra_unit_minutes": null,
-      "extra_unit_price": null
+      "extra_unit_price": null,
+      "payment_type": null
     }
   ],
   "closure_rules": [

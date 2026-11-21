@@ -45,7 +45,7 @@ function NaturalLanguageInput({ onApply, onDirectInput, options: catalog }) {
         start_time: parsed.start_time ?? '',
         end_time: parsed.end_time ?? '',
         headcount: parsed.headcount,
-        discount_types: parsed.discount_types ?? [],
+        discount_types: parsed.discount_types,
       })
       setMessage(questions.join(' '))
       setShowConfirm(true)
@@ -69,6 +69,10 @@ function NaturalLanguageInput({ onApply, onDirectInput, options: catalog }) {
     const sport = options.sports.find(({ code }) => code === conditions.sport)
     if (!sport || !conditions.districts) {
       setMessage('이용 종목과 지역을 선택해 주세요.')
+      return
+    }
+    if (!Array.isArray(conditions.discount_types)) {
+      setMessage("감면 조건을 확인해 주세요. 감면 없음도 직접 선택할 수 있습니다.")
       return
     }
     if (!conditions.date) {
@@ -158,7 +162,17 @@ function NaturalLanguageInput({ onApply, onDirectInput, options: catalog }) {
           </p>
 
           {conditions.headcount != null && <p>추출된 이용 인원은 {conditions.headcount}명입니다.</p>}
-          {conditions.discount_types.length > 0 && (
+          {!Array.isArray(conditions.discount_types) && (
+            <div className="field">
+              <label htmlFor="ai-discount">감면 조건 확인</label>
+              <select id="ai-discount" value="" onChange={event => updateCondition('discount_types', event.target.value === 'none' ? [] : [event.target.value])}>
+                <option value="">감면 조건 선택</option>
+                <option value="none">감면 없음</option>
+                {options.discount_types.map(item => <option key={item.code} value={item.code}>{item.label}</option>)}
+              </select>
+            </div>
+          )}
+          {conditions.discount_types?.length > 0 && (
             <p>추출된 감면 유형은 {conditions.discount_types.map((code) =>
               options.discount_types.find((option) => option.code === code)?.label ?? code
             ).join(', ')}입니다. 이용 조건 입력 화면에서 감면 유형과 대상 인원을 선택해 주세요.</p>

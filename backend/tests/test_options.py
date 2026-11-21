@@ -62,8 +62,8 @@ def test_sqlite_options_match_facility_search(monkeypatch, tmp_path):
     day = (datetime.now(KST).date() + timedelta(days=1)).isoformat()
     conditions = {"sport": "tennis", "date": day, "source": "direct"}
     options = client.get("/api/facilities/options").json()
-    assert options["sports"] == [{"code": "tennis", "label": "테니스"}]
-    assert options["districts"] == ["사상구", "서구", "해운대구"]
+    assert options["sports"] == [{"code": "soccer", "label": "축구"}, {"code": "tennis", "label": "테니스"}]
+    assert options["districts"] == ["북구", "사상구", "서구", "해운대구"]
 
     response = client.post("/api/facilities/search", json={"conditions": conditions | {"districts": ["서구"]}})
     assert response.status_code == 200
@@ -71,7 +71,7 @@ def test_sqlite_options_match_facility_search(monkeypatch, tmp_path):
 
     response = client.post("/api/facilities/search", json={"conditions": conditions})
     assert response.status_code == 200
-    assert len(response.json()["results"]) == 3
+    assert len(response.json()["results"]) == 4
     response = client.post("/api/facilities/search", json={"conditions": conditions | {
         "districts": ["사상구"], "date": "2099-01-01",
     }})
@@ -82,7 +82,7 @@ def test_sqlite_options_match_facility_search(monkeypatch, tmp_path):
     assert response.json()["error"]["fields"][0]["code"] == "invalid_time_range"
 
     response = client.post("/api/facilities/search", json={"conditions": conditions | {"districts": ["동구"]}})
-    assert response.json()["alternatives"] == {"districts": ["사상구", "서구", "해운대구"]}
+    assert response.json()["alternatives"] == {"districts": ["북구", "사상구", "서구", "해운대구"]}
 
 
 def test_values_are_merged_without_duplicates_in_stable_order():

@@ -6,25 +6,21 @@ from contextlib import closing
 from datetime import date
 from functools import cache, lru_cache
 from importlib import import_module
-from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 from app.models import HolidayCalendar, Option, OptionsResponse
 from app.repository import HOLIDAYS_PATH
 
 DB_PATH = Path(__file__).resolve().parents[2] / "database" / "facilities.sqlite3"
-SPORT_LABELS = {"tennis": "테니스"}
+SPORT_LABELS = {"tennis": "테니스", "soccer": "축구", "futsal": "풋살"}
 
 
 @cache
 def load_query_api(path: Path = DB_PATH.with_name("query_api.py")):
-    package_name = "_facility_database"
-    spec = spec_from_file_location(package_name, path.parent / "__init__.py")
-    if spec is None or spec.loader is None:
-        raise ImportError("SQLite query module is unavailable")
-    package = module_from_spec(spec)
-    sys.modules.setdefault(package_name, package)
-    return import_module(f"{package_name}.query_api")
+    root = str(DB_PATH.parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return import_module("database.query_api")
 
 
 @cache
@@ -92,9 +88,8 @@ def _read_search_time_policies(path, use_date, _version):
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """SELECT f.id, f.open_time, f.close_time, t.selection_type, t.available_start_time,
-                      t.available_end_time, t.min_minutes, t.max_minutes,
-                      EXISTS(SELECT 1 FROM rule_sets h JOIN time_selection_policies p ON p.rule_set_id = h.id
-                             WHERE h.facility_id = f.id AND p.selection_type = 'fixed_slot') AS fixed_slot_known
+                      t.available_end_time, t.min_minutes, t.max_minutes, t.step_minutes, t.daily_limit_minutes,
+                      t.rule_set_id
                FROM facilities f
                LEFT JOIN rule_sets r ON r.facility_id = f.id AND ? BETWEEN r.effective_from AND r.effective_to
                LEFT JOIN time_selection_policies t ON t.rule_set_id = r.id""",
@@ -103,5 +98,8 @@ def _read_search_time_policies(path, use_date, _version):
     policies = {}
     for row in rows:
         facility_id = row["id"]
-        policies[facility_id] = None if facility_id in policies else dict(row)
+        if facility_id in policies:
+            policies[facility_id] = None
+        else:
+            policies[facility_id] = dict(row) if row["selection_type"] is not None else None
     return policies

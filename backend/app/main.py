@@ -120,27 +120,35 @@ def search_facilities(request: FacilitySearchRequest):
         if conditions.districts and facility["district"] not in conditions.districts:
             continue
         slots = fixed_slots.get(facility["facility_id"])
+        policy = time_policies.get(facility["facility_id"])
         closure = closures.get(facility["facility_id"], {"status": "no_active_rule_set", "is_closed": None})
-        if closure["is_closed"]:
+        if closure["is_closed"] or policy is None:
             slots = None
         time_status = "not_eligible" if closure["is_closed"] else "unknown"
-        if closure["is_closed"] is False and slots and conditions.start_time:
+        if closure["is_closed"] is False and slots and policy is not None and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
         policy = time_policies.get(facility["facility_id"])
-        if policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
+        if closure["is_closed"] is False and policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
             start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
-            opens = policy["available_start_time"] or policy["open_time"]
-            closes = policy["available_end_time"] or policy["close_time"]
+            opens = policy["available_start_time"] or "00:00"
+            closes = policy["available_end_time"] or "24:00"
             minimum, maximum = policy["min_minutes"], policy["max_minutes"]
             if ((opens and start < to_minutes(opens)) or (closes and end > to_minutes(closes))
                     or (minimum is not None and end - start < minimum)
-                    or (maximum is not None and end - start > maximum)):
+                    or (maximum is not None and end - start > maximum)
+                    or (policy["daily_limit_minutes"] is not None and end - start > policy["daily_limit_minutes"])
+                    or (policy["step_minutes"] is not None
+                        and (start - to_minutes(opens or "00:00")) % policy["step_minutes"])):
                 time_status = "not_eligible"
+            else:
+                time_status = "eligible"
         results.append({
             **facility,
-            "slot_status": "no_slots" if not slots and policy and policy["fixed_slot_known"] else None,
-            "time_options": {"selection": "fixed_slot", "slots": slots} if slots else None,
+            "slot_status": "no_slots" if not slots and policy is None else None,
+            "time_options": {"selection": "fixed_slot", "slots": slots} if slots else (
+                {"selection": "flexible", **policy} if not closure["is_closed"] and policy and policy["selection_type"] == "flexible_interval" else None
+            ),
             "time_check": {"status": time_status},
             "closure": closure,
         })
@@ -189,12 +197,10 @@ def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
     )
 
 
-DEFAULT_GEMINI_CATALOG_KEY = gemini_catalog_key(available_options)
-
-
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
     limited = False
 
+    deadline = monotonic() + 30
     def extract(query, today):
         nonlocal limited
         key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -205,13 +211,16 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             provider = gemini_provider(
                 key,
                 os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
-                *(DEFAULT_GEMINI_CATALOG_KEY if catalog is available_options else gemini_catalog_key(catalog)),
+                *gemini_catalog_key(catalog),
             )
         except ValueError:
             logger.warning("Gemini extraction failed: code=invalid_model_configuration")
             return None
 
         for attempt in (1, 2):
+            if monotonic() >= deadline:
+                logger.warning("Gemini extraction failed: code=request_deadline")
+                break
             if not gemini_slots.acquire(blocking=False):
                 logger.warning("Gemini extraction failed: code=rate_limited limit=concurrency")
                 limited = True
@@ -221,7 +230,7 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                     logger.warning("Gemini extraction failed: code=rate_limited limit=per_minute")
                     limited = True
                     return None
-                return provider(query, today)
+                return provider(query, today, deadline=deadline)
             except GeminiResponseError as error:
                 logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
                                type(error).__name__, error.code, attempt)
@@ -229,7 +238,10 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                     break
             except GeminiHTTPError as error:
                 logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
-                break
+                if error.status not in {429, 500, 502, 503, 504}:
+                    break
+            except (TimeoutError, ConnectionError) as error:
+                logger.warning("Gemini extraction failed: type=%s attempt=%d", type(error).__name__, attempt)
             except Exception as error:
                 # Exception messages may include request text or credentials.
                 logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
@@ -241,6 +253,18 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
     result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
     if limited:
         result["message"] = "자연어 요청이 많습니다. 잠시 후 다시 시도하거나 직접 입력해 주세요."
+    extracted = result["conditions"]
+    invalid = []
+    if extracted.get("sport") and extracted["sport"] not in {item.code for item in catalog.sports}:
+        invalid.append("sport")
+    if "discount_types" in extracted and not set(extracted["discount_types"]) <= {item.code for item in catalog.discount_types}:
+        invalid.append("discount_types")
+    for field in invalid:
+        extracted.pop(field)
+        if field not in result["missing_fields"]:
+            result["missing_fields"].append(field)
+        result["questions"][field] = "선택 가능한 항목으로 다시 확인해 주세요."
+        result["status"] = "need_more"
     if result["status"] == "llm_failed":
         result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
     return result
@@ -273,6 +297,8 @@ def compare(request: CompareRequest) -> CompareResponse:
         check_against_options(request.conditions, available_options)
     sqlite_facilities = {}
     closures = {}
+    if any(facility_id.startswith("busan_") for facility_id in sqlite_ids) and not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 DB를 생성한 뒤 다시 시도해 주세요.")
     if sqlite_ids and DB_PATH.is_file():
         catalog, options = read_catalog(DB_PATH)
         sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
