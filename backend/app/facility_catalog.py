@@ -8,7 +8,7 @@ from pathlib import Path
 from app.models import Option, OptionsResponse
 
 DB_PATH = Path(__file__).resolve().parents[2] / "database" / "facilities.sqlite3"
-SPORT_LABELS = {"tennis": "테니스"}
+SPORT_LABELS = {"tennis": "테니스", "soccer": "축구", "futsal": "풋살"}
 
 
 def read_catalog(path: Path) -> tuple[list[dict[str, str]], OptionsResponse]:
@@ -75,7 +75,7 @@ def _read_search_time_policies(path, use_date, _version):
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """SELECT f.id, f.open_time, f.close_time, t.selection_type, t.available_start_time,
-                      t.available_end_time, t.min_minutes, t.max_minutes,
+                      t.available_end_time, t.min_minutes, t.max_minutes, t.step_minutes, t.daily_limit_minutes,
                       EXISTS(SELECT 1 FROM rule_sets h JOIN time_selection_policies p ON p.rule_set_id = h.id
                              WHERE h.facility_id = f.id AND p.selection_type = 'fixed_slot') AS fixed_slot_known
                FROM facilities f
@@ -86,5 +86,8 @@ def _read_search_time_policies(path, use_date, _version):
     policies = {}
     for row in rows:
         facility_id = row["id"]
-        policies[facility_id] = None if facility_id in policies else dict(row)
+        if facility_id in policies:
+            policies[facility_id] = None
+        else:
+            policies[facility_id] = dict(row) if row["selection_type"] is not None else None
     return policies

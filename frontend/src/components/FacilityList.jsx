@@ -93,7 +93,15 @@ function FacilityList({
                         이용시간 선택
                       </label>
 
-                      {slots.length > 0 ? (
+                      {facility.time_options?.selection === 'flexible' ? (
+                        <div>
+                          <input aria-label="시설 이용 시작시간" type="time" value={selectedTime.split('|')[0] || ''}
+                            onChange={event => onTimeChange(facility.id, `${event.target.value}|${selectedTime.split('|')[1] || ''}`)} />
+                          <input aria-label="시설 이용 종료시간" type="time" value={selectedTime.split('|')[1] || ''}
+                            onChange={event => onTimeChange(facility.id, `${selectedTime.split('|')[0] || ''}|${event.target.value}`)} />
+                          <p>운영시간과 이용시간 제한을 확인한 뒤 비교해 주세요.</p>
+                        </div>
+                      ) : slots.length > 0 ? (
                         <select
                           id={`time-${facility.id}`}
                           value={selectedTime}
