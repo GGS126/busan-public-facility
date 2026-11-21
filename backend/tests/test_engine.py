@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from app.engine import calculate
-from app.models import Conditions, DiscountRule, FacilityRules, FeeRule, Source
+from app.models import Conditions, DiscountRule, FacilityRules, FeeRule, Holiday, HolidayCalendar, Source, TimePolicy
 
 SATURDAY = date(2026, 11, 7)
 MONDAY = date(2026, 11, 9)
@@ -44,12 +44,44 @@ def discount_rule(**overrides) -> DiscountRule:
     return DiscountRule(**(values | overrides))
 
 
-def facility(fee_rules=None, discount_rules=None, holidays=None) -> FacilityRules:
+def calendar(holidays=(), covered_from="2026-01-01", covered_to="2027-12-31") -> HolidayCalendar:
+    return HolidayCalendar(
+        covered_from=covered_from,
+        covered_to=covered_to,
+        holidays=[Holiday(date=day, name="가상 공휴일") for day in holidays],
+        source=Source(source_id="S-HOLIDAY", url="https://example.com", checked_at="2026-11-05", license="가상"),
+    )
+
+
+def time_policy(**overrides) -> TimePolicy:
+    values = dict(
+        policy_id="TIME",
+        sport="futsal",
+        selection="fixed_slot",
+        slots=[
+            {"start_time": "07:00", "end_time": "09:00"},
+            {"start_time": "13:00", "end_time": "14:00"},
+            {"start_time": "20:00", "end_time": "22:00"},
+        ],
+        effective_from="2026-10-01",
+        effective_to="2027-03-31",
+        source_id="S-01",
+    )
+    return TimePolicy(**(values | overrides))
+
+
+def flexible_policy(**overrides) -> TimePolicy:
+    values = dict(slots=[], selection="flexible", allowed_minutes=[60, 120], open_time="08:00", close_time="22:00")
+    return time_policy(**(values | overrides))
+
+
+def facility(fee_rules=None, discount_rules=None, holidays=(), holiday_calendar=None, time_policies=()) -> FacilityRules:
     return FacilityRules(
         facility_id="F",
         name="가상 시설",
         source_id="S-00",
-        holidays=holidays or [],
+        holiday_calendar=holiday_calendar or calendar(holidays),
+        time_policies=list(time_policies),
         fee_rules=[base_rule()] if fee_rules is None else fee_rules,
         discount_rules=discount_rules or [],
         sources=[
@@ -167,6 +199,91 @@ def test_holiday_rate_applied():
     result = calculate(facility(rules, holidays=[MONDAY]), conditions(day=MONDAY))
 
     assert amounts(result)["base"] == 60000
+
+
+def test_weekend_holiday_matches_weekend_rate():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=10000, day_types=["weekday"]),
+        base_rule(rule_id="WEEKEND", amount=30000, day_types=["weekend"]),
+    ]
+    result = calculate(facility(rules, holidays=[SATURDAY]), conditions(day=SATURDAY))
+
+    assert amounts(result)["base"] == 60000
+
+
+def test_day_outside_calendar_needs_review_when_holiday_changes_rate():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=10000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=30000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert_review(result, "base", "rule_missing")
+    assert result.review_items[0].reason == "이용일이 공휴일인지 확인할 수 없습니다."
+    assert result.review_items[0].source_id == "S-00"
+
+
+def test_day_outside_calendar_calculated_when_rate_is_same_every_day():
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert amounts(result)["base"] == 40000
+
+
+def test_day_outside_calendar_ignores_expired_holiday_rule():
+    rules = [
+        base_rule(rule_id="OLD_HOLIDAY", amount=30000, day_types=["holiday"], effective_to="2026-06-30"),
+        base_rule(rule_id="NEW", amount=20000),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert [item.rule_id for item in result.items] == ["NEW"]
+
+
+def test_day_outside_calendar_calculated_when_holiday_rate_has_same_amount():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=20000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=20000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+    assert result.total == 40000
+    assert [item.rule_id for item in result.items] == ["WEEKDAY"]
+
+
+def test_day_outside_calendar_needs_review_when_holiday_rate_cannot_be_calculated():
+    rules = [
+        base_rule(rule_id="WEEKDAY", amount=20000, day_types=["weekday"]),
+        base_rule(rule_id="HOLIDAY", amount=None, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY))
+
+    assert_review(result, "base", "rule_missing")
+    assert result.review_items[0].reason == "이용일이 공휴일인지 확인할 수 없습니다."
+
+
+def test_day_outside_calendar_needs_review_when_holiday_lighting_differs():
+    rules = [
+        base_rule(),
+        lighting_rule(rule_id="WEEKDAY_LIGHT", amount=5000, day_types=["weekday"]),
+        lighting_rule(rule_id="HOLIDAY_LIGHT", amount=8000, day_types=["holiday"]),
+    ]
+    outside = calendar(covered_from="2026-01-01", covered_to="2026-10-31")
+    result = calculate(facility(rules, holiday_calendar=outside), conditions(day=MONDAY, start="18:00", end="20:00"))
+
+    assert_review(result, "lighting", "rule_missing")
+
+
+def test_holiday_outside_covered_range_rejected():
+    with pytest.raises(ValueError, match="기간 밖의 공휴일"):
+        calendar(holidays=[date(2028, 1, 1)])
 
 
 def test_base_rate_changes_by_time_band_with_separate_items():
@@ -525,3 +642,96 @@ def test_same_input_gives_same_result():
     request = conditions(start="18:00", end="20:00", discounts=["multi_child"])
 
     assert calculate(rules, request) == calculate(rules, request)
+
+
+def assert_not_eligible(result, code, source_id="S-01"):
+    assert result.status == "not_eligible"
+    assert result.items == []
+    assert (result.total, result.payment_due, result.expected_refund, result.net_cost_after_refund) == (None,) * 4
+    assert [(item.target, item.code, item.source_id) for item in result.review_items] == [("time", code, source_id)]
+
+
+def test_fixed_slot_calculated_when_time_matches():
+    result = calculate(facility(time_policies=[time_policy()]), conditions(day=MONDAY, start="07:00", end="09:00"))
+
+    assert result.status == "calculated"
+    assert amounts(result)["base"] == 40000
+
+
+@pytest.mark.parametrize(("start", "end"), [("09:00", "10:00"), ("07:00", "08:00"), ("07:00", "14:00")])
+def test_time_outside_fixed_slots_not_eligible(start, end):
+    result = calculate(facility(time_policies=[time_policy()]), conditions(day=MONDAY, start=start, end=end))
+
+    assert_not_eligible(result, "slot_mismatch")
+    assert result.review_items[0].reason.endswith("07:00~09:00, 13:00~14:00, 20:00~22:00")
+
+
+@pytest.mark.parametrize(("start", "end"), [("10:00", "11:00"), ("10:30", "12:30")])
+def test_flexible_allowed_duration_calculated(start, end):
+    result = calculate(facility(time_policies=[flexible_policy()]), conditions(day=MONDAY, start=start, end=end))
+
+    assert result.status == "calculated"
+
+
+def test_flexible_duration_not_allowed():
+    result = calculate(facility(time_policies=[flexible_policy()]), conditions(day=MONDAY, start="10:00", end="13:00"))
+
+    assert_not_eligible(result, "duration_not_allowed")
+    assert result.review_items[0].reason == "이용 시간은 60분, 120분 중에서 선택할 수 있습니다."
+
+
+@pytest.mark.parametrize(("start", "end"), [("07:00", "09:00"), ("21:00", "23:00")])
+def test_outside_operating_hours_not_eligible(start, end):
+    result = calculate(facility(time_policies=[flexible_policy()]), conditions(day=MONDAY, start=start, end=end))
+
+    assert_not_eligible(result, "outside_hours")
+
+
+def test_time_check_skips_discount_and_fee_calculation():
+    rules = facility(discount_rules=[discount_rule()], time_policies=[time_policy()])
+    result = calculate(rules, conditions(day=MONDAY, start="09:00", end="10:00", discounts=["multi_child"]))
+
+    assert_not_eligible(result, "slot_mismatch")
+
+
+def test_policy_for_other_sport_ignored():
+    result = calculate(facility(time_policies=[time_policy(sport="tennis")]), conditions(day=MONDAY))
+
+    assert result.status == "calculated"
+
+
+def test_policy_not_in_effect_ignored():
+    # 동절기 회차는 여름 이용일에 적용하지 않는다. 이용시간 확인은 요금 규정 확인에 맡긴다.
+    policy = time_policy(effective_to="2026-10-31")
+    result = calculate(facility(time_policies=[policy]), conditions(day=MONDAY, start="09:00", end="10:00"))
+
+    assert result.status == "calculated"
+
+
+def test_conflicting_policies_need_review():
+    policies = [time_policy(), flexible_policy(policy_id="TIME-2")]
+    result = calculate(facility(time_policies=policies), conditions(day=MONDAY, start="07:00", end="09:00"))
+
+    assert result.status == "needs_review"
+    assert [(item.target, item.code) for item in result.review_items] == [("time", "rule_conflict")]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (dict(slots=[]), "slots가 필요"),
+        (dict(selection="flexible", slots=[]), "allowed_minutes가 필요"),
+        (dict(slots=[{"start_time": "09:00", "end_time": "09:00"}]), "종료 시간은 시작 시간보다"),
+        (dict(open_time="08:00"), "함께 입력"),
+        (dict(open_time="22:00", close_time="08:00"), "운영시간의 종료 시간은 시작 시간보다"),
+        (dict(open_time="09:00", close_time="09:00"), "운영시간의 종료 시간은 시작 시간보다"),
+    ],
+)
+def test_invalid_time_policy_rejected(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        time_policy(**overrides)
+
+
+def test_time_policy_source_must_be_registered():
+    with pytest.raises(ValueError, match="등록되지 않은 출처"):
+        facility(time_policies=[time_policy(source_id="S-99")])
