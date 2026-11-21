@@ -2,7 +2,9 @@
 
 import http.client
 import json
-import re
+import socket
+from threading import Timer
+from time import monotonic
 from datetime import date
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
@@ -54,9 +56,7 @@ class GeminiResponseError(ValueError):
 class GeminiExtractor:
     def __init__(self, api_key: str, *, sport_codes: dict[str, str], discount_codes: dict[str, str],
                  districts: list[str], model: str = DEFAULT_MODEL):
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model) or (
-            model.lower().startswith(("gemini-3-", "gemini-3.")) and model not in THINKING_LEVELS
-        ):
+        if model not in THINKING_LEVELS:
             raise ValueError("invalid_model_configuration")
         self.api_key = api_key
         self.model = model
@@ -74,7 +74,7 @@ class GeminiExtractor:
             } if discount_codes else {**PROPERTIES["discount_types"], "maxItems": 0},
         }
 
-    def __call__(self, query: str, today: date) -> dict:
+    def __call__(self, query: str, today: date, *, deadline: float | None = None) -> dict:
         context = {
             "today_kst": today.isoformat(),
             "sport_codes": self.sport_codes,
@@ -95,7 +95,21 @@ class GeminiExtractor:
         thinking_level = THINKING_LEVELS.get(self.model)
         if thinking_level is not None:
             payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
-        connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=5)
+        remaining = 30 if deadline is None else deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("request_deadline")
+        connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=remaining)
+        def abort_request():
+            if connection.sock is not None:
+                try:
+                    connection.sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            connection.close()
+
+        timer = Timer(remaining, abort_request)
+        timer.daemon = True
+        timer.start()
         try:
             connection.request("POST", f"/v1beta/models/{self.model}:generateContent",
                                json.dumps(payload).encode("utf-8"),
@@ -108,7 +122,10 @@ class GeminiExtractor:
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
                 raise GeminiResponseError("invalid_api_json") from error
         finally:
+            timer.cancel()
             connection.close()
+        if deadline is not None and monotonic() >= deadline:
+            raise TimeoutError("request_deadline")
 
         candidates = data.get("candidates") if isinstance(data, dict) else None
         if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], dict):
