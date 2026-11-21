@@ -94,8 +94,8 @@ def test_unconfigured_gemini_3_model_is_rejected():
 
 
 @pytest.mark.parametrize(("errors", "diagnostic"), [
-    ([GeminiHTTPError(429)], "status=429"),
-    ([TimeoutError("private details")], "type=TimeoutError"),
+    ([GeminiHTTPError(429)] * 2, "status=429"),
+    ([TimeoutError("private details")] * 2, "type=TimeoutError"),
     ([GeminiResponseError("invalid_output_json")] * 2, "code=invalid_output_json"),
 ])
 def test_api_logs_safe_diagnostics(monkeypatch, caplog, errors, diagnostic):
@@ -117,7 +117,8 @@ def test_missing_api_key_is_logged(monkeypatch, caplog):
     assert "code=missing_api_key" in caplog.text
 
 
-def test_api_keeps_partial_conditions_in_response(monkeypatch):
+def test_api_keeps_partial_conditions_in_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "missing.sqlite3")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     tomorrow = (datetime.now(main.KST).date() + timedelta(days=1)).isoformat()
     provider = Mock(return_value=CONDITIONS | {"date": tomorrow, "discount_types": None})
@@ -160,7 +161,7 @@ def test_long_raw_query_returns_llm_failed():
 
 @pytest.mark.parametrize("query", [
     "내일 1800-2000 풋살", "내일 1600 1800 테니스", "11월 20일 1500-1700 4명",
-    "11.02 1800-2000 풋살", "11/02 1900 2100 테니스", "2026.11.02 1800-2000",
+    "11.02 1800-2000 풋살", "11/02 1900 2100 테니스", "2026.11.02 1800-2000", "2026-11-02 1800-2000 풋살", "11-02 1800-2000", "11월 02 1800-2000",
 ])
 def test_compact_time_range_reaches_extractor(query):
     extract = Mock(return_value=CONDITIONS)

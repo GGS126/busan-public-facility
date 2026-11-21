@@ -27,7 +27,7 @@ async function requestAPI(path, options = {}, timeout = REQUEST_TIMEOUT) {
     })
 
     if (!response.ok) {
-      if (response.status >= 400 && response.status < 500) {
+      if (response.status >= 400) {
         const payload = await response.json().catch(() => null)
         const detail = payload?.error?.fields?.[0]?.message ?? payload?.error?.message
         if (typeof detail === 'string' && detail) throw new Error(detail)
@@ -121,7 +121,7 @@ export function getSearchOptions() {
     return Promise.resolve({
       sports: [{ code: 'tennis', label: '테니스' }],
       districts: [...new Set(facilities.map(facility => facility.district))],
-      discount_types: [],
+      discount_types: [{ code: "disabled", label: "장애인" }, { code: "multi_child", label: "다자녀 가정" }],
     })
   }
   return requestAPI('/api/facilities/options')
