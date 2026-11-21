@@ -1,8 +1,8 @@
-"""Read the SQLite catalog shared by facility search and AI extraction."""
+"""SQLite 시설 카탈로그와 시간 정책을 DB 파일 버전별로 캐시한다."""
 
-import sqlite3
-from contextlib import closing
-from functools import lru_cache
+import sys
+from functools import cache, lru_cache
+from importlib import import_module
 from pathlib import Path
 
 from app.models import Option, OptionsResponse
@@ -11,83 +11,48 @@ DB_PATH = Path(__file__).resolve().parents[2] / "database" / "facilities.sqlite3
 SPORT_LABELS = {"tennis": "테니스", "soccer": "축구", "futsal": "풋살"}
 
 
-def read_catalog(path: Path) -> tuple[list[dict[str, str]], OptionsResponse]:
-    return _read_catalog(path, _file_version(path))
+@cache
+def load_query_api():
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    return import_module("database.query_api")
 
 
-def _file_version(path: Path) -> tuple[int, int, int]:
+def _file_version(path: Path):
     stat = path.stat()
     return stat.st_ino, stat.st_mtime_ns, stat.st_size
 
 
-@lru_cache(maxsize=4)
-def _read_catalog(path, _file_version):
-    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
-        rows = connection.execute(
-            "SELECT id, name, facility_type, address, booking_url, district FROM facilities ORDER BY name"
-        ).fetchall()
-        discounts = connection.execute("SELECT id, name FROM discount_categories ORDER BY id").fetchall()
+def read_catalog(path: Path):
+    return _read_catalog(path, _file_version(path))
 
-    facilities = []
-    for facility_id, name, sport, address, booking_url, district in rows:
-        facilities.append({
-            "facility_id": facility_id,
-            "name": name,
-            "sport": sport,
-            "district": district,
-            "address": address,
-            "booking_url": booking_url,
-        })
-    sports = sorted({facility["sport"] for facility in facilities})
+
+@lru_cache(maxsize=4)
+def _read_catalog(path, _version):
+    query = load_query_api()
+    facilities = [
+        {"facility_id": row["id"], "name": row["name"], "sport": row["facility_type"],
+         "district": row["district"], "address": row["address"], "booking_url": row["booking_url"]}
+        for row in query.facilities(path)
+    ]
+    discounts = query.fetch(path, "SELECT id, name FROM discount_categories ORDER BY id")
     return facilities, OptionsResponse(
-        sports=[Option(code=code, label=SPORT_LABELS.get(code, code)) for code in sports],
+        sports=[Option(code=code, label=SPORT_LABELS.get(code, code))
+                for code in sorted({facility["sport"] for facility in facilities})],
         districts=sorted({facility["district"] for facility in facilities}),
-        discount_types=[Option(code=code, label=label) for code, label in discounts],
+        discount_types=[Option(code=row["id"], label=row["name"]) for row in discounts],
     )
 
 
-def read_fixed_slots(path: Path, use_date: str) -> dict[str, list[dict[str, str]]]:
-    return _read_fixed_slots(path, use_date, _file_version(path))
-
-
 @lru_cache(maxsize=32)
-def _read_fixed_slots(path, use_date, _version):
-    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
-        rows = connection.execute(
-            """SELECT r.facility_id, p.start_time, p.end_time
-               FROM pricing_rules p JOIN rule_sets r ON r.id = p.rule_set_id
-               WHERE p.selection_type = 'fixed_slot' AND ? BETWEEN r.effective_from AND r.effective_to
-               ORDER BY r.facility_id, p.slot_no""",
-            (use_date,),
-        ).fetchall()
-    slots = {}
-    for facility_id, start_time, end_time in rows:
-        slots.setdefault(facility_id, []).append({"start_time": start_time, "end_time": end_time})
-    return slots
-
-def read_search_time_policies(path: Path, use_date: str) -> dict[str, dict]:
-    return _read_search_time_policies(path, use_date, _file_version(path))
+def _time_data(path, use_date, _version):
+    return load_query_api().search_time_data(path, use_date)
 
 
-@lru_cache(maxsize=32)
-def _read_search_time_policies(path, use_date, _version):
-    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
-        connection.row_factory = sqlite3.Row
-        rows = connection.execute(
-            """SELECT f.id, f.open_time, f.close_time, t.selection_type, t.available_start_time,
-                      t.available_end_time, t.min_minutes, t.max_minutes, t.step_minutes, t.daily_limit_minutes,
-                      EXISTS(SELECT 1 FROM rule_sets h JOIN time_selection_policies p ON p.rule_set_id = h.id
-                             WHERE h.facility_id = f.id AND p.selection_type = 'fixed_slot') AS fixed_slot_known
-               FROM facilities f
-               LEFT JOIN rule_sets r ON r.facility_id = f.id AND ? BETWEEN r.effective_from AND r.effective_to
-               LEFT JOIN time_selection_policies t ON t.rule_set_id = r.id""",
-            (use_date,),
-        ).fetchall()
-    policies = {}
-    for row in rows:
-        facility_id = row["id"]
-        if facility_id in policies:
-            policies[facility_id] = None
-        else:
-            policies[facility_id] = dict(row) if row["selection_type"] is not None else None
-    return policies
+def read_fixed_slots(path: Path, use_date: str):
+    return _time_data(path, use_date, _file_version(path))[1]
+
+
+def read_search_time_policies(path: Path, use_date: str):
+    return _time_data(path, use_date, _file_version(path))[0]

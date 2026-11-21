@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots, read_search_time_policies
+from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots, read_search_time_policies, load_query_api
 from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -127,17 +127,10 @@ def search_facilities(request: FacilitySearchRequest):
             time_status = "eligible" if selected in slots else "not_eligible"
         policy = time_policies.get(facility["facility_id"])
         if policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
-            start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
-            opens = policy["available_start_time"] or "00:00"
-            closes = policy["available_end_time"] or "24:00"
-            minimum, maximum = policy["min_minutes"], policy["max_minutes"]
-            if ((opens and start < to_minutes(opens)) or (closes and end > to_minutes(closes))
-                    or (minimum is not None and end - start < minimum)
-                    or (maximum is not None and end - start > maximum)
-                    or (policy["daily_limit_minutes"] is not None and end - start > policy["daily_limit_minutes"])
-                    or (policy["step_minutes"] is not None
-                        and (start - to_minutes(opens or "00:00")) % policy["step_minutes"])):
-                time_status = "not_eligible"
+            allowed = load_query_api().time_policy_allows(
+                policy, to_minutes(conditions.start_time), to_minutes(conditions.end_time),
+            )
+            time_status = "eligible" if allowed else "not_eligible"
         results.append({
             **facility,
             "slot_status": "no_slots" if not slots and policy is None else None,
