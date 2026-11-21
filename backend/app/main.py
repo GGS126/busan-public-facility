@@ -1,4 +1,10 @@
 import logging
+import os
+from collections import deque
+from datetime import datetime
+from functools import lru_cache
+from threading import BoundedSemaphore, Lock
+from time import monotonic
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -6,8 +12,12 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse, Conditions, OptionsResponse
+from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.models import (
+    KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest, QueryParseResponse,
+)
 from app.options import build_options
+from app.query_parser import parse_query
 from app.repository import load_rule_data
 
 logger = logging.getLogger(__name__)
@@ -74,6 +84,108 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
 @app.get("/api/options", response_model=OptionsResponse)
 def options() -> OptionsResponse:
     return available_options
+
+
+@app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
+def parse_natural_language(request: QueryParseRequest) -> dict:
+    return parse_with_options(request, available_options)
+
+
+gemini_slots = BoundedSemaphore(4)
+gemini_call_lock = Lock()
+gemini_calls: deque[float] = deque()
+
+
+def reserve_gemini_call() -> bool:
+    with gemini_call_lock:
+        now = monotonic()
+        while gemini_calls and now - gemini_calls[0] >= 60:
+            gemini_calls.popleft()
+        if len(gemini_calls) >= 15:
+            return False
+        gemini_calls.append(now)
+        return True
+
+
+@lru_cache(maxsize=1)
+def gemini_provider(key, model, sports, discounts, districts):
+    return GeminiExtractor(
+        key, model=model, sport_codes=dict(sports), discount_codes=dict(discounts), districts=list(districts),
+    )
+
+
+def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
+    return (
+        tuple((option.code, option.label) for option in catalog.sports),
+        tuple((option.code, option.label) for option in catalog.discount_types),
+        tuple(catalog.districts),
+    )
+
+
+def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
+    deadline = monotonic() + 30
+    def extract(query, today):
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            logger.warning("Gemini extraction failed: code=missing_api_key")
+            return None
+        try:
+            provider = gemini_provider(
+                key,
+                os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
+                *gemini_catalog_key(catalog),
+            )
+        except ValueError:
+            logger.warning("Gemini extraction failed: code=invalid_model_configuration")
+            return None
+
+        for attempt in (1, 2):
+            if monotonic() >= deadline:
+                logger.warning("Gemini extraction failed: code=request_deadline")
+                break
+            if not gemini_slots.acquire(blocking=False):
+                logger.warning("Gemini extraction failed: code=rate_limited limit=concurrency")
+                return None
+            try:
+                if not reserve_gemini_call():
+                    logger.warning("Gemini extraction failed: code=rate_limited limit=per_minute")
+                    return None
+                return provider(query, today, deadline=deadline)
+            except GeminiResponseError as error:
+                logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
+                               type(error).__name__, error.code, attempt)
+                if error.code not in {"invalid_output_json", "invalid_api_json", "unexpected_extraction_fields"}:
+                    break
+            except GeminiHTTPError as error:
+                logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
+                if error.status not in {429, 500, 502, 503, 504}:
+                    break
+            except (TimeoutError, ConnectionError) as error:
+                logger.warning("Gemini extraction failed: type=%s attempt=%d", type(error).__name__, attempt)
+            except Exception as error:
+                # Exception messages may include request text or credentials.
+                logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
+                break
+            finally:
+                gemini_slots.release()
+        return None
+
+    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
+    extracted = result["conditions"]
+    invalid = []
+    if extracted.get("sport") and extracted["sport"] not in {item.code for item in catalog.sports}:
+        invalid.append("sport")
+    if "discount_types" in extracted and not set(extracted["discount_types"]) <= {item.code for item in catalog.discount_types}:
+        invalid.append("discount_types")
+    for field in invalid:
+        extracted.pop(field)
+        if field not in result["missing_fields"]:
+            result["missing_fields"].append(field)
+        result["questions"][field] = "선택 가능한 항목으로 다시 확인해 주세요."
+        result["status"] = "need_more"
+    if result["status"] == "llm_failed":
+        result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
+    return result
 
 
 def check_against_options(conditions: Conditions) -> None:
