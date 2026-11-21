@@ -1,13 +1,4 @@
 
-const discounts = [
-  ['none', '감면 없음'],
-  ['disabled', '장애인'],
-  ['multi_child', '다자녀 가정'],
-  ['low_income', '기초생활수급자'],
-  ['national_merit', '국가유공자'],
-  ['independence_merit', '독립유공자'],
-]
-
 // 30분 단위 이용시간 목록 생성
 const timeOptions = Array.from({ length: 48 }, (_, index) => {
   const hour = String(Math.floor(index / 2)).padStart(2, '0')
@@ -16,8 +7,18 @@ const timeOptions = Array.from({ length: 48 }, (_, index) => {
   return `${hour}:${minute}`
 })
 
+function withSelectedTime(time) {
+  if (!time || time === '24:00' || timeOptions.includes(time)) return timeOptions
+  return [...timeOptions, time].sort()
+}
+
 function SearchForm({
   sport,
+  options,
+  optionsError,
+  onRetryOptions,
+  selectedDistricts,
+  selectedDiscounts,
   setSport,
   district,
   setDistrict,
@@ -65,7 +66,12 @@ function SearchForm({
             value={sport}
             onChange={(e) => update(setSport, e.target.value)}
           >
-            <option value="tennis">테니스</option>
+            {!options?.sports.some(({ code }) => code === sport) && (
+              <option value={sport}>{sport || '이용 종목 선택'}</option>
+            )}
+            {options?.sports.map(({ code, label }) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
           </select>
         </div>
 
@@ -77,9 +83,10 @@ function SearchForm({
             onChange={(e) => update(setDistrict, e.target.value)}
           >
             <option value="전체">부산 전체</option>
-            <option value="해운대구">해운대구</option>
-            <option value="사상구">사상구</option>
-            <option value="서구">서구</option>
+            {selectedDistricts.length > 1 && <option value="multiple">{selectedDistricts.join(", ")}</option>}
+            {options?.districts.map(value => (
+              <option key={value} value={value}>{value}</option>
+            ))}
           </select>
         </div>
 
@@ -101,7 +108,7 @@ function SearchForm({
             onChange={(e) => update(setStartTime, e.target.value)}
           >
             <option value="">시작시간 선택</option>
-            {timeOptions.map((time) => (
+            {withSelectedTime(startTime).map((time) => (
               <option key={time} value={time}>
                 {time}
               </option>
@@ -117,7 +124,7 @@ function SearchForm({
             onChange={(e) => update(setEndTime, e.target.value)}
           >
             <option value="">종료시간 선택</option>
-            {timeOptions
+            {withSelectedTime(endTime)
               .filter((time) => !startTime || time > startTime)
               .concat('24:00')
               .map((time) => (
@@ -150,7 +157,11 @@ function SearchForm({
               clearResult()
             }}
           >
-            {discounts.map(([value, label]) => (
+            <option value="none">감면 없음</option>
+            {selectedDiscounts.length > 1 && (
+              <option value="multiple">{selectedDiscounts.map(code => options?.discount_types?.find(item => item.code === code)?.label ?? code).join(', ')}</option>
+            )}
+            {options?.discount_types?.map(({ code: value, label }) => (
               <option key={value} value={value}>
                 {label}
               </option>
@@ -175,6 +186,9 @@ function SearchForm({
         )}
       </div>
 
+      {optionsError && (
+        <p role="alert">{optionsError} <button type="button" onClick={onRetryOptions}>다시 불러오기</button></p>
+      )}
       {error && <p className="error-message">{error}</p>}
 
       <button
