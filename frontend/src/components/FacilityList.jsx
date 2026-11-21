@@ -75,7 +75,7 @@ function FacilityList({
                   <h3>{facility.name}</h3>
                   <p>{facility.address}</p>
                   {facility.time_check?.status === 'not_eligible' && (
-                    <p>희망 시간과 일치하는 회차가 없습니다. 다른 회차를 선택해 주세요.</p>
+                    <p>희망 시간이 시설의 이용시간 규정과 맞지 않습니다. 시간을 다시 확인해 주세요.</p>
                   )}
 
                   <label className="facility-check">

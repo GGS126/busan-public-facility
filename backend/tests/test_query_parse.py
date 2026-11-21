@@ -145,11 +145,11 @@ def test_landline_is_blocked_before_extraction(phone):
     extract.assert_not_called()
 
 
-def test_expanded_normalized_query_is_blocked():
-    extract = Mock()
-    result = parse_query("\ufdfa" * 500, today=TODAY, extract=extract)
-    assert result["status"] == "llm_failed"
-    extract.assert_not_called()
+def test_input_limit_counts_original_characters():
+    extract = Mock(return_value=CONDITIONS)
+    result = parse_query("㎞" * 500, today=TODAY, extract=extract)
+    assert result["status"] == "ok"
+    extract.assert_called_once_with("km" * 500, TODAY)
 
 
 def test_long_raw_query_returns_llm_failed():

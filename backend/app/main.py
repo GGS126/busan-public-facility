@@ -119,6 +119,8 @@ def search_facilities(request: FacilitySearchRequest):
         if conditions.districts and facility["district"] not in conditions.districts:
             continue
         slots = fixed_slots.get(facility["facility_id"])
+        if time_policies.get(facility["facility_id"]) is None:
+            slots = None
         time_status = "unknown"
         policy = time_policies.get(facility["facility_id"])
         if slots and policy is not None and conditions.start_time:
@@ -137,6 +139,8 @@ def search_facilities(request: FacilitySearchRequest):
                     or (policy["step_minutes"] is not None
                         and (start - to_minutes(opens or "00:00")) % policy["step_minutes"])):
                 time_status = "not_eligible"
+            else:
+                time_status = "eligible"
         results.append({
             **facility,
             "slot_status": "no_slots" if not slots and policy is None else None,
@@ -289,6 +293,8 @@ def compare(request: CompareRequest) -> CompareResponse:
     if sample_ids:
         check_against_options(request.conditions, available_options)
     sqlite_facilities = {}
+    if sqlite_ids and not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 DB를 생성한 뒤 다시 시도해 주세요.")
     if sqlite_ids and DB_PATH.is_file():
         catalog, options = read_catalog(DB_PATH)
         sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
