@@ -64,7 +64,7 @@ def test_expired_rule_source_is_not_displayed(sqlite_db, gudeok):
 ])
 def test_sqlite_compare_handles_invalid_options_and_conflicts(sqlite_db, gudeok, monkeypatch, overrides, code):
     monkeypatch.setattr(main, "DB_PATH", sqlite_db)
-    query = load_query_api(DB_PATH.with_name("query_api.py"))
+    query = load_query_api()
     def conflicting_quote(*args):
         raise ValueError("중복된 요금 규정")
     monkeypatch.setattr(query, "quote", conflicting_quote)
@@ -103,3 +103,14 @@ def test_gudeok_rejects_duration_over_limit(sqlite_db, gudeok):
     ))
     assert result.fee.status == "not_eligible"
     assert result.fee.review_items[0].code == "duration_not_allowed"
+
+
+def test_sqlite_compare_uses_one_read_connection(sqlite_db, gudeok):
+    from unittest.mock import patch
+    query = load_query_api()
+    with patch.object(query.sqlite3, "connect", wraps=query.sqlite3.connect) as connect:
+        result = compare_sqlite(sqlite_db, gudeok, Conditions(
+            sport="tennis", date="2026-11-30", start_time="10:00", end_time="12:00", source="direct",
+        ))
+    assert result.fee.status == "calculated"
+    assert connect.call_count == 1

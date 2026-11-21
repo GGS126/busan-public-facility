@@ -1,25 +1,11 @@
 """Adapt the SQLite quote to the comparison response used by the web UI."""
 
-import sys
 from functools import cache
-from importlib import import_module
-from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from app.facility_catalog import DB_PATH
+from app.facility_catalog import load_query_api
 from app.repository import HOLIDAYS_PATH
 from app.models import CompareResult, Conditions, FeeItem, FeeResult, HolidayCalendar, ReviewItem, Source, Terms
-
-
-@cache
-def load_query_api(path: Path):
-    package_name = "_facility_database"
-    spec = spec_from_file_location(package_name, path.parent / "__init__.py")
-    if spec is None or spec.loader is None:
-        raise ImportError("SQLite query module is unavailable")
-    package = module_from_spec(spec)
-    sys.modules.setdefault(package_name, package)
-    return import_module(f"{package_name}.query_api")
 
 
 @cache
@@ -28,7 +14,13 @@ def holiday_calendar() -> HolidayCalendar:
 
 
 def compare_sqlite(path: Path, facility: dict[str, str], conditions: Conditions) -> CompareResult:
-    query = load_query_api(DB_PATH.with_name("query_api.py"))
+    query = load_query_api()
+    with query.read_snapshot(path) as connection:
+        return _compare_sqlite(connection, facility, conditions)
+
+
+def _compare_sqlite(path, facility, conditions):
+    query = load_query_api()
     facility_id = facility["facility_id"]
 
     day = conditions.date.isoformat()
