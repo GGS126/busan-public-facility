@@ -1,6 +1,6 @@
 """규정 데이터와 요청·응답 형식. 규정의 모르는 값은 추정하지 않고 None으로 둔다."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from datetime import date as CalendarDate
 from decimal import Decimal
 from typing import Annotated, Literal
@@ -40,7 +40,7 @@ def validate_time_order(start: str | None, end: str) -> None:
         raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
 
 
-def validate_not_past(value: date, today: date) -> None:
+def validate_not_past(value: CalendarDate, today: CalendarDate) -> None:
     if value < today:
         raise PydanticCustomError("past_date", "지난 날짜는 선택할 수 없습니다.")
 
@@ -48,7 +48,7 @@ def validate_not_past(value: date, today: date) -> None:
 class Conditions(BaseModel):
     sport: SportCode
     districts: list[str] = []
-    date: date
+    date: CalendarDate
     start_time: ClockTime
     end_time: BandTime
     headcount: Headcount | None = None
@@ -67,7 +67,7 @@ class RequestConditions(Conditions):
 
     @field_validator("date")
     @classmethod
-    def not_in_past(cls, value: date) -> date:
+    def not_in_past(cls, value: CalendarDate) -> CalendarDate:
         validate_not_past(value, datetime.now(KST).date())
         return value
 
@@ -83,15 +83,15 @@ class CompareRequest(BaseModel):
 class Source(BaseModel):
     source_id: str
     url: str
-    checked_at: date
+    checked_at: CalendarDate
     license: str
 
 
 class EffectivePeriod(BaseModel):
-    effective_from: date
-    effective_to: date | None = None
+    effective_from: CalendarDate
+    effective_to: CalendarDate | None = None
 
-    def in_effect(self, day: date) -> bool:
+    def in_effect(self, day: CalendarDate) -> bool:
         return self.effective_from <= day and (self.effective_to is None or day <= self.effective_to)
 
 
@@ -148,7 +148,7 @@ class FacilityRules(BaseModel):
     name: str
     district: str | None = None
     source_id: str
-    holidays: list[date] = []
+    holidays: list[CalendarDate] = []
     fee_rules: list[FeeRule] = []
     discount_rules: list[DiscountRule] = []
     terms: Terms = Terms()
