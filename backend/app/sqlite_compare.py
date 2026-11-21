@@ -9,6 +9,14 @@ from app.models import CompareResult, Conditions, FeeItem, FeeResult, ReviewItem
 def compare_sqlite(
     path: Path, facility: dict[str, str], conditions: Conditions, *, closures: dict[str, dict] | None = None,
 ) -> CompareResult:
+    if closures is None:
+        closures = facility_closures(path, conditions.date)
+    query = load_query_api()
+    with query.read_snapshot(path) as connection:
+        return _compare_sqlite(connection, facility, conditions, closures)
+
+
+def _compare_sqlite(path, facility, conditions, closures):
     query = load_query_api()
     facility_id = facility["facility_id"]
 
@@ -50,8 +58,6 @@ def compare_sqlite(
         reviews.append(ReviewItem(code="rule_not_in_effect", target="base", source_id=None,
                                   reason="적용기간 내 요금 규정이 없습니다."))
     else:
-        if closures is None:
-            closures = facility_closures(path, conditions.date)
         closure = closures.get(facility_id)
         if closure is None or closure["is_closed"] is None:
             reviews.append(ReviewItem(code="rule_missing", target="base", source_id=source_id,

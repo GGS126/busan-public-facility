@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import sqlite3
 from pathlib import Path
+from contextlib import contextmanager
 try:
     from . import load as _load
 except ImportError:
@@ -19,11 +20,75 @@ def normalize_use_date(value):
     except ValueError as exc:
         raise ValueError('이용일 날짜 형식 오류') from exc
 
+@contextmanager
+def read_snapshot(db):
+    con = sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("BEGIN")
+        yield con
+    finally:
+        con.close()
+
+
 def fetch(db,sql,params=()):
-    con=sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
-    con.row_factory=sqlite3.Row
-    try: return [dict(x) for x in con.execute(sql,params)]
-    finally: con.close()
+    if isinstance(db, sqlite3.Connection):
+        return [dict(row) for row in db.execute(sql, params)]
+    with read_snapshot(db) as con:
+        return [dict(row) for row in con.execute(sql, params)]
+
+
+def search_time_data(db, use_date):
+    """검색에 필요한 유효한 시간 정책과 회차를 한 연결에서 읽는다."""
+    day = normalize_use_date(use_date)
+    con = sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        policies = {}
+        for row in con.execute("""
+            SELECT f.id, f.open_time, f.close_time, t.selection_type,
+                   t.available_start_time, t.available_end_time, t.min_minutes,
+                   t.max_minutes, t.step_minutes, t.daily_limit_minutes, r.id AS rule_set_id
+            FROM facilities f
+            LEFT JOIN rule_sets r ON r.facility_id=f.id AND ? BETWEEN r.effective_from AND r.effective_to
+            LEFT JOIN time_selection_policies t ON t.rule_set_id=r.id
+        """, (day,)):
+            key = row['id']
+            if key in policies:
+                policies[key] = None
+            else:
+                policies[key] = dict(row) if row['selection_type'] is not None else None
+        slots_by_facility = {}
+        for row in con.execute("""
+            SELECT r.facility_id, p.start_time, p.end_time
+            FROM rule_sets r JOIN pricing_rules p ON p.rule_set_id=r.id
+            WHERE ? BETWEEN r.effective_from AND r.effective_to AND p.selection_type='fixed_slot'
+            ORDER BY r.facility_id, p.slot_no
+        """, (day,)):
+            if policies.get(row['facility_id']) is not None:
+                slots_by_facility.setdefault(row['facility_id'], []).append(
+                    {'start_time': row['start_time'], 'end_time': row['end_time']})
+        return policies, slots_by_facility
+    finally:
+        con.close()
+
+
+def time_policy_allows(policy, start, end):
+    """검색과 견적에서 공통으로 쓰는 자유시간 정책 판정. 시간은 분 단위다."""
+    def minutes(value):
+        hour, minute = value.split(':')
+        return int(hour) * 60 + int(minute)
+    minimum_start = minutes(policy['available_start_time']) if policy['available_start_time'] else 0
+    maximum_end = minutes(policy['available_end_time']) if policy['available_end_time'] else 1440
+    duration = end - start
+    step = policy['step_minutes']
+    return (
+        end > start and start >= minimum_start and end <= maximum_end
+        and (step is None or (start - minimum_start) % step == 0)
+        and (policy['min_minutes'] is None or duration >= policy['min_minutes'])
+        and (policy['max_minutes'] is None or duration <= policy['max_minutes'])
+        and (policy['daily_limit_minutes'] is None or duration <= policy['daily_limit_minutes'])
+    )
 
 def facilities(db):
     return fetch(db,'SELECT id,name,facility_type,district,address,booking_url FROM facilities ORDER BY name')
@@ -467,14 +532,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
         # 자유시간형은 시간 정책을 요금 규칙 존재 여부와 독립적으로 확인한다.
         # 요금 규칙이 없을 뿐인 60/90분은 무조건 이용 불가로 처리하지 않는다.
         policy=prices[0]
-        min_start=parse(policy['available_start_time']) if policy['available_start_time'] else 0
-        max_end=parse(policy['available_end_time'],True) if policy['available_end_time'] else 1440
-        step=policy['step_minutes']
-        if (start<min_start or end>max_end
-            or (step is not None and (start-min_start)%step)
-            or (policy['min_minutes'] is not None and duration<policy['min_minutes'])
-            or (policy['max_minutes'] is not None and duration>policy['max_minutes'])
-            or (policy['daily_limit_minutes'] is not None and duration>policy['daily_limit_minutes'])):
+        if not time_policy_allows(policy, start, end):
             return {'status':'invalid_time','selection_type':typ,'reason':'해당 시설의 이용시간 정책에 맞지 않는 시간'}
         matches=[r for r in prices if r['duration_minutes']==duration]
         if not matches:

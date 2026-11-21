@@ -66,7 +66,7 @@ def test_expired_rule_source_is_not_displayed(sqlite_db, gudeok):
 ])
 def test_sqlite_compare_handles_invalid_options_and_conflicts(sqlite_db, gudeok, monkeypatch, overrides, code):
     monkeypatch.setattr(main, "DB_PATH", sqlite_db)
-    query = load_query_api(DB_PATH.with_name("query_api.py"))
+    query = load_query_api()
     def conflicting_quote(*args):
         raise ValueError("중복된 요금 규정")
     monkeypatch.setattr(query, "quote", conflicting_quote)
@@ -156,3 +156,17 @@ def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path):
             con.execute("INSERT INTO rule_sets VALUES(?,?,?,?,?,?)", (suffix, row[1], row[2], starts, row[4], row[5]))
             con.execute("INSERT INTO time_selection_policies SELECT ?, selection_type, available_start_time, available_end_time, min_minutes, max_minutes, step_minutes, daily_limit_minutes, status, note FROM time_selection_policies WHERE rule_set_id=?", (suffix,row[0]))
     assert read_search_time_policies(path,"2026-11-30")["busan_gudeok_stadium_tennis"] is None
+
+
+def test_sqlite_compare_uses_one_read_connection(sqlite_db, gudeok):
+    from unittest.mock import patch
+    query = load_query_api()
+    from app.facility_catalog import facility_closures
+    from datetime import date
+    closures = facility_closures(sqlite_db, date(2026, 11, 30))
+    with patch.object(query.sqlite3, "connect", wraps=query.sqlite3.connect) as connect:
+        result = compare_sqlite(sqlite_db, gudeok, Conditions(
+            sport="tennis", date="2026-11-30", start_time="10:00", end_time="12:00", source="direct",
+        ), closures=closures)
+    assert result.fee.status == "calculated"
+    assert connect.call_count == 1
