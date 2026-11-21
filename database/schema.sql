@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS facility_options (
  option_id TEXT NOT NULL REFERENCES option_categories(id),
  calculation_type TEXT NOT NULL CHECK(calculation_type IN ('hour_blocks_plus_steps','rounded_units','time_overlap_units','flat','per_item')),
  application_type TEXT NOT NULL CHECK(application_type IN ('optional','mandatory_when_applicable','included_in_base_price')),
+ payment_type TEXT CHECK(payment_type IN ('online_prepay','onsite')), -- NULL: 결제 방식 미확인
  rounding_policy TEXT NOT NULL CHECK(rounding_policy IN ('round_up','exact_units','proportional_if_exact')),
  applies_from TEXT, applies_to TEXT,
  note TEXT,

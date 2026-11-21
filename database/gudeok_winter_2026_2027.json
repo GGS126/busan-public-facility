@@ -17,7 +17,7 @@
     "title": "부산광역시 통합예약 - 구덕운동장 테니스장",
     "checked_on": "2026-11-06",
     "verification_level": "user_transcribed_official",
-    "note": "부산광역시 통합예약 구덕운동장 테니스장 예약·요금·감면·환불 안내 및 시설 규정. 2026-11-06 확인.",
+    "note": "부산광역시 통합예약 구덕운동장 테니스장 예약·요금·감면·환불 안내 및 시설 규정. 2026-11-06 확인. 사용자가 제공한 공식 예약 안내에는 기본 이용료의 통합예약시스템 결제와 예약 확정 조건이 명시되어 있으나, 별도 조명료의 결제 방식은 확인되지 않아 payment_type을 null로 유지.",
     "license": null
   },
   "rule_set": {
@@ -131,11 +131,12 @@
       "rounding_policy": "exact_units",
       "applies_from": "18:00",
       "applies_to": "22:00",
-      "note": "동절기 18:00부터 1면 1시간당 10,000원 별도.",
+      "note": "동절기 18:00부터 1면 1시간당 10,000원 별도. 공식 예약 안내에는 코트 이용료를 통합예약시스템에서 결제해야 예약이 확정된다고 명시되어 있으나, 별도 조명료의 결제 장소·시점은 명시되어 있지 않아 미확인.",
       "name": "조명시설",
       "hour_price": 10000,
       "extra_unit_minutes": null,
-      "extra_unit_price": null
+      "extra_unit_price": null,
+      "payment_type": null
     }
   ],
   "discount_common": {
