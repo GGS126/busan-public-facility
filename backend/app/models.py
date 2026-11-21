@@ -1,6 +1,7 @@
 """규정 데이터와 요청·응답 형식. 규정의 모르는 값은 추정하지 않고 None으로 둔다."""
 
 from datetime import date, datetime, timedelta, timezone
+from datetime import date as CalendarDate
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -19,6 +20,8 @@ KST = timezone(timedelta(hours=9))
 
 ClockTime = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
 BandTime = Annotated[str, StringConstraints(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|24:00)$")]
+SportCode = Annotated[str, StringConstraints(min_length=1)]
+Headcount = Annotated[int, Field(ge=1)]
 Rounding = Annotated[str, StringConstraints(pattern=r"^(floor|ceil|round)_(1|10|100|1000)$")]
 DayType = Literal["weekday", "weekend", "holiday"]
 DiscountMethod = Literal["onsite", "prepay_refund"]
@@ -32,22 +35,30 @@ def to_minutes(value: str) -> int:
 # 이용 조건
 
 
+def validate_time_order(start: str | None, end: str) -> None:
+    if start is not None and to_minutes(end) <= to_minutes(start):
+        raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
+
+
+def validate_not_past(value: date, today: date) -> None:
+    if value < today:
+        raise PydanticCustomError("past_date", "지난 날짜는 선택할 수 없습니다.")
+
+
 class Conditions(BaseModel):
-    sport: str = Field(min_length=1)
+    sport: SportCode
     districts: list[str] = []
     date: date
     start_time: ClockTime
     end_time: BandTime
-    headcount: int | None = Field(default=None, ge=1)
+    headcount: Headcount | None = None
     discount_types: list[str] = []
     source: Literal["direct", "llm"]
 
     @field_validator("end_time")
     @classmethod
     def end_after_start(cls, value: str, info: ValidationInfo) -> str:
-        start = info.data.get("start_time")
-        if start is not None and to_minutes(value) <= to_minutes(start):
-            raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
+        validate_time_order(info.data.get("start_time"), value)
         return value
 
 
@@ -57,8 +68,7 @@ class RequestConditions(Conditions):
     @field_validator("date")
     @classmethod
     def not_in_past(cls, value: date) -> date:
-        if value < datetime.now(KST).date():
-            raise PydanticCustomError("past_date", "지난 날짜는 선택할 수 없습니다.")
+        validate_not_past(value, datetime.now(KST).date())
         return value
 
 
@@ -259,6 +269,55 @@ class OptionsResponse(BaseModel):
     sports: list[Option]
     districts: list[str]
     discount_types: list[Option]
+
+
+class QueryParseRequest(BaseModel):
+    query: str
+
+
+class ExtractedConditions(BaseModel):
+    sport: SportCode | None = None
+    districts: list[str] | None = None
+    date: CalendarDate | None = None
+    start_time: ClockTime | None = None
+    end_time: BandTime | None = None
+    headcount: Headcount | None = None
+    discount_types: list[str] | None = None
+    source: Literal["llm"] | None = None
+
+
+class QueryParseResponse(BaseModel):
+    status: Literal["ok", "need_more", "llm_failed"]
+    conditions: ExtractedConditions
+    missing_fields: list[str]
+    questions: dict[str, str]
+    message: str | None = None
+
+
+class FacilitySearchConditions(BaseModel):
+    sport: str = Field(min_length=1)
+    districts: list[str] = Field(default_factory=list)
+    date: CalendarDate
+    start_time: ClockTime | None = None
+    end_time: BandTime | None = None
+    source: Literal["direct", "llm"]
+
+    @field_validator("date")
+    @classmethod
+    def not_in_past(cls, value: CalendarDate) -> CalendarDate:
+        return RequestConditions.not_in_past(value)
+
+    @model_validator(mode="after")
+    def check_times(self) -> "FacilitySearchConditions":
+        if (self.start_time is None) != (self.end_time is None):
+            raise PydanticCustomError("invalid_time_range", "시작 시간과 종료 시간을 함께 입력해 주세요.")
+        if self.start_time and self.end_time:
+            validate_time_order(self.start_time, self.end_time)
+        return self
+
+
+class FacilitySearchRequest(BaseModel):
+    conditions: FacilitySearchConditions
 
 
 # 계산 결과
