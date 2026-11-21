@@ -6,6 +6,7 @@ import {
 
 function FacilityList({
   facilities,
+  alternatives,
   selectedIds,
   onToggle,
   searched,
@@ -13,7 +14,6 @@ function FacilityList({
   loading,
   facilityTimes,
   onTimeChange,
-  date,
   error,
 }) {
   return (
@@ -35,6 +35,7 @@ function FacilityList({
         <div className="facility-no-results">
           <h3>검색 결과가 없습니다</h3>
           <p>다른 지역이나 이용 조건으로 다시 검색해 주세요.</p>
+          {alternatives.length > 0 && <p>검색 가능한 다른 지역은 {alternatives.join(', ')}입니다.</p>}
         </div>
       ) : (
         <>
@@ -46,7 +47,7 @@ function FacilityList({
           <div className="facility-grid">
             {facilities.map((facility) => {
               const selected = selectedIds.includes(facility.id)
-              const slots = getFacilitySlots(facility.id, date)
+              const slots = getFacilitySlots(facility.id, facility.time_options)
               const selectedTime = facilityTimes[facility.id] || ''
 
               return (
@@ -73,6 +74,9 @@ function FacilityList({
 
                   <h3>{facility.name}</h3>
                   <p>{facility.address}</p>
+                  {facility.time_check?.status === 'not_eligible' && (
+                    <p>희망 시간이 시설의 이용시간 규정과 맞지 않습니다. 시간을 다시 확인해 주세요.</p>
+                  )}
 
                   <label className="facility-check">
                     <input
@@ -89,7 +93,15 @@ function FacilityList({
                         이용시간 선택
                       </label>
 
-                      {slots.length > 0 ? (
+                      {facility.time_options?.selection === 'flexible' ? (
+                        <div>
+                          <input aria-label="시설 이용 시작시간" type="time" value={selectedTime.split('|')[0] || ''}
+                            onChange={event => onTimeChange(facility.id, `${event.target.value}|${selectedTime.split('|')[1] || ''}`)} />
+                          <input aria-label="시설 이용 종료시간" type="time" value={selectedTime.split('|')[1] || ''}
+                            onChange={event => onTimeChange(facility.id, `${selectedTime.split('|')[0] || ''}|${event.target.value}`)} />
+                          <p>운영시간과 이용시간 제한을 확인한 뒤 비교해 주세요.</p>
+                        </div>
+                      ) : slots.length > 0 ? (
                         <select
                           id={`time-${facility.id}`}
                           value={selectedTime}
@@ -111,8 +123,9 @@ function FacilityList({
                         </select>
                       ) : (
                         <p className="error-message">
-                          {facilitySlots[facility.id]?.message ||
-                            '예약 회차 정보 확인이 필요합니다.'}
+                          {facility.slot_status === 'no_slots'
+                            ? '선택한 날짜에 적용되는 예약 회차 정보가 없습니다.'
+                            : facilitySlots[facility.id]?.message || '예약 회차 정보 확인이 필요합니다.'}
                         </p>
                       )}
                     </div>

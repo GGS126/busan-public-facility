@@ -1,4 +1,10 @@
 import logging
+import os
+from collections import deque
+from datetime import datetime
+from functools import lru_cache
+from threading import BoundedSemaphore, Lock
+from time import monotonic
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -6,9 +12,22 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse, Conditions, OptionsResponse
+from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots, read_search_time_policies
+from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.models import (
+    KST,
+    CompareRequest,
+    CompareResponse,
+    Conditions,
+    FacilitySearchRequest,
+    OptionsResponse,
+    QueryParseRequest,
+    QueryParseResponse, to_minutes,
+)
 from app.options import build_options
+from app.query_parser import parse_query
 from app.repository import load_rule_data
+from app.sqlite_compare import compare_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -76,14 +95,186 @@ def options() -> OptionsResponse:
     return available_options
 
 
-def check_against_options(conditions: Conditions) -> None:
+@app.get("/api/facilities/options", response_model=OptionsResponse)
+def facility_search_options():
+    if not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
+    return read_catalog(DB_PATH)[1]
+
+
+@app.post("/api/facilities/search")
+def search_facilities(request: FacilitySearchRequest):
+    if not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
+    conditions = request.conditions
+    catalog_facilities, _ = read_catalog(DB_PATH)
+    candidates = [facility for facility in catalog_facilities if facility["sport"] == conditions.sport]
+    if not candidates:
+        return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
+
+    fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    time_policies = read_search_time_policies(DB_PATH, conditions.date.isoformat())
+    results = []
+    for facility in candidates:
+        if conditions.districts and facility["district"] not in conditions.districts:
+            continue
+        slots = fixed_slots.get(facility["facility_id"])
+        if time_policies.get(facility["facility_id"]) is None:
+            slots = None
+        time_status = "unknown"
+        policy = time_policies.get(facility["facility_id"])
+        if slots and policy is not None and conditions.start_time:
+            selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
+            time_status = "eligible" if selected in slots else "not_eligible"
+        policy = time_policies.get(facility["facility_id"])
+        if policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
+            start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
+            opens = policy["available_start_time"] or "00:00"
+            closes = policy["available_end_time"] or "24:00"
+            minimum, maximum = policy["min_minutes"], policy["max_minutes"]
+            if ((opens and start < to_minutes(opens)) or (closes and end > to_minutes(closes))
+                    or (minimum is not None and end - start < minimum)
+                    or (maximum is not None and end - start > maximum)
+                    or (policy["daily_limit_minutes"] is not None and end - start > policy["daily_limit_minutes"])
+                    or (policy["step_minutes"] is not None
+                        and (start - to_minutes(opens or "00:00")) % policy["step_minutes"])):
+                time_status = "not_eligible"
+            else:
+                time_status = "eligible"
+        results.append({
+            **facility,
+            "slot_status": "no_slots" if not slots and policy is None else None,
+            "time_options": {"selection": "fixed_slot", "slots": slots} if slots else (
+                {"selection": "flexible", **policy} if policy and policy["selection_type"] == "flexible_interval" else None
+            ),
+            "time_check": {"status": time_status},
+        })
+    order = {"eligible": 0, "unknown": 1, "not_eligible": 2}
+    results.sort(key=lambda facility: order[facility["time_check"]["status"]])
+    alternatives = None
+    if not results and conditions.districts:
+        alternatives = {"districts": sorted({facility["district"] for facility in candidates})}
+    return {"results": results, "alternatives": alternatives}
+
+
+@app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
+def parse_natural_language(request: QueryParseRequest) -> dict:
+    catalog = read_catalog(DB_PATH)[1] if DB_PATH.is_file() else available_options
+    return parse_with_options(request, catalog)
+
+
+gemini_slots = BoundedSemaphore(4)
+gemini_call_lock = Lock()
+gemini_calls: deque[float] = deque()
+
+
+def reserve_gemini_call() -> bool:
+    with gemini_call_lock:
+        now = monotonic()
+        while gemini_calls and now - gemini_calls[0] >= 60:
+            gemini_calls.popleft()
+        if len(gemini_calls) >= 15:
+            return False
+        gemini_calls.append(now)
+        return True
+
+
+@lru_cache(maxsize=1)
+def gemini_provider(key, model, sports, discounts, districts):
+    return GeminiExtractor(
+        key, model=model, sport_codes=dict(sports), discount_codes=dict(discounts), districts=list(districts),
+    )
+
+
+def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
+    return (
+        tuple((option.code, option.label) for option in catalog.sports),
+        tuple((option.code, option.label) for option in catalog.discount_types),
+        tuple(catalog.districts),
+    )
+
+
+def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
+    limited = False
+
+    deadline = monotonic() + 30
+    def extract(query, today):
+        nonlocal limited
+        key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            logger.warning("Gemini extraction failed: code=missing_api_key")
+            return None
+        try:
+            provider = gemini_provider(
+                key,
+                os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
+                *gemini_catalog_key(catalog),
+            )
+        except ValueError:
+            logger.warning("Gemini extraction failed: code=invalid_model_configuration")
+            return None
+
+        for attempt in (1, 2):
+            if monotonic() >= deadline:
+                logger.warning("Gemini extraction failed: code=request_deadline")
+                break
+            if not gemini_slots.acquire(blocking=False):
+                logger.warning("Gemini extraction failed: code=rate_limited limit=concurrency")
+                limited = True
+                return None
+            try:
+                if not reserve_gemini_call():
+                    logger.warning("Gemini extraction failed: code=rate_limited limit=per_minute")
+                    limited = True
+                    return None
+                return provider(query, today, deadline=deadline)
+            except GeminiResponseError as error:
+                logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
+                               type(error).__name__, error.code, attempt)
+                if error.code not in {"invalid_output_json", "invalid_api_json", "unexpected_extraction_fields"}:
+                    break
+            except GeminiHTTPError as error:
+                logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
+                if error.status not in {429, 500, 502, 503, 504}:
+                    break
+            except (TimeoutError, ConnectionError) as error:
+                logger.warning("Gemini extraction failed: type=%s attempt=%d", type(error).__name__, attempt)
+            except Exception as error:
+                # Exception messages may include request text or credentials.
+                logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
+                break
+            finally:
+                gemini_slots.release()
+        return None
+
+    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
+    if limited:
+        result["message"] = "자연어 요청이 많습니다. 잠시 후 다시 시도하거나 직접 입력해 주세요."
+    extracted = result["conditions"]
+    invalid = []
+    if extracted.get("sport") and extracted["sport"] not in {item.code for item in catalog.sports}:
+        invalid.append("sport")
+    if "discount_types" in extracted and not set(extracted["discount_types"]) <= {item.code for item in catalog.discount_types}:
+        invalid.append("discount_types")
+    for field in invalid:
+        extracted.pop(field)
+        if field not in result["missing_fields"]:
+            result["missing_fields"].append(field)
+        result["questions"][field] = "선택 가능한 항목으로 다시 확인해 주세요."
+        result["status"] = "need_more"
+    if result["status"] == "llm_failed":
+        result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
+    return result
+
+
+def check_against_options(conditions: Conditions, options: OptionsResponse) -> None:
     """선택지에 없는 값은 입력 오류로 돌려보낸다. 시설에만 없는 값은 규칙 엔진이 확인 필요로 처리한다."""
     errors = []
-    if conditions.sport not in {option.code for option in available_options.sports}:
+    if conditions.sport not in {option.code for option in options.sports}:
         errors.append(
             {"type": "invalid_option", "loc": ("body", "conditions", "sport"), "msg": "선택할 수 없는 종목입니다."}
         )
-    if not set(conditions.discount_types) <= {option.code for option in available_options.discount_types}:
+    if not set(conditions.discount_types) <= {option.code for option in options.discount_types}:
         errors.append(
             {
                 "type": "invalid_option",
@@ -97,11 +288,28 @@ def check_against_options(conditions: Conditions) -> None:
 
 @app.post("/api/compare", response_model=CompareResponse)
 def compare(request: CompareRequest) -> CompareResponse:
-    check_against_options(request.conditions)
-    selected = []
+    sample_ids = {facility_id for facility_id in request.facility_ids if facility_id in facilities}
+    sqlite_ids = set(request.facility_ids) - sample_ids
+    if sample_ids:
+        check_against_options(request.conditions, available_options)
+    sqlite_facilities = {}
+    if any(facility_id.startswith("busan_") for facility_id in sqlite_ids) and not DB_PATH.is_file():
+        return error_response(503, "facility_catalog_unavailable", "시설 DB를 생성한 뒤 다시 시도해 주세요.")
+    if sqlite_ids and DB_PATH.is_file():
+        catalog, options = read_catalog(DB_PATH)
+        sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
+        if sqlite_ids & sqlite_facilities.keys():
+            check_against_options(request.conditions, options)
+    results = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)
-        if rules is None:
+        if rules is not None:
+            results.append(compare_facility(rules, request.conditions))
+            continue
+        facility = sqlite_facilities.get(facility_id)
+        if facility is None:
             raise FacilityNotFound
-        selected.append(rules)
-    return CompareResponse(results=[compare_facility(rules, request.conditions) for rules in selected])
+        if facility["sport"] != request.conditions.sport:
+            return error_response(400, "invalid_option", "선택한 시설에서 이용할 수 없는 종목입니다.")
+        results.append(compare_sqlite(DB_PATH, facility, request.conditions))
+    return CompareResponse(results=results)
