@@ -4,6 +4,7 @@ from datetime import datetime
 from fastapi import FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
@@ -18,6 +19,8 @@ app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
 rule_data = load_rule_data()
 facilities = {facility.facility_id: facility for facility in rule_data.facilities}
 available_options = build_options(rule_data)
+
+ISO_DATE = TypeAdapter(IsoDate)
 
 HTTP_ERRORS = {
     404: ("not_found", "요청한 경로를 찾을 수 없습니다."),
@@ -121,11 +124,19 @@ def compare(request: CompareRequest) -> CompareResponse:
 
 # 경로 매개변수라서 /api/facilities/options 같은 고정 경로보다 뒤에 둔다.
 @app.get("/api/facilities/{facility_id}", response_model=FacilityDetail)
-def facility(facility_id: str, day: IsoDate | None = Query(default=None, alias="date")) -> FacilityDetail:
-    # 없는 시설이면 날짜와 관계없이 404다.
+def facility(facility_id: str, date: str | None = Query(default=None)) -> FacilityDetail:
+    # 없는 시설이면 날짜 형식과 관계없이 404다. 그래서 날짜는 시설을 찾은 뒤에 검증한다.
     rules = facilities.get(facility_id)
     if rules is None:
         raise FacilityNotFound
+    day = None
+    if date is not None:
+        try:
+            day = ISO_DATE.validate_python(date)
+        except ValidationError:
+            raise RequestValidationError(
+                [{"type": "date_from_datetime_parsing", "loc": ("query", "date"), "msg": "날짜 형식이 올바르지 않습니다."}]
+            ) from None
     today = datetime.now(KST).date()
     if day is not None and day < today:
         raise RequestValidationError(

@@ -296,9 +296,9 @@ def test_facility_detail_defaults_to_today():
     assert client.get("/api/facilities/F001").status_code == 200
 
 
-@pytest.mark.parametrize("params", [{}, {"date": "2020-01-01"}])
+@pytest.mark.parametrize("params", [{}, {"date": "2020-01-01"}, {"date": "abc"}, {"date": "20990101"}])
 def test_facility_detail_unknown_facility(params):
-    # 지난 날짜여도 없는 시설이면 404다.
+    # 지난 날짜나 형식이 틀린 날짜여도 없는 시설이면 404다.
     response = client.get("/api/facilities/NOPE", params=params)
 
     assert response.status_code == 404
@@ -321,3 +321,10 @@ def test_facility_detail_invalid_date(value, code):
     response = client.get("/api/facilities/F001", params={"date": value})
 
     assert fields_of(response) == {"date": code}
+
+
+def test_facility_detail_route_after_fixed_facility_routes():
+    # /api/facilities/options·search 같은 고정 경로가 시설 ID로 잡히지 않도록 상세 경로는 맨 뒤에 둔다.
+    paths = [route.path for route in main.app.routes if getattr(route, "path", "").startswith("/api/facilities/")]
+
+    assert paths[-1] == "/api/facilities/{facility_id}"
