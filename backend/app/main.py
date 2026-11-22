@@ -13,7 +13,7 @@ from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
 from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_fixed_slots, read_search_time_policies, load_query_api
-from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
     CompareRequest,
@@ -190,8 +190,7 @@ def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
 
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
     limited = False
-
-    deadline = monotonic() + 30
+    deadline = monotonic() + REQUEST_TIMEOUT_SECONDS
     def extract(query, today):
         nonlocal limited
         key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -228,11 +227,12 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                 if error.code not in {"invalid_output_json", "invalid_api_json", "unexpected_extraction_fields"}:
                     break
             except GeminiHTTPError as error:
-                logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
-                if error.status not in {429, 500, 502, 503, 504}:
+                logger.warning("Gemini extraction failed: type=%s status=%d attempt=%d", type(error).__name__, error.status, attempt)
+                if error.status not in {500, 502, 503, 504}:
                     break
             except (TimeoutError, ConnectionError) as error:
-                logger.warning("Gemini extraction failed: type=%s attempt=%d", type(error).__name__, attempt)
+                logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
+                               type(error).__name__, "request_deadline" if monotonic() >= deadline else "transport_error", attempt)
             except Exception as error:
                 # Exception messages may include request text or credentials.
                 logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
