@@ -56,3 +56,7 @@ def read_fixed_slots(path: Path, use_date: str):
 
 def read_search_time_policies(path: Path, use_date: str):
     return _time_data(path, use_date, _file_version(path))[0]
+
+
+def read_search_time_data(path: Path, use_date: str):
+    return _time_data(path, use_date, _file_version(path))

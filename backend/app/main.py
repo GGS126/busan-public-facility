@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots, read_search_time_policies, load_query_api
+from app.facility_catalog import DB_PATH, read_catalog, read_search_time_data, load_query_api
 from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -111,22 +111,20 @@ def search_facilities(request: FacilitySearchRequest):
     if not candidates:
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
-    fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
-    time_policies = read_search_time_policies(DB_PATH, conditions.date.isoformat())
+    time_policies, fixed_slots = read_search_time_data(DB_PATH, conditions.date.isoformat())
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
             continue
         slots = fixed_slots.get(facility["facility_id"])
-        if time_policies.get(facility["facility_id"]) is None:
+        policy = time_policies.get(facility["facility_id"])
+        if policy is None:
             slots = None
         time_status = "unknown"
-        policy = time_policies.get(facility["facility_id"])
         if slots and policy is not None and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
-        policy = time_policies.get(facility["facility_id"])
-        if policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
+        elif policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
             allowed = load_query_api().time_policy_allows(
                 policy, to_minutes(conditions.start_time), to_minutes(conditions.end_time),
             )
