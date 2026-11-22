@@ -30,9 +30,12 @@ def test_gudeok_quote_includes_mandatory_lighting_and_source(sqlite_db, gudeok):
         sport="tennis", date="2026-11-09", start_time="19:00", end_time="21:00", source="direct",
     ))
 
-    assert result.fee.status == "calculated"
+    assert result.fee.status == "needs_review"
     assert [(item.type, item.amount) for item in result.fee.items] == [("base", 8000), ("lighting", 20000)]
-    assert result.fee.payment_due == 28000
+    assert result.fee.payment_due is None
+    assert result.fee.online_prepay == 8000
+    assert result.fee.payment_unverified == 20000
+    assert result.fee.items[1].rule_id != result.fee.items[0].rule_id
     assert result.sources[0].source_id == result.fee.items[0].source_id
 
 
@@ -44,7 +47,7 @@ def test_sqlite_quote_leaves_unresolved_discount_out_of_total(sqlite_db, gudeok)
 
     assert result.fee.status == "needs_review"
     assert result.fee.payment_due is None
-    assert result.fee.review_items[0].target == "discount"
+    assert any(item.target == "discount" for item in result.fee.review_items)
 
 
 def test_expired_rule_source_is_not_displayed(sqlite_db, gudeok):
@@ -114,3 +117,13 @@ def test_sqlite_compare_uses_one_read_connection(sqlite_db, gudeok):
         ))
     assert result.fee.status == "calculated"
     assert connect.call_count == 1
+
+
+def test_closed_day_cannot_be_quoted(sqlite_db):
+    facilities, _ = read_catalog(sqlite_db)
+    facility = next(item for item in facilities if item["facility_id"] == "busan_samrak_ecopark_tennis")
+    result = compare_sqlite(sqlite_db, facility, Conditions(
+        sport="tennis", date="2027-02-07", start_time="10:00", end_time="12:00", source="direct",
+    ))
+    assert result.fee.status == "not_eligible"
+    assert result.fee.payment_due is None

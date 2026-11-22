@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, read_catalog, read_fixed_slots, read_search_time_policies, load_query_api
+from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_fixed_slots, read_search_time_policies, load_query_api
 from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -113,21 +113,23 @@ def search_facilities(request: FacilitySearchRequest):
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
     fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    closures = facility_closures(DB_PATH, conditions.date)
     time_policies = read_search_time_policies(DB_PATH, conditions.date.isoformat())
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
             continue
         slots = fixed_slots.get(facility["facility_id"])
-        if time_policies.get(facility["facility_id"]) is None:
-            slots = None
-        time_status = "unknown"
         policy = time_policies.get(facility["facility_id"])
-        if slots and policy is not None and conditions.start_time:
+        closure = closures.get(facility["facility_id"], {"status": "no_active_rule_set", "is_closed": None})
+        if closure["is_closed"] or policy is None:
+            slots = None
+        time_status = "not_eligible" if closure["is_closed"] else "unknown"
+        if closure["is_closed"] is False and slots and policy is not None and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
         policy = time_policies.get(facility["facility_id"])
-        if policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
+        if closure["is_closed"] is False and policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
             allowed = load_query_api().time_policy_allows(
                 policy, to_minutes(conditions.start_time), to_minutes(conditions.end_time),
             )
@@ -136,9 +138,10 @@ def search_facilities(request: FacilitySearchRequest):
             **facility,
             "slot_status": "no_slots" if not slots and policy is None else None,
             "time_options": {"selection": "fixed_slot", "slots": slots} if slots else (
-                {"selection": "flexible", **policy} if policy and policy["selection_type"] == "flexible_interval" else None
+                {"selection": "flexible", **policy} if not closure["is_closed"] and policy and policy["selection_type"] == "flexible_interval" else None
             ),
             "time_check": {"status": time_status},
+            "closure": closure,
         })
     order = {"eligible": 0, "unknown": 1, "not_eligible": 2}
     results.sort(key=lambda facility: order[facility["time_check"]["status"]])
@@ -281,15 +284,21 @@ def check_against_options(conditions: Conditions, options: OptionsResponse) -> N
 def compare(request: CompareRequest) -> CompareResponse:
     sample_ids = {facility_id for facility_id in request.facility_ids if facility_id in facilities}
     sqlite_ids = set(request.facility_ids) - sample_ids
-    if sample_ids:
+    if sample_ids and not sqlite_ids:
         check_against_options(request.conditions, available_options)
     sqlite_facilities = {}
-    if any(facility_id.startswith("busan_") for facility_id in sqlite_ids) and not DB_PATH.is_file():
+    if sqlite_ids and not DB_PATH.is_file():
         return error_response(503, "facility_catalog_unavailable", "시설 DB를 생성한 뒤 다시 시도해 주세요.")
     if sqlite_ids and DB_PATH.is_file():
         catalog, options = read_catalog(DB_PATH)
         sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
         if sqlite_ids & sqlite_facilities.keys():
+            if sample_ids:
+                options = OptionsResponse(
+                    sports=list({item.code: item for item in [*available_options.sports, *options.sports]}.values()),
+                    districts=sorted(set(available_options.districts) | set(options.districts)),
+                    discount_types=list({item.code: item for item in [*available_options.discount_types, *options.discount_types]}.values()),
+                )
             check_against_options(request.conditions, options)
     results = []
     for facility_id in request.facility_ids:

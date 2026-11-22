@@ -1,25 +1,24 @@
 """Adapt the SQLite quote to the comparison response used by the web UI."""
 
-from functools import cache
 from pathlib import Path
 
-from app.facility_catalog import load_query_api
-from app.repository import HOLIDAYS_PATH
-from app.models import CompareResult, Conditions, FeeItem, FeeResult, HolidayCalendar, ReviewItem, Source, Terms
+from app.facility_catalog import holiday_calendar, load_query_api
+from app.models import CompareResult, Conditions, FeeItem, FeeResult, ReviewItem, Source, Terms
 
 
-@cache
-def holiday_calendar() -> HolidayCalendar:
-    return HolidayCalendar.model_validate_json(HOLIDAYS_PATH.read_text(encoding="utf-8"))
-
-
-def compare_sqlite(path: Path, facility: dict[str, str], conditions: Conditions) -> CompareResult:
+def compare_sqlite(
+    path: Path, facility: dict[str, str], conditions: Conditions, *, closures: dict[str, dict] | None = None,
+) -> CompareResult:
     query = load_query_api()
     with query.read_snapshot(path) as connection:
-        return _compare_sqlite(connection, facility, conditions)
+        if closures is None:
+            from app.facility_catalog import closure_holiday_codes
+            closures = query.closure_statuses(connection, conditions.date.isoformat(),
+                                              closure_holiday_codes(conditions.date))
+        return _compare_sqlite(connection, facility, conditions, closures)
 
 
-def _compare_sqlite(path, facility, conditions):
+def _compare_sqlite(path, facility, conditions, closures):
     query = load_query_api()
     facility_id = facility["facility_id"]
 
@@ -32,7 +31,7 @@ def _compare_sqlite(path, facility, conditions):
         WHERE r.facility_id = ? AND ? BETWEEN r.effective_from AND r.effective_to
         ORDER BY r.effective_from DESC, r.id
     """, (facility_id, day))
-    rule = rules[0] if rules else None
+    rule = rules[0] if len(rules) == 1 else None
     source_id = rule["id"] if rule and rule["checked_on"] else None
     sources = []
     if rule and rule["checked_on"]:
@@ -54,6 +53,7 @@ def _compare_sqlite(path, facility, conditions):
     items = []
     reviews = []
     invalid_time = False
+    quote = {}
     if len(rules) > 1:
         reviews.append(ReviewItem(code="rule_conflict", target="base", source_id=source_id,
                                   reason="적용 기간이 겹치는 요금 규정이 있습니다."))
@@ -61,6 +61,16 @@ def _compare_sqlite(path, facility, conditions):
         reviews.append(ReviewItem(code="rule_not_in_effect", target="base", source_id=None,
                                   reason="적용기간 내 요금 규정이 없습니다."))
     else:
+        closure = closures.get(facility_id)
+        if closure is None or closure["is_closed"] is None:
+            reviews.append(ReviewItem(code="rule_missing", target="base", source_id=source_id,
+                                      reason="명절 휴장 여부를 확인해 주세요."))
+        elif closure["is_closed"]:
+            invalid_time = True
+            notes = " / ".join(dict.fromkeys(item["note"] for item in closure["matched_rules"]))
+            reviews.append(ReviewItem(code="rule_not_in_effect", target="base", source_id=source_id,
+                                      reason=f"정기 휴장일입니다. {notes}"))
+    if not reviews:
         args = (path, facility_id, day, conditions.start_time, conditions.end_time)
         weekend = conditions.date.weekday() >= 5
         calendar = holiday_calendar()
@@ -89,15 +99,11 @@ def _compare_sqlite(path, facility, conditions):
                 items.append(FeeItem(type="base", amount=quote["base_fee_won"],
                                      rule_id=quote["price_rule_id"], source_id=source_id))
                 if quote["lighting_fee_won"]:
-                    lighting_rule = next(
-                        (option for option in query.facility_options(path, facility_id, day)
-                         if option["option_id"] == "lighting" and option["application_type"] in
-                         {"included_in_base_price", "mandatory_when_applicable"}),
-                        None,
-                    )
                     items.append(FeeItem(type="lighting", amount=quote["lighting_fee_won"],
-                                         rule_id=lighting_rule["id"] if lighting_rule else quote["price_rule_id"],
-                                         source_id=source_id))
+                                         rule_id=quote["lighting_rule_id"], source_id=source_id))
+                for review in quote.get("review_items", []):
+                    reviews.append(ReviewItem(code="rule_missing", target="lighting",
+                                              source_id=source_id, reason=review["reason"]))
         else:
             details = quote.get("review_items", [])
             reason = details[0]["reason"] if details else quote.get("reason")
@@ -127,7 +133,10 @@ def _compare_sqlite(path, facility, conditions):
         facility_id=facility_id, facility_name=facility["name"],
         fee=FeeResult(
             status="not_eligible" if invalid_time else "needs_review" if reviews else "calculated",
-            items=items, total=total, payment_due=total,
+            items=items, total=total, payment_due=None if reviews else quote.get("payment_due"),
+            online_prepay=quote.get("online_prepay_won"),
+            onsite_payment=quote.get("onsite_payment"),
+            payment_unverified=quote.get("payment_unverified_won"),
             expected_refund=None if reviews else 0, net_cost_after_refund=total,
             review_items=reviews,
         ),

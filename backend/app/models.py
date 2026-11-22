@@ -357,6 +357,9 @@ class FeeResult(BaseModel):
     items: list[FeeItem]
     total: int | None
     payment_due: int | None
+    online_prepay: int | None = None
+    onsite_payment: int | None = None
+    payment_unverified: int | None = None
     expected_refund: int | None
     net_cost_after_refund: int | None
     review_items: list[ReviewItem]
