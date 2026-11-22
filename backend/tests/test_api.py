@@ -65,6 +65,7 @@ def test_calculated_response_matches_api_draft():
                     ],
                     "total": 30000,
                     "payment_due": 50000,
+                    "online_prepay": None, "onsite_payment": None, "payment_unverified": None,
                     "expected_refund": 20000,
                     "net_cost_after_refund": 30000,
                     "review_items": [],

@@ -654,6 +654,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'start_time':start_time,'end_time':end_time,'duration_minutes':duration,
             'price_rule_id':p['price_rule_id'],'base_fee_won':p['base_fee_won'],
             'lighting_minutes':light_minutes,'lighting_fee_won':light,
+            'lighting_rule_id':mandatory_rule['id'] if mandatory_rule else None,
             'total_won':p['base_fee_won']+light+optional_amount,
             'optional_lighting_minutes':optional_lighting_minutes,
             'optional_lighting_on_site_won':optional_lighting_on_site_won,

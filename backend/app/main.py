@@ -12,8 +12,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_fixed_slots, read_search_time_policies, load_query_api
-from app.gemini_extractor import DEFAULT_MODEL, GeminiExtractor, GeminiHTTPError, GeminiResponseError
+from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_search_time_data, load_query_api
+from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
     CompareRequest,
@@ -112,9 +112,8 @@ def search_facilities(request: FacilitySearchRequest):
     if not candidates:
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
-    fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    time_policies, fixed_slots = read_search_time_data(DB_PATH, conditions.date.isoformat())
     closures = facility_closures(DB_PATH, conditions.date)
-    time_policies = read_search_time_policies(DB_PATH, conditions.date.isoformat())
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
@@ -128,8 +127,7 @@ def search_facilities(request: FacilitySearchRequest):
         if closure["is_closed"] is False and slots and policy is not None and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
-        policy = time_policies.get(facility["facility_id"])
-        if closure["is_closed"] is False and policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
+        elif closure["is_closed"] is False and policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
             allowed = load_query_api().time_policy_allows(
                 policy, to_minutes(conditions.start_time), to_minutes(conditions.end_time),
             )
@@ -190,8 +188,7 @@ def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
 
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
     limited = False
-
-    deadline = monotonic() + 30
+    deadline = monotonic() + REQUEST_TIMEOUT_SECONDS
     def extract(query, today):
         nonlocal limited
         key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -228,11 +225,12 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                 if error.code not in {"invalid_output_json", "invalid_api_json", "unexpected_extraction_fields"}:
                     break
             except GeminiHTTPError as error:
-                logger.warning("Gemini extraction failed: type=%s status=%d", type(error).__name__, error.status)
-                if error.status not in {429, 500, 502, 503, 504}:
+                logger.warning("Gemini extraction failed: type=%s status=%d attempt=%d", type(error).__name__, error.status, attempt)
+                if error.status not in {500, 502, 503, 504}:
                     break
             except (TimeoutError, ConnectionError) as error:
-                logger.warning("Gemini extraction failed: type=%s attempt=%d", type(error).__name__, attempt)
+                logger.warning("Gemini extraction failed: type=%s code=%s attempt=%d",
+                               type(error).__name__, "request_deadline" if monotonic() >= deadline else "transport_error", attempt)
             except Exception as error:
                 # Exception messages may include request text or credentials.
                 logger.warning("Gemini extraction failed: type=%s", type(error).__name__)
@@ -284,18 +282,22 @@ def check_against_options(conditions: Conditions, options: OptionsResponse) -> N
 def compare(request: CompareRequest) -> CompareResponse:
     sample_ids = {facility_id for facility_id in request.facility_ids if facility_id in facilities}
     sqlite_ids = set(request.facility_ids) - sample_ids
-    if sample_ids:
+    if sample_ids and not sqlite_ids:
         check_against_options(request.conditions, available_options)
     sqlite_facilities = {}
-    closures = {}
-    if any(facility_id.startswith("busan_") for facility_id in sqlite_ids) and not DB_PATH.is_file():
+    if sqlite_ids and not DB_PATH.is_file():
         return error_response(503, "facility_catalog_unavailable", "시설 DB를 생성한 뒤 다시 시도해 주세요.")
     if sqlite_ids and DB_PATH.is_file():
         catalog, options = read_catalog(DB_PATH)
         sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
         if sqlite_ids & sqlite_facilities.keys():
+            if sample_ids:
+                options = OptionsResponse(
+                    sports=list({item.code: item for item in [*available_options.sports, *options.sports]}.values()),
+                    districts=sorted(set(available_options.districts) | set(options.districts)),
+                    discount_types=list({item.code: item for item in [*available_options.discount_types, *options.discount_types]}.values()),
+                )
             check_against_options(request.conditions, options)
-            closures = facility_closures(DB_PATH, request.conditions.date)
     results = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)
@@ -307,5 +309,5 @@ def compare(request: CompareRequest) -> CompareResponse:
             raise FacilityNotFound
         if facility["sport"] != request.conditions.sport:
             return error_response(400, "invalid_option", "선택한 시설에서 이용할 수 없는 종목입니다.")
-        results.append(compare_sqlite(DB_PATH, facility, request.conditions, closures=closures))
+        results.append(compare_sqlite(DB_PATH, facility, request.conditions))
     return CompareResponse(results=results)

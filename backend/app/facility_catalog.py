@@ -71,10 +71,18 @@ def facility_closures(path: Path, day: date) -> dict[str, dict]:
 
 @lru_cache(maxsize=32)
 def _facility_closures(path: Path, day: date, _version) -> dict[str, dict]:
+    return load_query_api().closure_statuses(path, day.isoformat(), closure_holiday_codes(day))
+
+
+def closure_holiday_codes(day: date):
     calendar = holiday_calendar()
     codes = None
     if calendar.covers(day):
         holiday_codes = {"설날": "lunar_new_year_day", "추석": "chuseok_day"}
         codes = [holiday_codes[item.name] for item in calendar.holidays
                  if item.date == day and item.name in holiday_codes]
-    return load_query_api().closure_statuses(path, day.isoformat(), codes)
+    return codes
+
+
+def read_search_time_data(path: Path, use_date: str):
+    return _time_data(path, use_date, _file_version(path))
