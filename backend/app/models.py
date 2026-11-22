@@ -295,7 +295,7 @@ class QueryParseResponse(BaseModel):
 
 
 class FacilitySearchConditions(BaseModel):
-    sport: str = Field(min_length=1)
+    sport: SportCode
     districts: list[str] = Field(default_factory=list)
     date: CalendarDate
     start_time: ClockTime | None = None
@@ -305,7 +305,8 @@ class FacilitySearchConditions(BaseModel):
     @field_validator("date")
     @classmethod
     def not_in_past(cls, value: CalendarDate) -> CalendarDate:
-        return RequestConditions.not_in_past(value)
+        validate_not_past(value, datetime.now(KST).date())
+        return value
 
     @model_validator(mode="after")
     def check_times(self) -> "FacilitySearchConditions":

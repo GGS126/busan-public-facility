@@ -82,3 +82,7 @@ def closure_holiday_codes(day: date):
         codes = [holiday_codes[item.name] for item in calendar.holidays
                  if item.date == day and item.name in holiday_codes]
     return codes
+
+
+def read_search_time_data(path: Path, use_date: str):
+    return _time_data(path, use_date, _file_version(path))

@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_fixed_slots, read_search_time_policies, load_query_api
+from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_search_time_data, load_query_api
 from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -112,9 +112,8 @@ def search_facilities(request: FacilitySearchRequest):
     if not candidates:
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
-    fixed_slots = read_fixed_slots(DB_PATH, conditions.date.isoformat())
+    time_policies, fixed_slots = read_search_time_data(DB_PATH, conditions.date.isoformat())
     closures = facility_closures(DB_PATH, conditions.date)
-    time_policies = read_search_time_policies(DB_PATH, conditions.date.isoformat())
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
@@ -128,8 +127,7 @@ def search_facilities(request: FacilitySearchRequest):
         if closure["is_closed"] is False and slots and policy is not None and conditions.start_time:
             selected = {"start_time": conditions.start_time, "end_time": conditions.end_time}
             time_status = "eligible" if selected in slots else "not_eligible"
-        policy = time_policies.get(facility["facility_id"])
-        if closure["is_closed"] is False and policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
+        elif closure["is_closed"] is False and policy and policy["selection_type"] == "flexible_interval" and conditions.start_time:
             allowed = load_query_api().time_policy_allows(
                 policy, to_minutes(conditions.start_time), to_minutes(conditions.end_time),
             )
