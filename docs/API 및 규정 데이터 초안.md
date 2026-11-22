@@ -82,6 +82,7 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
         ],
         "total": 30000,
         "payment_due": 50000,
+        "online_prepay": 50000,
         "onsite_payment": 0,
         "payment_unverified": 0,
         "expected_refund": 20000,
@@ -111,6 +112,7 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
 | 결과 | 계산 | 예시 |
 |---|---|---|
 | `payment_due` (최초 납부액, 온라인 선결제) | `prepay_refund`와 현장 결제(`payment: "onsite"`)·결제 방식 미확인(`payment: "unverified"`) 항목을 제외한 모든 항목의 합. 미확인 항목이 있으면 `null` | 40,000 + 10,000 = 50,000 |
+| `online_prepay` (확인된 온라인 선결제액) | `payment_due`와 같은 항목의 합. 결제 방식 미확인 항목이 있어 `payment_due`가 `null`이어도 값을 반환 | 50,000 |
 | `onsite_payment` (현장 결제액) | `payment: "onsite"` 항목의 합 | 0 |
 | `payment_unverified` (결제 방식 미확인액) | `payment: "unverified"` 항목의 합 | 0 |
 | `expected_refund` (예상 환급액) | `prepay_refund` 항목의 합의 절댓값 | 20,000 |
@@ -140,6 +142,7 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
         ],
         "total": null,
         "payment_due": null,
+        "online_prepay": null,
         "onsite_payment": null,
         "payment_unverified": null,
         "expected_refund": null,
@@ -296,12 +299,15 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 구덕운동장 | 없음 (조명은 18시 이후 필수 부과) |
 
 - 선택 조명은 이용 시간 중 선택 조명 시간대와 겹치는 동안에만 쓸 수 있습니다. 예: 해운대 축구 19~22시 회차는 19~20시의 60분까지 선택할 수 있고, 20~22시 필수 조명료 20,000원은 회차 요금과 함께 선결제합니다. 겹치는 시간보다 길거나 겹치지 않으면(예: 해운대 테니스 20~22시 회차) 선택할 수 있는 시간대를 사유에 담아 `duration_not_allowed`로 '확인 필요'입니다.
-- 선택 조명 규정이 없는 시설(구덕)은 여러 시설을 함께 비교할 때 `optional_lighting_minutes`를 쓰지 않고, 필수 조명료만 계산합니다.
+- 이용일에 유효한 선택 조명 규정이 없는 시설(구덕, 또는 다른 기간에만 선택 조명이 있는 시설)은 여러 시설을 함께 비교할 때 `optional_lighting_minutes`를 쓰지 않고, 필수 조명료만 계산합니다.
+- 선택 조명이 요일·월 조건 때문에 이용일에 없으면 시간대 대신 '이용일에는 선택 조명을 사용할 수 없습니다'를 사유로 `duration_not_allowed`입니다.
+- 이용 시간에 걸치는 선택 조명 규정이 둘 이상이면, 시간대가 서로 겹칠 때는 `rule_conflict`, 이어 붙어 있을 때는 조명을 어느 시간대에 쓸지 몰라 `rule_missing`으로 '확인 필요'입니다.
 - 조명료는 `type: "lighting"` 금액 항목으로 반환하고 결제 방식을 `payment`(`prepay`, `onsite`, `unverified`)로 표시합니다.
   현장 결제(해운대)는 `payment_due`(최초 납부액)에서 빼고 `onsite_payment`(현장 결제액)로 반환합니다.
   예: T08(평일 18~20시, 선택 조명 80분)은 `payment_due` 8,000, `onsite_payment` 13,200, `net_cost_after_refund` 21,200입니다.
 - 결제 방식을 모르는 조명료(삼락 선택 조명, 구덕 18시 이후 필수 조명)는 금액을 계산해 `payment: "unverified"`로 표시하고, `payment_unverified`에 합산합니다. 이때 `payment_due`는 선결제액으로 확정하지 않도록 `null`입니다(`database/README.md`의 결제 방식 기준).
-  예: 구덕 평일 18~20시는 `total` 28,000, `payment_due` null, `payment_unverified` 20,000입니다.
+  예약할 때 온라인으로 낼 금액은 `online_prepay`로 따로 반환합니다.
+  예: 구덕 평일 18~20시는 `total` 28,000, `payment_due` null, `online_prepay` 8,000, `payment_unverified` 20,000입니다.
 - 해운대처럼 남은 시간이 추가 단위(10분)로 나눠 떨어지지 않으면 처리 기준이 없어 '확인 필요'입니다.
 
 ### 이용할 수 없는 시간
@@ -380,7 +386,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `unit_minutes` | 요금 단위 시간 | `60` |
 | `partial_unit` | 단위 미만 처리 방식 | `round_up` |
 | `extra_unit_minutes`, `extra_unit_amount` | 선택 조명료만. 단위 시간을 채우고 남은 시간의 추가 단위와 금액 | `10`, `1600` |
-| `payment` | 선택 조명료만. 온라인 선결제 또는 현장 결제. 모르면 `null` | `onsite` |
+| `payment` | 기본요금 외 규정(필수·선택 조명료). 온라인 선결제(`prepay`) 또는 현장 결제(`onsite`). 모르면 `null`로 두고, 금액 항목에는 `unverified`로 표시되며 `payment_due`가 `null`이 됨 | `onsite` |
 | `day_types` | 적용 요일 구분. 모르면 `null`, 모든 요일이면 세 값을 모두 입력 | `["weekday", "weekend", "holiday"]` |
 | `time_from`, `time_to` | 적용 시간대, 조명 시간대. 모르면 `null`, 종일이면 `00:00`, `24:00` | `18:00`, `22:00` |
 | `months` | 적용 월, 계절 기준이 시설마다 다를 수 있어 월로 표시. 전체면 `null` | `[11, 12, 1, 2]` |

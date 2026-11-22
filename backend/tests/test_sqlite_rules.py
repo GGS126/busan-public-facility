@@ -302,3 +302,5 @@ def test_gudeok_lighting_payment_unverified(facilities):
 
     assert result.status == "calculated"
     assert (result.total, result.payment_due, result.onsite_payment, result.payment_unverified) == (28000, None, 0, 20000)
+    # 기본요금 8,000원은 예약할 때 온라인으로 낸다.
+    assert result.online_prepay == 8000

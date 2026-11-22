@@ -385,6 +385,8 @@ class FeeResult(BaseModel):
     items: list[FeeItem]
     total: int | None
     payment_due: int | None
+    # 결제 방식이 확인된 온라인 선결제액. payment_due가 None이어도 계산했으면 값이 있다.
+    online_prepay: int | None
     # 이용 당일 현장에서 따로 내는 금액. payment_due에는 들어가지 않는다.
     onsite_payment: int | None
     # 결제 방식을 확인하지 못한 금액. 0보다 크면 payment_due는 None이다.
