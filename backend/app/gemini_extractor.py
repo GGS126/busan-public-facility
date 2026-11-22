@@ -3,9 +3,13 @@
 import http.client
 import json
 import socket
-from threading import Timer
+from threading import BoundedSemaphore, Thread
+from queue import Empty, Queue
 from time import monotonic
 from datetime import date
+
+REQUEST_TIMEOUT_SECONDS = 30
+_transport_slots = BoundedSemaphore(4)
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 THINKING_LEVELS = {
@@ -92,40 +96,52 @@ class GeminiExtractor:
                 "maxOutputTokens": 4096 if self.model == "gemini-3.1-pro-preview" else 1024,
             },
         }
-        thinking_level = THINKING_LEVELS.get(self.model)
-        if thinking_level is not None:
-            payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
-        remaining = 30 if deadline is None else deadline - monotonic()
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": THINKING_LEVELS[self.model]}
+        remaining = REQUEST_TIMEOUT_SECONDS if deadline is None else deadline - monotonic()
         if remaining <= 0:
             raise TimeoutError("request_deadline")
+        # Bound DNS resolution as well as socket I/O from the caller's perspective.
+        # A blocked resolver retains its slot, so abandoned work cannot grow without bound.
+        if not _transport_slots.acquire(blocking=False):
+            raise ConnectionError("transport_busy")
         connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=remaining)
-        def abort_request():
-            if connection.sock is not None:
+        completed = Queue(maxsize=1)
+
+        def send_request():
+            try:
+                connection.request("POST", f"/v1beta/models/{self.model}:generateContent",
+                                   json.dumps(payload).encode("utf-8"),
+                                   {"x-goog-api-key": self.api_key, "Content-Type": "application/json"})
+                response = connection.getresponse()
+                if response.status != 200:
+                    raise GeminiHTTPError(response.status)
                 try:
-                    connection.sock.shutdown(socket.SHUT_RDWR)
+                    data = json.loads(response.read())
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise GeminiResponseError("invalid_api_json") from error
+                completed.put((data, None))
+            except Exception as error:
+                completed.put((None, error))
+            finally:
+                try:
+                    connection.close()
+                finally:
+                    _transport_slots.release()
+
+        Thread(target=send_request, daemon=True).start()
+        try:
+            data, error = completed.get(timeout=max(0, remaining if deadline is None else deadline - monotonic()))
+        except Empty:
+            # Capture the socket once: the worker may already have closed the connection.
+            transport_socket = connection.sock
+            if transport_socket is not None:
+                try:
+                    transport_socket.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
-            connection.close()
-
-        timer = Timer(remaining, abort_request)
-        timer.daemon = True
-        timer.start()
-        try:
-            connection.request("POST", f"/v1beta/models/{self.model}:generateContent",
-                               json.dumps(payload).encode("utf-8"),
-                               {"x-goog-api-key": self.api_key, "Content-Type": "application/json"})
-            response = connection.getresponse()
-            if response.status != 200:
-                raise GeminiHTTPError(response.status)
-            try:
-                data = json.loads(response.read())
-            except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                raise GeminiResponseError("invalid_api_json") from error
-        finally:
-            timer.cancel()
-            connection.close()
-        if deadline is not None and monotonic() >= deadline:
-            raise TimeoutError("request_deadline")
+            raise TimeoutError("request_deadline") from None
+        if error is not None:
+            raise error
 
         candidates = data.get("candidates") if isinstance(data, dict) else None
         if not isinstance(candidates, list) or len(candidates) != 1 or not isinstance(candidates[0], dict):

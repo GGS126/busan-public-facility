@@ -94,7 +94,7 @@ def test_unconfigured_gemini_3_model_is_rejected():
 
 
 @pytest.mark.parametrize(("errors", "diagnostic"), [
-    ([GeminiHTTPError(429)] * 2, "status=429"),
+    ([GeminiHTTPError(429)], "status=429"),
     ([TimeoutError("private details")] * 2, "type=TimeoutError"),
     ([GeminiResponseError("invalid_output_json")] * 2, "code=invalid_output_json"),
 ])
@@ -220,3 +220,21 @@ def test_concurrent_call_limit_is_logged(monkeypatch, caplog):
     assert response.json()["status"] == "llm_failed"
     provider.assert_not_called()
     assert "code=rate_limited limit=concurrency" in caplog.text
+
+
+def test_dns_block_does_not_block_request_deadline(monkeypatch):
+    from threading import Event
+    from time import monotonic
+    release = Event()
+    connection = Mock()
+    connection.sock = None
+    connection.request.side_effect = lambda *args: release.wait(2)
+    monkeypatch.setattr("app.gemini_extractor.http.client.HTTPSConnection", Mock(return_value=connection))
+    extractor = GeminiExtractor("test-key", sport_codes={}, discount_codes={}, districts=[])
+    started = monotonic()
+    try:
+        with pytest.raises(TimeoutError, match="request_deadline"):
+            extractor("test", TODAY, deadline=started + 0.05)
+        assert monotonic() - started < 1
+    finally:
+        release.set()
