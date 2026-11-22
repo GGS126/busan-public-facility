@@ -109,6 +109,9 @@ class GeminiExtractor:
 
         def send_request():
             try:
+                connection.connect()
+                if deadline is not None and monotonic() >= deadline:
+                    raise TimeoutError("request_deadline")
                 connection.request("POST", f"/v1beta/models/{self.model}:generateContent",
                                    json.dumps(payload).encode("utf-8"),
                                    {"x-goog-api-key": self.api_key, "Content-Type": "application/json"})
