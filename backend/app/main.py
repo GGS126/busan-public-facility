@@ -1,15 +1,14 @@
 import logging
 from datetime import datetime
 
-from fastapi import FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import TypeAdapter, ValidationError
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
 from app.detail import facility_detail
-from app.models import KST, CompareRequest, CompareResponse, Conditions, FacilityDetail, IsoDate, OptionsResponse
+from app.models import KST, CompareRequest, CompareResponse, Conditions, FacilityDetail, FacilityRules, IsoDate, OptionsResponse
 from app.options import build_options
 from app.repository import load_rule_data
 
@@ -19,8 +18,6 @@ app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
 rule_data = load_rule_data()
 facilities = {facility.facility_id: facility for facility in rule_data.facilities}
 available_options = build_options(rule_data)
-
-ISO_DATE = TypeAdapter(IsoDate)
 
 HTTP_ERRORS = {
     404: ("not_found", "요청한 경로를 찾을 수 없습니다."),
@@ -49,7 +46,8 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
             {
                 "field": ".".join(str(part) for part in location) or "body",
                 "code": code if custom else ("required" if code == "missing" else "invalid_value"),
-                "message": error["msg"] if custom else ("필수 항목입니다." if code == "missing" else "값을 확인해 주세요."),
+                # 날짜 형식 오류는 코드는 invalid_value로 두고 YYYY-MM-DD 안내 문구를 그대로 전한다.
+                "message": error["msg"] if custom or code == "date_format" else ("필수 항목입니다." if code == "missing" else "값을 확인해 주세요."),
             }
         )
     return error_response(400, "validation_error", "입력값을 확인해 주세요.", fields=fields)
@@ -122,21 +120,19 @@ def compare(request: CompareRequest) -> CompareResponse:
     return CompareResponse(results=[compare_facility(rules, request.conditions) for rules in selected])
 
 
-# 경로 매개변수라서 /api/facilities/options 같은 고정 경로보다 뒤에 둔다.
-@app.get("/api/facilities/{facility_id}", response_model=FacilityDetail)
-def facility(facility_id: str, date: str | None = Query(default=None)) -> FacilityDetail:
-    # 없는 시설이면 날짜 형식과 관계없이 404다. 그래서 날짜는 시설을 찾은 뒤에 검증한다.
+def known_facility(facility_id: str) -> FacilityRules:
+    # 의존성은 엔드포인트의 쿼리 검증보다 먼저 실행되므로, 없는 시설이면 날짜 형식과 관계없이 404다.
     rules = facilities.get(facility_id)
     if rules is None:
         raise FacilityNotFound
-    day = None
-    if date is not None:
-        try:
-            day = ISO_DATE.validate_python(date)
-        except ValidationError:
-            raise RequestValidationError(
-                [{"type": "date_from_datetime_parsing", "loc": ("query", "date"), "msg": "날짜 형식이 올바르지 않습니다."}]
-            ) from None
+    return rules
+
+
+# 경로 매개변수라서 /api/facilities/options 같은 고정 경로보다 뒤에 둔다.
+@app.get("/api/facilities/{facility_id}", response_model=FacilityDetail)
+def facility(
+    rules: FacilityRules = Depends(known_facility), day: IsoDate | None = Query(default=None, alias="date")
+) -> FacilityDetail:
     today = datetime.now(KST).date()
     if day is not None and day < today:
         raise RequestValidationError(

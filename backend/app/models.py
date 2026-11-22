@@ -330,11 +330,13 @@ class FacilityRules(BaseModel):
         return self.period_source_on(day) or self.source_id
 
     def period_source_on(self, day: date) -> str | None:
-        """이용일에 유효한 규정 기간의 출처. 기간별 규정이 없으면 시설 출처, 유효한 기간이 없으면 None"""
+        """이용일에 유효한 규정 기간의 출처. 기간별 규정이 없거나 기간에 출처가 없으면 시설 출처, 유효한 기간이 없으면 None"""
         if not self.terms_by_period:
             return self.source_id
         period = self._period_terms(day)
-        return period.source_id if period is not None else None
+        if period is None:
+            return None
+        return period.source_id or self.source_id
 
     @property
     def sports(self) -> set[str]:

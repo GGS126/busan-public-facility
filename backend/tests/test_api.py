@@ -329,3 +329,14 @@ def test_facility_detail_route_after_fixed_facility_routes():
     paths = [route.path for route in main.app.routes if getattr(route, "path", "").startswith("/api/facilities/")]
 
     assert paths[-1] == "/api/facilities/{facility_id}"
+
+
+def test_facility_detail_date_format_message_and_schema():
+    response = client.get("/api/facilities/F001", params={"date": "20990101"})
+
+    [field] = response.json()["error"]["fields"]
+    assert field["message"] == "날짜는 YYYY-MM-DD 형식으로 입력해 주세요."
+    # API 문서에는 date가 날짜 형식으로 나타난다.
+    parameters = main.app.openapi()["paths"]["/api/facilities/{facility_id}"]["get"]["parameters"]
+    schema = next(p["schema"] for p in parameters if p["name"] == "date")
+    assert {"type": "string", "format": "date"} in schema["anyOf"]

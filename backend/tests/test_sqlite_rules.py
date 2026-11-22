@@ -364,3 +364,31 @@ def test_facility_detail_api_with_database(facilities, monkeypatch):
         assert detail["facility_id"] == facility_id
         used = {detail["source_id"], *(option["source_id"] for option in detail["time_options"])} - {None}
         assert used == {source["source_id"] for source in detail["sources"]}
+
+
+def test_period_without_source_uses_facility_source(two_period_facility):
+    # 유효한 기간에 출처가 비어 있으면 기간 밖처럼 숨기지 않고 시설 출처를 보여 준다.
+    periods = [
+        period.model_copy(update={"source_id": None}) if period.effective_from == date(2027, 1, 1) else period
+        for period in two_period_facility.terms_by_period
+    ]
+    rules = two_period_facility.model_copy(update={"terms_by_period": periods})
+    detail = facility_detail(rules, date(2027, 2, 1))
+
+    assert detail.source_id == rules.source_id
+    assert rules.source_id in [source.source_id for source in detail.sources]
+
+
+def test_facility_detail_sports_follow_rule_months(facilities):
+    # 적용 기간 안이어도 그 달에 기본요금 규정이 없는 종목은 보여 주지 않는다.
+    rules = facilities["busan_samrak_ecopark_tennis"]
+    winter_only = rules.model_copy(
+        update={
+            "fee_rules": [
+                r.model_copy(update={"months": [11, 12, 1, 2]}) if r.type == "base" else r for r in rules.fee_rules
+            ]
+        }
+    )
+
+    assert facility_detail(winter_only, WEEKDAY).sports == ["tennis"]
+    assert facility_detail(winter_only, date(2027, 3, 10)).sports == []
