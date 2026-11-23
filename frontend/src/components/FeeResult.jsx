@@ -49,7 +49,9 @@ function getFeeLabel(type) {
 
 function getFacility(result, facilities) {
   return facilities.find(
-    (item) => item.id === result.facility_id
+    (item) =>
+      item.id === result.facility_id ||
+      item.facility_id === result.facility_id
   )
 }
 
@@ -74,6 +76,39 @@ function isTestSource(source) {
   return (
     source?.license === '가상 데이터' ||
     isExampleUrl(source?.url)
+  )
+}
+
+function hasValidAmount(value) {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function FeeAmountRow({ label, amount, className = '' }) {
+  return (
+    <div className={`fee-row ${className}`.trim()}>
+      <span>{label}</span>
+      <strong>{formatWon(amount)}</strong>
+    </div>
+  )
+}
+
+function ReviewItems({ items, title = '추가 확인사항' }) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="review-box">
+      <h4>{title}</h4>
+
+      <ul>
+        {items.map((item, index) => (
+          <li key={index}>
+            {getItemText(item)}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -105,6 +140,16 @@ function FeeResult({ results, facilities = [] }) {
           {results.map((result) => {
             const fee = result.fee || {}
             const calculated = fee.status === 'calculated'
+            const needsReview = fee.status === 'needs_review'
+            const notEligible = fee.status === 'not_eligible'
+
+            const feeItems = Array.isArray(fee.items)
+              ? fee.items
+              : []
+
+            const reviewItems = Array.isArray(fee.review_items)
+              ? fee.review_items
+              : []
 
             const facility = getFacility(result, facilities)
 
@@ -113,7 +158,34 @@ function FeeResult({ results, facilities = [] }) {
               result.facility_id === 'F001'
 
             const bookingUrl =
-              !isTestData ? facility?.bookingUrl : null
+              !isTestData
+                ? facility?.bookingUrl ||
+                  facility?.booking_url ||
+                  null
+                : null
+
+            const hasPaymentBreakdown =
+              hasValidAmount(fee.online_prepay) ||
+              hasValidAmount(fee.onsite_payment) ||
+              hasValidAmount(fee.payment_unverified)
+
+            const hasAnyFeeAmount =
+              feeItems.some((item) =>
+                hasValidAmount(item.amount)
+              ) ||
+              hasValidAmount(fee.total) ||
+              hasValidAmount(fee.payment_due) ||
+              hasValidAmount(fee.online_prepay) ||
+              hasValidAmount(fee.onsite_payment) ||
+              hasValidAmount(fee.payment_unverified) ||
+              hasValidAmount(fee.expected_refund) ||
+              hasValidAmount(fee.net_cost_after_refund)
+
+            const statusLabel = calculated
+              ? '계산 완료'
+              : notEligible
+                ? '이용조건 확인 필요'
+                : '확인 필요'
 
             return (
               <article
@@ -122,7 +194,7 @@ function FeeResult({ results, facilities = [] }) {
               >
                 <div className="comparison-header">
                   <span className="result-tag">
-                    {calculated ? '계산 완료' : '확인 필요'}
+                    {statusLabel}
                   </span>
 
                   <h3>
@@ -176,92 +248,132 @@ function FeeResult({ results, facilities = [] }) {
                 <div className="result-details">
                   <h4>예상요금</h4>
 
-                  {calculated ? (
-                    <>
-                      <div className="fee-list">
-                        {fee.items?.map((item, index) => (
-                          <div
-                            className="fee-row"
-                            key={`${item.rule_id || item.type}-${index}`}
-                          >
-                            <span>
-                              {getFeeLabel(item.type)}
-                            </span>
-
-                            <strong>
-                              {formatWon(item.amount)}
-                            </strong>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="fee-total">
-                        <div className="fee-row">
-                          <span>최초 결제 예상액</span>
-                          <strong>
-                            {formatWon(fee.payment_due)}
-                          </strong>
-                        </div>
-
-                        <div className="fee-row">
-                          <span>예상 환급액</span>
-                          <strong>
-                            {formatWon(fee.expected_refund)}
-                          </strong>
-                        </div>
-
-                        <div className="fee-row final-price">
-                          <span>최종 예상 부담액</span>
-                          <strong>
-                            {formatWon(
-                              fee.net_cost_after_refund
-                            )}
-                          </strong>
-                        </div>
-                      </div>
-
-                      {fee.review_items?.length > 0 && (
-                        <div className="review-box">
-                          <h4>추가 확인사항</h4>
-
-                          <ul>
-                            {fee.review_items.map(
-                              (item, index) => (
-                                <li key={index}>
-                                  {getItemText(item)}
-                                </li>
-                              )
-                            )}
-                          </ul>
-                        </div>
-                      )}
-                    </>
-                  ) : (
+                  {notEligible && (
                     <div className="review-box">
-                      <h4>요금 확인 필요</h4>
-
+                      <h4>이용조건 확인 필요</h4>
                       <p>
-                        현재 조건의 요금을 확정할 수
-                        없습니다.
+                        선택한 이용조건으로는 해당 시설을
+                        이용할 수 없거나 이용 가능 여부를
+                        확인해야 합니다.
                       </p>
-
-                      {fee.review_items?.length ? (
-                        <ul>
-                          {fee.review_items.map(
-                            (item, index) => (
-                              <li key={index}>
-                                {getItemText(item)}
-                              </li>
-                            )
-                          )}
-                        </ul>
-                      ) : (
-                        <p>
-                          추가 확인이 필요한 항목입니다.
-                        </p>
-                      )}
                     </div>
                   )}
+
+                  {needsReview && (
+                    <div className="review-box">
+                      <h4>요금 확인 필요</h4>
+                      <p>
+                        일부 요금이나 결제 조건을 확정할 수
+                        없습니다. 확인된 금액이 있다면
+                        아래에 표시합니다.
+                      </p>
+                    </div>
+                  )}
+
+                  {feeItems.length > 0 ? (
+                    <div className="fee-list">
+                      {feeItems.map((item, index) => (
+                        <div
+                          className="fee-row"
+                          key={`${item.rule_id || item.type}-${index}`}
+                        >
+                          <span>
+                            {getFeeLabel(item.type)}
+                          </span>
+
+                          <strong>
+                            {formatWon(item.amount)}
+                          </strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p>
+                      {hasAnyFeeAmount
+                        ? '세부 요금 항목은 확인되지 않았습니다.'
+                        : '확인된 요금 항목이 없습니다.'}
+                    </p>
+                  )}
+
+                  {hasAnyFeeAmount && (
+                    <div className="fee-total">
+                      <FeeAmountRow
+                        label="예상 총 이용요금"
+                        amount={fee.total}
+                      />
+
+                      <FeeAmountRow
+                        label="최초 결제 예상액"
+                        amount={fee.payment_due}
+                      />
+
+                      <FeeAmountRow
+                        label="예상 환급액"
+                        amount={fee.expected_refund}
+                      />
+
+                      <FeeAmountRow
+                        label="최종 예상 부담액"
+                        amount={fee.net_cost_after_refund}
+                        className="final-price"
+                      />
+                    </div>
+                  )}
+
+                  {/* 결제 방식별 금액 */}
+                  {hasPaymentBreakdown && (
+                    <div className="result-details">
+                      <h4>결제 방식별 금액</h4>
+
+                      <FeeAmountRow
+                        label="온라인 선결제액"
+                        amount={fee.online_prepay}
+                      />
+
+                      <FeeAmountRow
+                        label="현장 결제액"
+                        amount={fee.onsite_payment}
+                      />
+
+                      <FeeAmountRow
+                        label="결제 방식 미확인 금액"
+                        amount={fee.payment_unverified}
+                      />
+
+                      <p>
+                        결제 방식별 금액은 백엔드에서
+                        확인된 규정을 기준으로 표시합니다.
+                        확인되지 않은 항목은 별도로
+                        확인해야 합니다.
+                      </p>
+                    </div>
+                  )}
+
+                  {!calculated &&
+                    !needsReview &&
+                    !notEligible && (
+                      <div className="review-box">
+                        <h4>요금 상태 확인 필요</h4>
+                        <p>
+                          서버에서 반환한 요금 상태를
+                          확인할 수 없습니다.
+                        </p>
+                      </div>
+                    )}
+
+                  <ReviewItems
+                    items={reviewItems}
+                    title="요금 및 이용조건 추가 확인사항"
+                  />
+
+                  {needsReview &&
+                    reviewItems.length === 0 && (
+                      <p>
+                        추가 확인이 필요한 항목이
+                        있습니다. 공식 안내를 확인해
+                        주세요.
+                      </p>
+                    )}
                 </div>
 
                 {/* 예약 및 환불 규정 */}
@@ -309,22 +421,10 @@ function FeeResult({ results, facilities = [] }) {
                     </p>
                   )}
 
-                  {result.checklist_review_items
-                    ?.length > 0 && (
-                    <>
-                      <h4>추가 확인사항</h4>
-
-                      <ul>
-                        {result.checklist_review_items.map(
-                          (item, index) => (
-                            <li key={index}>
-                              {getItemText(item)}
-                            </li>
-                          )
-                        )}
-                      </ul>
-                    </>
-                  )}
+                  <ReviewItems
+                    items={result.checklist_review_items}
+                    title="준비사항 추가 확인사항"
+                  />
                 </div>
 
                 {/* 자료 출처 */}

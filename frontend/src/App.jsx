@@ -1,9 +1,11 @@
+
 import { useEffect, useState } from 'react'
 import {
   compareFacilities,
   getOptions,
   getFacilityDetail,
 } from './api/compare'
+
 import Header from './components/Header'
 import HeroBanner from './components/HeroBanner'
 import SearchForm from './components/SearchForm'
@@ -116,6 +118,7 @@ function toMinutes(time) {
   }
 
   const [hour, minute] = time.split(':').map(Number)
+
   return hour * 60 + minute
 }
 
@@ -143,12 +146,14 @@ function isValidFacilityTime(detail, sport, start, end) {
 
   return getTimeOptions(detail, sport).some((option) => {
     if (option.selection === 'fixed_slot') {
-      return Array.isArray(option.slots) &&
+      return (
+        Array.isArray(option.slots) &&
         option.slots.some(
           (slot) =>
             slot.start_time === start &&
             slot.end_time === end
         )
+      )
     }
 
     if (option.selection !== 'flexible') {
@@ -191,6 +196,58 @@ function isValidFacilityTime(detail, sport, start, end) {
   })
 }
 
+function normalizeFieldErrors(fields) {
+  if (!fields || typeof fields !== 'object') {
+    return {}
+  }
+
+  const result = {}
+
+  function add(field, message) {
+    if (typeof field !== 'string' || !field.trim()) {
+      return
+    }
+
+    const key = field
+      .replace(/\[(\d+)\]/g, '.$1')
+      .split('.')
+      .pop()
+
+    const text =
+      typeof message === 'string'
+        ? message
+        : message &&
+            typeof message.message === 'string'
+          ? message.message
+          : '입력값을 확인해 주세요.'
+
+    if (text && !result[key]) {
+      result[key] = text
+    }
+  }
+
+  if (Array.isArray(fields)) {
+    fields.forEach((item) => {
+      if (item && typeof item === 'object') {
+        add(
+          item.field || item.loc?.join('.'),
+          item.message || item.msg
+        )
+      }
+    })
+  } else {
+    Object.entries(fields).forEach(([field, messages]) => {
+      const values = Array.isArray(messages)
+        ? messages
+        : [messages]
+
+      values.forEach((message) => add(field, message))
+    })
+  }
+
+  return result
+}
+
 function App() {
   const [sport, setSport] = useState('')
   const [district, setDistrict] = useState('전체')
@@ -200,10 +257,12 @@ function App() {
   const [people, setPeople] = useState('1')
   const [discountType, setDiscountType] = useState('none')
   const [eligibleCount, setEligibleCount] = useState('0')
+
   const [
     representativeEligible,
     setRepresentativeEligible,
   ] = useState(false)
+
   const [
     optionalLightingMinutes,
     setOptionalLightingMinutes,
@@ -229,6 +288,7 @@ function App() {
   const [results, setResults] = useState([])
 
   const [error, setError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
   const [compareError, setCompareError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -259,9 +319,11 @@ function App() {
             (item) => item.code === 'tennis'
           )
 
-          return tennis?.code ||
+          return (
+            tennis?.code ||
             response.sports[0]?.code ||
             ''
+          )
         })
 
         setDistrict((previous) =>
@@ -316,6 +378,7 @@ function App() {
     setDetailErrors({})
     setResults([])
     setError('')
+    setFieldErrors({})
     setCompareError('')
   }
 
@@ -430,6 +493,7 @@ function App() {
     const message = validateConditions()
 
     if (message) {
+      setFieldErrors({})
       setError(message)
       return
     }
@@ -452,6 +516,7 @@ function App() {
     setDetailErrors({})
     setResults([])
     setError('')
+    setFieldErrors({})
     setCompareError('')
 
     setTimeout(() => {
@@ -481,14 +546,17 @@ function App() {
     }
 
     setSelectedIds((previous) => [...previous, id])
+
     setDetailLoading((previous) => ({
       ...previous,
       [id]: true,
     }))
+
     setDetailErrors((previous) => ({
       ...previous,
       [id]: '',
     }))
+
     setResults([])
     setCompareError('')
 
@@ -545,7 +613,8 @@ function App() {
   }
 
   function handleApplyAI(conditions) {
-    const requestedSport = conditions.sport || sport
+    const requestedSport =
+      conditions.sport || sport
 
     const nextSport = options.sports.some(
       (item) => item.code === requestedSport
@@ -553,8 +622,16 @@ function App() {
       ? requestedSport
       : sport
 
+    // 백엔드 districts 배열과 기존 district 값 모두 지원
+    const requestedDistricts =
+      Array.isArray(conditions.districts)
+        ? conditions.districts
+        : []
+
     const requestedDistrict =
-      conditions.district || '전체'
+      requestedDistricts.length > 0
+        ? requestedDistricts[0]
+        : conditions.district || '전체'
 
     const nextDistrict =
       requestedDistrict === '전체' ||
@@ -565,20 +642,48 @@ function App() {
     setSport(nextSport)
     setDistrict(nextDistrict)
     setDate(conditions.date || '')
+
     setStartTime(
-      conditions.startTime ||
       conditions.start_time ||
-      ''
-    )
-    setEndTime(
-      conditions.endTime ||
-      conditions.end_time ||
+      conditions.startTime ||
       ''
     )
 
-    if (conditions.headcount != null) {
-      setPeople(String(conditions.headcount))
+    setEndTime(
+      conditions.end_time ||
+      conditions.endTime ||
+      ''
+    )
+
+    const requestedHeadcount =
+      conditions.headcount ??
+      conditions.people
+
+    if (requestedHeadcount != null) {
+      setPeople(String(requestedHeadcount))
     }
+
+    // AI가 추출한 감면 유형을 직접 입력 폼에 반영
+    const requestedDiscountTypes = Array.isArray(
+      conditions.discount_types
+    )
+      ? conditions.discount_types
+      : []
+
+    const nextDiscountType =
+      requestedDiscountTypes.find(
+        (code) =>
+          code !== 'none' &&
+          options.discount_types.some(
+            (item) => item.code === code
+          )
+      ) || 'none'
+
+    setDiscountType(nextDiscountType)
+
+    // AI는 실제 감면 대상 인원이나 대표자 자격을 확정하지 않음
+    setEligibleCount('0')
+    setRepresentativeEligible(false)
 
     clearResult()
 
@@ -598,6 +703,7 @@ function App() {
 
   async function handleCompare() {
     setCompareError('')
+    setFieldErrors({})
     setResults([])
 
     if (selectedIds.length === 0) {
@@ -736,6 +842,10 @@ function App() {
         })
       }, 100)
     } catch (err) {
+      setFieldErrors(
+        normalizeFieldErrors(err.fields)
+      )
+
       setCompareError(
         err.message ||
         '시설 비교 중 오류가 발생했습니다.'
@@ -754,6 +864,9 @@ function App() {
         <NaturalLanguageInput
           onApply={handleApplyAI}
           onDirectInput={handleDirectInput}
+          options={options}
+          optionsLoading={optionsLoading}
+          optionsError={optionsError}
         />
 
         <div style={{ height: '28px' }} />
@@ -782,6 +895,7 @@ function App() {
           onSearch={handleSearch}
           loading={loading}
           error={error}
+          fieldErrors={fieldErrors}
           clearResult={clearResult}
           options={options}
           optionsLoading={optionsLoading}

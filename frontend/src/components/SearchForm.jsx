@@ -1,3 +1,4 @@
+
 // 30분 단위 이용시간 목록 생성
 const timeOptions = Array.from({ length: 48 }, (_, index) => {
   const hour = String(Math.floor(index / 2)).padStart(2, '0')
@@ -29,6 +30,7 @@ function SearchForm({
   onSearch,
   loading,
   error,
+  fieldErrors = {},
   clearResult,
   options,
   optionsLoading,
@@ -40,12 +42,42 @@ function SearchForm({
     clearResult()
   }
 
-  const unavailable = optionsLoading || Boolean(optionsError)
+  // 백엔드 필드명과 프론트엔드 필드명 매칭
+  function getFieldError(...names) {
+    for (const name of names) {
+      if (
+        typeof fieldErrors[name] === 'string' &&
+        fieldErrors[name]
+      ) {
+        return fieldErrors[name]
+      }
+    }
+
+    return ''
+  }
+
+  function fieldErrorMessage(id, ...names) {
+    const message = getFieldError(...names)
+
+    return message ? (
+      <small
+        id={`${id}-error`}
+        className="error-message"
+        role="alert"
+      >
+        {message}
+      </small>
+    ) : null
+  }
+
+  const unavailable =
+    optionsLoading || Boolean(optionsError)
 
   return (
     <section className="search-card" id="search">
       <div className="section-heading">
         <span className="section-number">01</span>
+
         <div>
           <h2>이용 조건 입력</h2>
           <p>종목, 지역, 날짜와 이용 인원을 입력하세요.</p>
@@ -86,11 +118,25 @@ function SearchForm({
           <select
             id="sport"
             value={sport}
-            disabled={unavailable || options.sports.length === 0}
-            onChange={(e) => update(setSport, e.target.value)}
+            disabled={
+              unavailable || options.sports.length === 0
+            }
+            aria-invalid={Boolean(
+              getFieldError('sport')
+            )}
+            aria-describedby={
+              getFieldError('sport')
+                ? 'sport-error'
+                : undefined
+            }
+            onChange={(e) =>
+              update(setSport, e.target.value)
+            }
           >
             {options.sports.length === 0 && (
-              <option value="">선택 가능한 종목 없음</option>
+              <option value="">
+                선택 가능한 종목 없음
+              </option>
             )}
 
             {options.sports.map((item) => (
@@ -99,6 +145,8 @@ function SearchForm({
               </option>
             ))}
           </select>
+
+          {fieldErrorMessage('sport', 'sport')}
         </div>
 
         <div className="field">
@@ -108,7 +156,17 @@ function SearchForm({
             id="district"
             value={district}
             disabled={unavailable}
-            onChange={(e) => update(setDistrict, e.target.value)}
+            aria-invalid={Boolean(
+              getFieldError('district', 'districts')
+            )}
+            aria-describedby={
+              getFieldError('district', 'districts')
+                ? 'district-error'
+                : undefined
+            }
+            onChange={(e) =>
+              update(setDistrict, e.target.value)
+            }
           >
             <option value="전체">부산 전체</option>
 
@@ -118,6 +176,12 @@ function SearchForm({
               </option>
             ))}
           </select>
+
+          {fieldErrorMessage(
+            'district',
+            'district',
+            'districts'
+          )}
         </div>
 
         <div className="field">
@@ -127,17 +191,41 @@ function SearchForm({
             id="date"
             type="date"
             value={date}
-            onChange={(e) => update(setDate, e.target.value)}
+            aria-invalid={Boolean(
+              getFieldError('date')
+            )}
+            aria-describedby={
+              getFieldError('date')
+                ? 'date-error'
+                : undefined
+            }
+            onChange={(e) =>
+              update(setDate, e.target.value)
+            }
           />
+
+          {fieldErrorMessage('date', 'date')}
         </div>
 
         <div className="field">
-          <label htmlFor="start-time">희망 시작시간</label>
+          <label htmlFor="start-time">
+            희망 시작시간
+          </label>
 
           <select
             id="start-time"
             value={startTime}
-            onChange={(e) => update(setStartTime, e.target.value)}
+            aria-invalid={Boolean(
+              getFieldError('start_time', 'startTime')
+            )}
+            aria-describedby={
+              getFieldError('start_time', 'startTime')
+                ? 'start-time-error'
+                : undefined
+            }
+            onChange={(e) =>
+              update(setStartTime, e.target.value)
+            }
           >
             <option value="">시작시간 선택</option>
 
@@ -147,20 +235,40 @@ function SearchForm({
               </option>
             ))}
           </select>
+
+          {fieldErrorMessage(
+            'start-time',
+            'start_time',
+            'startTime'
+          )}
         </div>
 
         <div className="field">
-          <label htmlFor="end-time">희망 종료시간</label>
+          <label htmlFor="end-time">
+            희망 종료시간
+          </label>
 
           <select
             id="end-time"
             value={endTime}
-            onChange={(e) => update(setEndTime, e.target.value)}
+            aria-invalid={Boolean(
+              getFieldError('end_time', 'endTime')
+            )}
+            aria-describedby={
+              getFieldError('end_time', 'endTime')
+                ? 'end-time-error'
+                : undefined
+            }
+            onChange={(e) =>
+              update(setEndTime, e.target.value)
+            }
           >
             <option value="">종료시간 선택</option>
 
             {timeOptions
-              .filter((time) => !startTime || time > startTime)
+              .filter(
+                (time) => !startTime || time > startTime
+              )
               .concat('24:00')
               .map((time) => (
                 <option key={time} value={time}>
@@ -168,10 +276,18 @@ function SearchForm({
                 </option>
               ))}
           </select>
+
+          {fieldErrorMessage(
+            'end-time',
+            'end_time',
+            'endTime'
+          )}
         </div>
 
         <div className="field">
-          <label htmlFor="people">전체 이용 인원</label>
+          <label htmlFor="people">
+            전체 이용 인원
+          </label>
 
           <input
             id="people"
@@ -179,17 +295,51 @@ function SearchForm({
             min="1"
             step="1"
             value={people}
-            onChange={(e) => update(setPeople, e.target.value)}
+            aria-invalid={Boolean(
+              getFieldError('headcount', 'people')
+            )}
+            aria-describedby={
+              getFieldError('headcount', 'people')
+                ? 'people-error'
+                : undefined
+            }
+            onChange={(e) =>
+              update(setPeople, e.target.value)
+            }
           />
+
+          {fieldErrorMessage(
+            'people',
+            'headcount',
+            'people'
+          )}
         </div>
 
         <div className="field">
-          <label htmlFor="discount">감면 유형</label>
+          <label htmlFor="discount">
+            감면 유형
+          </label>
 
           <select
             id="discount"
             value={discountType}
             disabled={unavailable}
+            aria-invalid={Boolean(
+              getFieldError(
+                'discount_types',
+                'discounts',
+                'discount_type'
+              )
+            )}
+            aria-describedby={
+              getFieldError(
+                'discount_types',
+                'discounts',
+                'discount_type'
+              )
+                ? 'discount-error'
+                : undefined
+            }
             onChange={(e) => {
               setDiscountType(e.target.value)
               setEligibleCount(
@@ -202,19 +352,33 @@ function SearchForm({
             <option value="none">감면 없음</option>
 
             {options.discount_types
-              .filter((item) => item.code !== 'none')
+              .filter(
+                (item) => item.code !== 'none'
+              )
               .map((item) => (
-                <option key={item.code} value={item.code}>
+                <option
+                  key={item.code}
+                  value={item.code}
+                >
                   {item.label}
                 </option>
               ))}
           </select>
+
+          {fieldErrorMessage(
+            'discount',
+            'discount_types',
+            'discounts',
+            'discount_type'
+          )}
         </div>
 
         {discountType !== 'none' && (
           <>
             <div className="field">
-              <label htmlFor="eligible">감면 대상 인원</label>
+              <label htmlFor="eligible">
+                감면 대상 인원
+              </label>
 
               <input
                 id="eligible"
@@ -223,10 +387,36 @@ function SearchForm({
                 step="1"
                 max={people}
                 value={eligibleCount}
+                aria-invalid={Boolean(
+                  getFieldError(
+                    'count',
+                    'eligibleCount',
+                    'eligible_count'
+                  )
+                )}
+                aria-describedby={
+                  getFieldError(
+                    'count',
+                    'eligibleCount',
+                    'eligible_count'
+                  )
+                    ? 'eligible-error'
+                    : undefined
+                }
                 onChange={(e) =>
-                  update(setEligibleCount, e.target.value)
+                  update(
+                    setEligibleCount,
+                    e.target.value
+                  )
                 }
               />
+
+              {fieldErrorMessage(
+                'eligible',
+                'count',
+                'eligibleCount',
+                'eligible_count'
+              )}
             </div>
 
             <div className="field">
@@ -236,7 +426,27 @@ function SearchForm({
 
               <select
                 id="representative-eligible"
-                value={representativeEligible ? 'yes' : 'no'}
+                value={
+                  representativeEligible
+                    ? 'yes'
+                    : 'no'
+                }
+                aria-invalid={Boolean(
+                  getFieldError(
+                    'holder',
+                    'representativeEligible',
+                    'representative_eligible'
+                  )
+                )}
+                aria-describedby={
+                  getFieldError(
+                    'holder',
+                    'representativeEligible',
+                    'representative_eligible'
+                  )
+                    ? 'representative-eligible-error'
+                    : undefined
+                }
                 onChange={(e) =>
                   update(
                     setRepresentativeEligible,
@@ -249,6 +459,13 @@ function SearchForm({
                   예 (대표자를 감면 대상 인원에 포함)
                 </option>
               </select>
+
+              {fieldErrorMessage(
+                'representative-eligible',
+                'holder',
+                'representativeEligible',
+                'representative_eligible'
+              )}
             </div>
           </>
         )}
@@ -264,6 +481,20 @@ function SearchForm({
             min="0"
             step="1"
             value={optionalLightingMinutes}
+            aria-invalid={Boolean(
+              getFieldError(
+                'optional_lighting_minutes',
+                'optionalLightingMinutes'
+              )
+            )}
+            aria-describedby={
+              getFieldError(
+                'optional_lighting_minutes',
+                'optionalLightingMinutes'
+              )
+                ? 'optional-lighting-minutes-error'
+                : undefined
+            }
             onChange={(e) =>
               update(
                 setOptionalLightingMinutes,
@@ -271,6 +502,12 @@ function SearchForm({
               )
             }
           />
+
+          {fieldErrorMessage(
+            'optional-lighting-minutes',
+            'optional_lighting_minutes',
+            'optionalLightingMinutes'
+          )}
 
           <small>
             사용하지 않으면 0분을 입력하세요.

@@ -1,36 +1,27 @@
-const USE_MOCK_API =
-  import.meta.env.VITE_USE_MOCK_API === 'true'
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || ''
+const USE_MOCK_API = import.meta.env.VITE_USE_MOCK_API === 'true'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 const REQUEST_TIMEOUT = 10000
+const NATURAL_LANGUAGE_TIMEOUT = 35000
 
 function formatFieldErrors(fields) {
-  if (!fields || typeof fields !== 'object') {
-    return ''
-  }
+  if (!fields || typeof fields !== 'object') return ''
 
   if (Array.isArray(fields)) {
     return fields
       .map((item) => {
-        if (!item || typeof item !== 'object') {
-          return ''
-        }
+        if (!item || typeof item !== 'object') return ''
 
         const field =
-          typeof item.field === 'string'
-            ? item.field
-            : ''
+          typeof item.field === 'string' ? item.field : ''
 
         const message =
           typeof item.message === 'string'
             ? item.message
             : '입력값을 확인해 주세요.'
 
-        return field
-          ? `${field}: ${message}`
-          : message
+        return field ? `${field}: ${message}` : message
       })
       .filter(Boolean)
       .join('\n')
@@ -38,9 +29,7 @@ function formatFieldErrors(fields) {
 
   return Object.entries(fields)
     .flatMap(([field, errors]) => {
-      const values = Array.isArray(errors)
-        ? errors
-        : [errors]
+      const values = Array.isArray(errors) ? errors : [errors]
 
       return values.map((value) => {
         const message =
@@ -59,15 +48,11 @@ function formatFieldErrors(fields) {
 }
 
 function formatValidationErrors(detail) {
-  if (!Array.isArray(detail)) {
-    return ''
-  }
+  if (!Array.isArray(detail)) return ''
 
   return detail
     .map((item) => {
-      if (!item || typeof item !== 'object') {
-        return ''
-      }
+      if (!item || typeof item !== 'object') return ''
 
       const field = Array.isArray(item.loc)
         ? item.loc
@@ -80,9 +65,7 @@ function formatValidationErrors(detail) {
           ? item.msg
           : '입력값을 확인해 주세요.'
 
-      return field
-        ? `${field}: ${message}`
-        : message
+      return field ? `${field}: ${message}` : message
     })
     .filter(Boolean)
     .join('\n')
@@ -91,14 +74,8 @@ function formatValidationErrors(detail) {
 function createAPIError(response, data) {
   const errorInfo = data?.error
   const errorCode = errorInfo?.code || null
-
-  const fieldErrors = formatFieldErrors(
-    errorInfo?.fields
-  )
-
-  const validationErrors = formatValidationErrors(
-    data?.detail
-  )
+  const fieldErrors = formatFieldErrors(errorInfo?.fields)
+  const validationErrors = formatValidationErrors(data?.detail)
 
   let message
 
@@ -111,8 +88,7 @@ function createAPIError(response, data) {
     message = '요청한 API 경로를 찾을 수 없습니다.'
   } else if (
     errorCode === 'validation_error' &&
-    (response.status === 400 ||
-      response.status === 422)
+    (response.status === 400 || response.status === 422)
   ) {
     message =
       typeof errorInfo?.message === 'string' &&
@@ -130,14 +106,10 @@ function createAPIError(response, data) {
     message =
       '서버에 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.'
   } else {
-    message =
-      `요청을 처리할 수 없습니다. (${response.status})`
+    message = `요청을 처리할 수 없습니다. (${response.status})`
   }
 
-  const details = [
-    fieldErrors,
-    validationErrors,
-  ]
+  const details = [fieldErrors, validationErrors]
     .filter(Boolean)
     .join('\n')
 
@@ -146,7 +118,6 @@ function createAPIError(response, data) {
   }
 
   const error = new Error(message)
-
   error.status = response.status
   error.code = errorCode
   error.fields = errorInfo?.fields || null
@@ -155,24 +126,27 @@ function createAPIError(response, data) {
 }
 
 async function requestAPI(path, options = {}) {
+  const {
+    timeout = REQUEST_TIMEOUT,
+    ...fetchOptions
+  } = options
+
   const controller = new AbortController()
 
-  const timeoutId = setTimeout(() => {
-    controller.abort()
-  }, REQUEST_TIMEOUT)
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    timeout
+  )
 
   try {
-    const response = await fetch(
-      `${API_BASE_URL}${path}`,
-      {
-        ...options,
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
-      }
-    )
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...fetchOptions,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...fetchOptions.headers,
+      },
+    })
 
     const contentType =
       response.headers.get('content-type') || ''
@@ -231,8 +205,7 @@ function createMockResult(facilityId) {
 
   return {
     facility_id: facilityId,
-    facility_name:
-      names[facilityId] || facilityId,
+    facility_name: names[facilityId] || facilityId,
     fee: {
       status: 'needs_review',
       items: [],
@@ -241,8 +214,7 @@ function createMockResult(facilityId) {
       net_cost_after_refund: null,
       review_items: [
         {
-          reason:
-            '현재 개발용 Mock API를 사용하고 있습니다.',
+          reason: '현재 개발용 Mock API를 사용하고 있습니다.',
         },
       ],
     },
@@ -252,13 +224,10 @@ function createMockResult(facilityId) {
   }
 }
 
-// 기존 시설 비교 API
 export async function compareFacilities(request) {
   if (USE_MOCK_API) {
     return {
-      results: request.facility_ids.map(
-        createMockResult
-      ),
+      results: request.facility_ids.map(createMockResult),
     }
   }
 
@@ -268,18 +237,19 @@ export async function compareFacilities(request) {
   })
 }
 
-// 기존 이용조건 선택지 API
 export async function getOptions() {
   return requestAPI('/api/options')
 }
 
-// PR #28: 시설 상세 조회 API
 export async function getFacilityDetail(facilityId, date) {
   if (!facilityId) {
     throw new Error('시설 ID가 필요합니다.')
   }
 
-  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  if (
+    !date ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(date)
+  ) {
     throw new Error(
       '이용 날짜는 YYYY-MM-DD 형식이어야 합니다.'
     )
@@ -289,7 +259,30 @@ export async function getFacilityDetail(facilityId, date) {
     `/api/facilities/${encodeURIComponent(facilityId)}` +
     `?date=${encodeURIComponent(date)}`
 
-  // Mock 모드에서는 상세정보를 임의로 생성하지 않는다.
-  // PR #28의 실제 API 응답을 확인해야 하므로 호출한다.
   return requestAPI(path)
+}
+
+export async function parseNaturalLanguage(sentence) {
+  if (
+    typeof sentence !== 'string' ||
+    !sentence.trim()
+  ) {
+    throw new Error(
+      '이용 조건을 문장으로 입력해 주세요.'
+    )
+  }
+
+  if (sentence.trim().length > 500) {
+    throw new Error(
+      '이용 조건은 500자 이내로 입력해 주세요.'
+    )
+  }
+
+  return requestAPI('/api/query/parse', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: sentence.trim(),
+    }),
+    timeout: NATURAL_LANGUAGE_TIMEOUT,
+  })
 }
