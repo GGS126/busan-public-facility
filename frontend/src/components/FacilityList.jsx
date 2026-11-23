@@ -1,9 +1,3 @@
-
-import {
-  facilitySlots,
-  getFacilitySlots,
-} from '../data/facilitySlots'
-
 function getSportLabel(sport) {
   const labels = {
     tennis: '테니스',
@@ -22,6 +16,135 @@ function getSportIcon(sport) {
   return icons[sport] || '🏟️'
 }
 
+function toMinutes(time) {
+  if (!time || !/^\d{2}:\d{2}$/.test(time)) {
+    return null
+  }
+
+  const [hour, minute] = time.split(':').map(Number)
+  return hour * 60 + minute
+}
+
+function fromMinutes(minutes) {
+  const hour = String(Math.floor(minutes / 60)).padStart(2, '0')
+  const minute = String(minutes % 60).padStart(2, '0')
+  return `${hour}:${minute}`
+}
+
+function buildFlexibleSlots(option) {
+  const open = toMinutes(option.open_time)
+  const close = toMinutes(option.close_time)
+
+  if (open === null || close === null || close <= open) {
+    return []
+  }
+
+  const allowed = Array.isArray(option.allowed_minutes)
+    ? option.allowed_minutes.filter(
+        (minutes) =>
+          Number.isInteger(minutes) && minutes > 0
+      )
+    : []
+
+  const maxMinutes =
+    Number.isInteger(option.max_minutes) &&
+    option.max_minutes > 0
+      ? option.max_minutes
+      : null
+
+  // 허용 시간이 명시되면 해당 길이만 사용한다.
+  // 최대 시간만 명시되면 30분 단위로 생성한다.
+  const durations = allowed.length > 0
+    ? allowed.filter(
+        (minutes) =>
+          maxMinutes === null || minutes <= maxMinutes
+      )
+    : maxMinutes !== null
+      ? Array.from(
+          { length: Math.floor(maxMinutes / 30) },
+          (_, index) => (index + 1) * 30
+        )
+      : []
+
+  const slots = []
+
+  for (let start = open; start < close; start += 30) {
+    for (const duration of durations) {
+      const end = start + duration
+
+      if (end <= close) {
+        slots.push([
+          fromMinutes(start),
+          fromMinutes(end),
+        ])
+      }
+    }
+  }
+
+  return slots
+}
+
+function getDetailSlots(detail, sport) {
+  if (!detail || !Array.isArray(detail.time_options)) {
+    return []
+  }
+
+  const options = detail.time_options.filter(
+    (option) => option.sport === sport
+  )
+
+  const slots = options.flatMap((option) => {
+    if (option.selection === 'fixed_slot') {
+      return Array.isArray(option.slots)
+        ? option.slots
+            .filter(
+              (slot) =>
+                slot?.start_time &&
+                slot?.end_time
+            )
+            .map((slot) => [
+              slot.start_time,
+              slot.end_time,
+            ])
+        : []
+    }
+
+    if (option.selection === 'flexible') {
+      return buildFlexibleSlots(option)
+    }
+
+    return []
+  })
+
+  return Array.from(
+    new Map(
+      slots.map((slot) => [
+        `${slot[0]}|${slot[1]}`,
+        slot,
+      ])
+    ).values()
+  ).sort((a, b) =>
+    `${a[0]}|${a[1]}`.localeCompare(
+      `${b[0]}|${b[1]}`
+    )
+  )
+}
+
+function formatOperatingHours(hours) {
+  if (!hours) {
+    return '확인 필요'
+  }
+
+  const start = hours.open_time
+  const end = hours.close_time
+
+  if (start && end) {
+    return `${start} ~ ${end}`
+  }
+
+  return hours.note || '확인 필요'
+}
+
 function FacilityList({
   facilities,
   selectedIds,
@@ -31,8 +154,10 @@ function FacilityList({
   loading,
   facilityTimes,
   onTimeChange,
-  date,
   error,
+  facilityDetails = {},
+  detailLoading = {},
+  detailErrors = {},
 }) {
   return (
     <section className="facility-section" id="facilities">
@@ -69,10 +194,7 @@ function FacilityList({
       ) : (
         <>
           <div className="facility-list-info">
-            <span>
-              검색 결과 {facilities.length}곳
-            </span>
-
+            <span>검색 결과 {facilities.length}곳</span>
             <span>
               비교 대상 {selectedIds.length}곳 선택됨
             </span>
@@ -84,9 +206,14 @@ function FacilityList({
                 facility.id
               )
 
-              const slots = getFacilitySlots(
-                facility.id,
-                date
+              const detail = facilityDetails[facility.id]
+              const isLoading = Boolean(
+                detailLoading[facility.id]
+              )
+              const detailError = detailErrors[facility.id]
+              const slots = getDetailSlots(
+                detail,
+                facility.sport
               )
 
               const selectedTime =
@@ -94,6 +221,10 @@ function FacilityList({
 
               const isTestData =
                 facility.isTestData === true
+
+              const bookingUrl =
+                detail?.booking_url ??
+                facility.bookingUrl
 
               return (
                 <article
@@ -110,7 +241,9 @@ function FacilityList({
                     </span>
 
                     <span className="facility-district">
-                      {facility.district}
+                      {detail?.district ||
+                        facility.district ||
+                        '지역 확인 필요'}
                     </span>
                   </div>
 
@@ -118,9 +251,13 @@ function FacilityList({
                     {getSportIcon(facility.sport)}
                   </div>
 
-                  <h3>{facility.name}</h3>
+                  <h3>{detail?.name || facility.name}</h3>
 
-                  <p>{facility.address}</p>
+                  <p>
+                    {detail?.address ||
+                      facility.address ||
+                      '주소 확인 필요'}
+                  </p>
 
                   {isTestData && (
                     <div
@@ -130,11 +267,37 @@ function FacilityList({
                       <strong>
                         백엔드 연동 테스트용 가상 시설
                       </strong>
-
                       <p>
                         실제 부산 공공체육시설이 아닙니다.
-                        표시된 이용시간과 요금은 기능
-                        검증을 위한 예시 데이터입니다.
+                        표시된 정보는 기능 검증용입니다.
+                      </p>
+                    </div>
+                  )}
+
+                  {detail && (
+                    <div className="facility-detail-info">
+                      <p>
+                        <strong>연락처: </strong>
+                        {detail.phone || '확인 필요'}
+                      </p>
+
+                      <p>
+                        <strong>운영시간: </strong>
+                        {formatOperatingHours(
+                          detail.operating_hours
+                        )}
+                      </p>
+
+                      {detail.operating_hours?.note && (
+                        <p>
+                          {detail.operating_hours.note}
+                        </p>
+                      )}
+
+                      <p>
+                        <strong>휴장 안내: </strong>
+                        {detail.closure_note ||
+                          '확인 필요'}
                       </p>
                     </div>
                   )}
@@ -158,7 +321,15 @@ function FacilityList({
                         이용시간 선택
                       </label>
 
-                      {slots.length > 0 ? (
+                      {isLoading ? (
+                        <p role="status">
+                          시설 이용시간을 불러오는 중입니다.
+                        </p>
+                      ) : detailError ? (
+                        <p className="error-message">
+                          {detailError}
+                        </p>
+                      ) : slots.length > 0 ? (
                         <>
                           <select
                             id={`time-${facility.id}`}
@@ -189,34 +360,25 @@ function FacilityList({
                             })}
                           </select>
 
-                          {isTestData && (
-                            <p
-                              style={{
-                                fontSize: '13px',
-                                marginTop: '8px',
-                              }}
-                            >
-                              ※ 테스트용 시간대이며
-                              실제 예약 가능 여부와
-                              관계없습니다.
-                            </p>
-                          )}
+                          <small>
+                            실제 예약 가능 여부는
+                            공식 예약 사이트에서 확인하세요.
+                          </small>
                         </>
                       ) : (
                         <p className="error-message">
-                          {facilitySlots[facility.id]
-                            ?.message ||
-                            '예약 회차 정보 확인이 필요합니다.'}
+                          {detail
+                            ? '선택한 날짜에 확인된 이용시간 규정이 없습니다.'
+                            : '시설 상세정보를 불러오지 못했습니다.'}
                         </p>
                       )}
                     </div>
                   )}
 
-                  {facility.bookingUrl &&
-                  !isTestData ? (
+                  {bookingUrl && !isTestData ? (
                     <a
                       className="facility-booking-link"
-                      href={facility.bookingUrl}
+                      href={bookingUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
@@ -228,9 +390,7 @@ function FacilityList({
                       링크가 없습니다.
                     </p>
                   ) : (
-                    <p>
-                      공식 예약 링크 확인 필요
-                    </p>
+                    <p>공식 예약 링크 확인 필요</p>
                   )}
                 </article>
               )
@@ -238,12 +398,13 @@ function FacilityList({
           </div>
 
           {error && (
-            <p className="error-message">
+            <p className="error-message" role="alert">
               {error}
             </p>
           )}
 
           <button
+            type="button"
             className="search-button"
             onClick={onCompare}
             disabled={

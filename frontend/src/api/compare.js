@@ -1,4 +1,3 @@
-
 const USE_MOCK_API =
   import.meta.env.VITE_USE_MOCK_API === 'true'
 
@@ -7,14 +6,11 @@ const API_BASE_URL =
 
 const REQUEST_TIMEOUT = 10000
 
-// 백엔드에서 전달한 필드별 오류 메시지 정리
 function formatFieldErrors(fields) {
   if (!fields || typeof fields !== 'object') {
     return ''
   }
 
-  // 배열 형식:
-  // [{ field, code, message }]
   if (Array.isArray(fields)) {
     return fields
       .map((item) => {
@@ -40,10 +36,8 @@ function formatFieldErrors(fields) {
       .join('\n')
   }
 
-  // 객체 형식:
-  // { fieldName: ["오류 메시지"] }
-  const messages = Object.entries(fields).flatMap(
-    ([field, errors]) => {
+  return Object.entries(fields)
+    .flatMap(([field, errors]) => {
       const values = Array.isArray(errors)
         ? errors
         : [errors]
@@ -60,13 +54,10 @@ function formatFieldErrors(fields) {
 
         return `${field}: ${message}`
       })
-    }
-  )
-
-  return messages.join('\n')
+    })
+    .join('\n')
 }
 
-// FastAPI 기본 422 오류 메시지 정리
 function formatValidationErrors(detail) {
   if (!Array.isArray(detail)) {
     return ''
@@ -97,7 +88,6 @@ function formatValidationErrors(detail) {
     .join('\n')
 }
 
-// API 오류 메시지 생성
 function createAPIError(response, data) {
   const errorInfo = data?.error
   const errorCode = errorInfo?.code || null
@@ -164,7 +154,6 @@ function createAPIError(response, data) {
   return error
 }
 
-// API 요청 공통 처리
 async function requestAPI(path, options = {}) {
   const controller = new AbortController()
 
@@ -230,7 +219,6 @@ async function requestAPI(path, options = {}) {
   }
 }
 
-// 개발용 모의 비교 결과 생성
 function createMockResult(facilityId) {
   const names = {
     busan_haeundae_arboretum_tennis:
@@ -264,7 +252,7 @@ function createMockResult(facilityId) {
   }
 }
 
-// 시설 비교 API
+// 기존 시설 비교 API
 export async function compareFacilities(request) {
   if (USE_MOCK_API) {
     return {
@@ -280,7 +268,28 @@ export async function compareFacilities(request) {
   })
 }
 
-// 이용조건 선택지 조회 API
+// 기존 이용조건 선택지 API
 export async function getOptions() {
   return requestAPI('/api/options')
+}
+
+// PR #28: 시설 상세 조회 API
+export async function getFacilityDetail(facilityId, date) {
+  if (!facilityId) {
+    throw new Error('시설 ID가 필요합니다.')
+  }
+
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(
+      '이용 날짜는 YYYY-MM-DD 형식이어야 합니다.'
+    )
+  }
+
+  const path =
+    `/api/facilities/${encodeURIComponent(facilityId)}` +
+    `?date=${encodeURIComponent(date)}`
+
+  // Mock 모드에서는 상세정보를 임의로 생성하지 않는다.
+  // PR #28의 실제 API 응답을 확인해야 하므로 호출한다.
+  return requestAPI(path)
 }

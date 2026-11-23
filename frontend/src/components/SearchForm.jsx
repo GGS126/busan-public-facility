@@ -1,9 +1,7 @@
-
- // 30분 단위 이용시간 목록 생성
+// 30분 단위 이용시간 목록 생성
 const timeOptions = Array.from({ length: 48 }, (_, index) => {
   const hour = String(Math.floor(index / 2)).padStart(2, '0')
   const minute = index % 2 === 0 ? '00' : '30'
-
   return `${hour}:${minute}`
 })
 
@@ -24,6 +22,10 @@ function SearchForm({
   setDiscountType,
   eligibleCount,
   setEligibleCount,
+  representativeEligible,
+  setRepresentativeEligible,
+  optionalLightingMinutes,
+  setOptionalLightingMinutes,
   onSearch,
   loading,
   error,
@@ -54,21 +56,19 @@ function SearchForm({
         </div>
       </div>
 
-      {/* 이용조건 선택지 로딩 상태 */}
       {optionsLoading && (
         <p role="status">
           이용 가능한 종목, 지역 및 감면 유형을 불러오는 중입니다.
         </p>
       )}
 
-      {/* 이용조건 선택지 API 오류 */}
       {optionsError && (
         <div role="alert">
           <p className="error-message">
-            이용조건 선택지를 불러오지 못했습니다.
-            {' '}
+            이용조건 선택지를 불러오지 못했습니다.{' '}
             {optionsError}
           </p>
+
           <button
             type="button"
             onClick={onRetryOptions}
@@ -82,6 +82,7 @@ function SearchForm({
       <div className="search-fields">
         <div className="field">
           <label htmlFor="sport">이용 종목</label>
+
           <select
             id="sport"
             value={sport}
@@ -102,6 +103,7 @@ function SearchForm({
 
         <div className="field">
           <label htmlFor="district">이용 지역</label>
+
           <select
             id="district"
             value={district}
@@ -120,6 +122,7 @@ function SearchForm({
 
         <div className="field">
           <label htmlFor="date">이용 날짜</label>
+
           <input
             id="date"
             type="date"
@@ -130,12 +133,14 @@ function SearchForm({
 
         <div className="field">
           <label htmlFor="start-time">희망 시작시간</label>
+
           <select
             id="start-time"
             value={startTime}
             onChange={(e) => update(setStartTime, e.target.value)}
           >
             <option value="">시작시간 선택</option>
+
             {timeOptions.map((time) => (
               <option key={time} value={time}>
                 {time}
@@ -146,12 +151,14 @@ function SearchForm({
 
         <div className="field">
           <label htmlFor="end-time">희망 종료시간</label>
+
           <select
             id="end-time"
             value={endTime}
             onChange={(e) => update(setEndTime, e.target.value)}
           >
             <option value="">종료시간 선택</option>
+
             {timeOptions
               .filter((time) => !startTime || time > startTime)
               .concat('24:00')
@@ -165,10 +172,12 @@ function SearchForm({
 
         <div className="field">
           <label htmlFor="people">전체 이용 인원</label>
+
           <input
             id="people"
             type="number"
             min="1"
+            step="1"
             value={people}
             onChange={(e) => update(setPeople, e.target.value)}
           />
@@ -176,13 +185,17 @@ function SearchForm({
 
         <div className="field">
           <label htmlFor="discount">감면 유형</label>
+
           <select
             id="discount"
             value={discountType}
             disabled={unavailable}
             onChange={(e) => {
               setDiscountType(e.target.value)
-              setEligibleCount('0')
+              setEligibleCount(
+                e.target.value === 'none' ? '0' : '1'
+              )
+              setRepresentativeEligible(false)
               clearResult()
             }}
           >
@@ -199,25 +212,81 @@ function SearchForm({
         </div>
 
         {discountType !== 'none' && (
-          <div className="field">
-            <label htmlFor="eligible">감면 대상 인원</label>
-            <input
-              id="eligible"
-              type="number"
-              min="0"
-              max={people}
-              value={eligibleCount}
-              onChange={(e) =>
-                update(setEligibleCount, e.target.value)
-              }
-            />
-          </div>
+          <>
+            <div className="field">
+              <label htmlFor="eligible">감면 대상 인원</label>
+
+              <input
+                id="eligible"
+                type="number"
+                min="1"
+                step="1"
+                max={people}
+                value={eligibleCount}
+                onChange={(e) =>
+                  update(setEligibleCount, e.target.value)
+                }
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="representative-eligible">
+                예약 대표자 감면 대상 여부
+              </label>
+
+              <select
+                id="representative-eligible"
+                value={representativeEligible ? 'yes' : 'no'}
+                onChange={(e) =>
+                  update(
+                    setRepresentativeEligible,
+                    e.target.value === 'yes'
+                  )
+                }
+              >
+                <option value="no">아니요</option>
+                <option value="yes">
+                  예 (대표자를 감면 대상 인원에 포함)
+                </option>
+              </select>
+            </div>
+          </>
         )}
+
+        <div className="field">
+          <label htmlFor="optional-lighting-minutes">
+            선택 조명 사용 시간 (분)
+          </label>
+
+          <input
+            id="optional-lighting-minutes"
+            type="number"
+            min="0"
+            step="1"
+            value={optionalLightingMinutes}
+            onChange={(e) =>
+              update(
+                setOptionalLightingMinutes,
+                e.target.value
+              )
+            }
+          />
+
+          <small>
+            사용하지 않으면 0분을 입력하세요.
+            시설별 조명 가능 시간은 다를 수 있습니다.
+          </small>
+        </div>
       </div>
 
-      {error && <p className="error-message">{error}</p>}
+      {error && (
+        <p className="error-message" role="alert">
+          {error}
+        </p>
+      )}
 
       <button
+        type="button"
         className="search-button"
         onClick={onSearch}
         disabled={

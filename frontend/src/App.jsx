@@ -1,7 +1,9 @@
-
 import { useEffect, useState } from 'react'
-import { compareFacilities, getOptions } from './api/compare'
-import { getFacilitySlots } from './data/facilitySlots'
+import {
+  compareFacilities,
+  getOptions,
+  getFacilityDetail,
+} from './api/compare'
 import Header from './components/Header'
 import HeroBanner from './components/HeroBanner'
 import SearchForm from './components/SearchForm'
@@ -10,7 +12,7 @@ import FacilityList from './components/FacilityList'
 import FeeResult from './components/FeeResult'
 import './App.css'
 
-// 시설 검색 API가 병합되기 전까지 사용하는 임시 시설 목록
+// 시설 검색 API 연동 전 임시 목록
 const facilities = [
   {
     id: 'F001',
@@ -50,7 +52,6 @@ const facilities = [
   },
 ]
 
-// 오늘 날짜를 YYYY-MM-DD 형식으로 반환
 function getToday() {
   const now = new Date()
   const year = now.getFullYear()
@@ -60,7 +61,6 @@ function getToday() {
   return `${year}-${month}-${day}`
 }
 
-// 선택지 API 응답 형식 확인
 function validateOptions(data) {
   if (
     !data ||
@@ -96,8 +96,102 @@ function validateOptions(data) {
   return data
 }
 
+function validateFacilityDetail(data, facilityId) {
+  if (
+    !data ||
+    data.facility_id !== facilityId ||
+    !Array.isArray(data.time_options)
+  ) {
+    throw new Error(
+      '시설 상세정보의 서버 응답 형식이 올바르지 않습니다.'
+    )
+  }
+
+  return data
+}
+
+function toMinutes(time) {
+  if (!time || !/^\d{2}:\d{2}$/.test(time)) {
+    return null
+  }
+
+  const [hour, minute] = time.split(':').map(Number)
+  return hour * 60 + minute
+}
+
+function getTimeOptions(detail, sport) {
+  if (!detail || !Array.isArray(detail.time_options)) {
+    return []
+  }
+
+  return detail.time_options.filter(
+    (option) => option.sport === sport
+  )
+}
+
+function isValidFacilityTime(detail, sport, start, end) {
+  const startMinutes = toMinutes(start)
+  const endMinutes = toMinutes(end)
+
+  if (
+    startMinutes === null ||
+    endMinutes === null ||
+    endMinutes <= startMinutes
+  ) {
+    return false
+  }
+
+  return getTimeOptions(detail, sport).some((option) => {
+    if (option.selection === 'fixed_slot') {
+      return Array.isArray(option.slots) &&
+        option.slots.some(
+          (slot) =>
+            slot.start_time === start &&
+            slot.end_time === end
+        )
+    }
+
+    if (option.selection !== 'flexible') {
+      return false
+    }
+
+    const open = toMinutes(option.open_time)
+    const close = toMinutes(option.close_time)
+    const duration = endMinutes - startMinutes
+
+    if (
+      open === null ||
+      close === null ||
+      startMinutes < open ||
+      endMinutes > close
+    ) {
+      return false
+    }
+
+    if (
+      Number.isInteger(option.max_minutes) &&
+      duration > option.max_minutes
+    ) {
+      return false
+    }
+
+    if (
+      Array.isArray(option.allowed_minutes) &&
+      option.allowed_minutes.length > 0
+    ) {
+      return option.allowed_minutes.includes(duration)
+    }
+
+    return (
+      Number.isInteger(option.max_minutes) &&
+      option.max_minutes > 0 &&
+      duration % 30 === 0 &&
+      startMinutes % 30 === 0
+    )
+  })
+}
+
 function App() {
-  // 이용조건 입력 상태
   const [sport, setSport] = useState('')
   const [district, setDistrict] = useState('전체')
   const [date, setDate] = useState('')
@@ -106,8 +200,15 @@ function App() {
   const [people, setPeople] = useState('1')
   const [discountType, setDiscountType] = useState('none')
   const [eligibleCount, setEligibleCount] = useState('0')
+  const [
+    representativeEligible,
+    setRepresentativeEligible,
+  ] = useState(false)
+  const [
+    optionalLightingMinutes,
+    setOptionalLightingMinutes,
+  ] = useState('0')
 
-  // 백엔드 이용조건 선택지
   const [options, setOptions] = useState({
     sports: [],
     districts: [],
@@ -118,19 +219,19 @@ function App() {
   const [optionsError, setOptionsError] = useState('')
   const [optionsRetry, setOptionsRetry] = useState(0)
 
-  // 시설 검색 및 비교 상태
   const [searched, setSearched] = useState(false)
   const [searchResults, setSearchResults] = useState([])
   const [selectedIds, setSelectedIds] = useState([])
   const [facilityTimes, setFacilityTimes] = useState({})
+  const [facilityDetails, setFacilityDetails] = useState({})
+  const [detailLoading, setDetailLoading] = useState({})
+  const [detailErrors, setDetailErrors] = useState({})
   const [results, setResults] = useState([])
 
-  // 오류 및 로딩 상태
   const [error, setError] = useState('')
   const [compareError, setCompareError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // 페이지 진입 시 이용조건 선택지 조회
   useEffect(() => {
     let cancelled = false
 
@@ -145,13 +246,12 @@ function App() {
         setOptions(response)
         setOptionsError('')
 
-        // 서버가 지원하는 종목을 기본 선택
         setSport((previous) => {
-          const exists = response.sports.some(
-            (item) => item.code === previous
-          )
-
-          if (exists) {
+          if (
+            response.sports.some(
+              (item) => item.code === previous
+            )
+          ) {
             return previous
           }
 
@@ -159,10 +259,11 @@ function App() {
             (item) => item.code === 'tennis'
           )
 
-          return tennis?.code || response.sports[0]?.code || ''
+          return tennis?.code ||
+            response.sports[0]?.code ||
+            ''
         })
 
-        // 지원하지 않는 지역이면 전체로 초기화
         setDistrict((previous) =>
           previous === '전체' ||
           response.districts.includes(previous)
@@ -170,7 +271,6 @@ function App() {
             : '전체'
         )
 
-        // 지원하지 않는 감면 유형이면 감면 없음
         setDiscountType((previous) =>
           previous === 'none' ||
           response.discount_types.some(
@@ -200,25 +300,25 @@ function App() {
     }
   }, [optionsRetry])
 
-  // 선택지 다시 불러오기
   function retryOptions() {
     setOptionsLoading(true)
     setOptionsError('')
     setOptionsRetry((previous) => previous + 1)
   }
 
-  // 입력 조건 변경 시 검색 및 비교 결과 초기화
   function clearResult() {
     setSearched(false)
     setSearchResults([])
     setSelectedIds([])
     setFacilityTimes({})
+    setFacilityDetails({})
+    setDetailLoading({})
+    setDetailErrors({})
     setResults([])
     setError('')
     setCompareError('')
   }
 
-  // 이용조건 유효성 검사
   function validateConditions() {
     if (optionsLoading || optionsError) {
       return '이용조건 선택지를 먼저 불러와 주세요.'
@@ -256,13 +356,16 @@ function App() {
     }
 
     if (
-      (startTime && !endTime) ||
-      (!startTime && endTime)
+      Boolean(startTime) !== Boolean(endTime)
     ) {
       return '희망 시작시간과 종료시간을 모두 입력해 주세요.'
     }
 
-    if (startTime && endTime && startTime >= endTime) {
+    if (
+      startTime &&
+      endTime &&
+      startTime >= endTime
+    ) {
       return '종료시간은 시작시간보다 늦어야 합니다.'
     }
 
@@ -274,40 +377,55 @@ function App() {
       return '이용 인원을 올바르게 입력해 주세요.'
     }
 
-    if (
-      discountType !== 'none' &&
-      (
+    if (discountType !== 'none') {
+      if (
         eligibleCount === '' ||
         !Number.isInteger(Number(eligibleCount)) ||
-        Number(eligibleCount) < 0 ||
+        Number(eligibleCount) < 1 ||
         Number(eligibleCount) > Number(people)
+      ) {
+        return '감면 대상 인원을 올바르게 입력해 주세요.'
+      }
+    }
+
+    if (
+      representativeEligible &&
+      (
+        discountType === 'none' ||
+        Number(eligibleCount) < 1
       )
     ) {
-      return '감면 대상 인원을 올바르게 입력해 주세요.'
+      return '대표자가 감면 대상인 경우 감면 대상 인원을 확인해 주세요.'
+    }
+
+    if (
+      optionalLightingMinutes === '' ||
+      !Number.isInteger(
+        Number(optionalLightingMinutes)
+      ) ||
+      Number(optionalLightingMinutes) < 0
+    ) {
+      return '선택 조명 사용 시간을 0 이상의 정수로 입력해 주세요.'
+    }
+
+    if (Number(optionalLightingMinutes) > 0) {
+      if (!startTime || !endTime) {
+        return '선택 조명을 사용하려면 희망 이용시간을 입력해 주세요.'
+      }
+
+      const duration =
+        toMinutes(endTime) - toMinutes(startTime)
+
+      if (
+        Number(optionalLightingMinutes) > duration
+      ) {
+        return '선택 조명 사용 시간은 시설 이용 시간보다 길 수 없습니다.'
+      }
     }
 
     return ''
   }
 
-  // 시설의 예약 회차와 희망 시간 일치 여부 확인
-  function getMatchingTime(facilityId) {
-    if (!startTime || !endTime) {
-      return ''
-    }
-
-    const slots = getFacilitySlots(facilityId, date)
-
-    const matched = slots.find(
-      ([start, end]) =>
-        start === startTime && end === endTime
-    )
-
-    return matched
-      ? `${matched[0]}|${matched[1]}`
-      : ''
-  }
-
-  // 입력 조건에 맞는 시설 검색
   function handleSearch() {
     const message = validateConditions()
 
@@ -316,19 +434,22 @@ function App() {
       return
     }
 
-    // TODO: 시설 검색 API 병합 후 서버 조회로 교체
-    // 현재는 백엔드 테스트 시설 F001을 포함한 임시 목록
-    const filtered = facilities.filter((facility) => {
-      return (
+    const filtered = facilities.filter(
+      (facility) =>
         facility.sport === sport &&
-        (district === '전체' || facility.district === district)
-      )
-    })
+        (
+          district === '전체' ||
+          facility.district === district
+        )
+    )
 
     setSearchResults(filtered)
     setSearched(true)
     setSelectedIds([])
     setFacilityTimes({})
+    setFacilityDetails({})
+    setDetailLoading({})
+    setDetailErrors({})
     setResults([])
     setError('')
     setCompareError('')
@@ -340,39 +461,79 @@ function App() {
     }, 100)
   }
 
-  // 시설 선택 및 이용시간 자동 선택
-  function toggleFacility(id) {
+  async function toggleFacility(id) {
     const isSelected = selectedIds.includes(id)
 
-    setSelectedIds((previous) =>
-      isSelected
-        ? previous.filter((item) => item !== id)
-        : [...previous, id]
-    )
+    if (isSelected) {
+      setSelectedIds((previous) =>
+        previous.filter((item) => item !== id)
+      )
 
-    setFacilityTimes((previous) => {
-      const updated = { ...previous }
-
-      if (isSelected) {
+      setFacilityTimes((previous) => {
+        const updated = { ...previous }
         delete updated[id]
-      } else {
-        const matchedTime = getMatchingTime(id)
+        return updated
+      })
 
-        if (matchedTime) {
-          updated[id] = matchedTime
-        } else {
-          delete updated[id]
-        }
-      }
+      setResults([])
+      setCompareError('')
+      return
+    }
 
-      return updated
-    })
-
+    setSelectedIds((previous) => [...previous, id])
+    setDetailLoading((previous) => ({
+      ...previous,
+      [id]: true,
+    }))
+    setDetailErrors((previous) => ({
+      ...previous,
+      [id]: '',
+    }))
     setResults([])
     setCompareError('')
+
+    try {
+      const detail = validateFacilityDetail(
+        await getFacilityDetail(id, date),
+        id
+      )
+
+      setFacilityDetails((previous) => ({
+        ...previous,
+        [id]: detail,
+      }))
+
+      // 희망 이용시간이 실제 상세 규정과 일치하면 자동 선택
+      if (
+        startTime &&
+        endTime &&
+        isValidFacilityTime(
+          detail,
+          sport,
+          startTime,
+          endTime
+        )
+      ) {
+        setFacilityTimes((previous) => ({
+          ...previous,
+          [id]: `${startTime}|${endTime}`,
+        }))
+      }
+    } catch (err) {
+      setDetailErrors((previous) => ({
+        ...previous,
+        [id]:
+          err.message ||
+          '시설 상세정보를 불러오지 못했습니다.',
+      }))
+    } finally {
+      setDetailLoading((previous) => ({
+        ...previous,
+        [id]: false,
+      }))
+    }
   }
 
-  // 시설별 이용시간 저장
   function handleTimeChange(facilityId, value) {
     setFacilityTimes((previous) => ({
       ...previous,
@@ -383,7 +544,6 @@ function App() {
     setCompareError('')
   }
 
-  // 자연어 입력 조건을 직접 입력 폼에 적용
   function handleApplyAI(conditions) {
     const requestedSport = conditions.sport || sport
 
@@ -393,7 +553,8 @@ function App() {
       ? requestedSport
       : sport
 
-    const requestedDistrict = conditions.district || '전체'
+    const requestedDistrict =
+      conditions.district || '전체'
 
     const nextDistrict =
       requestedDistrict === '전체' ||
@@ -405,10 +566,14 @@ function App() {
     setDistrict(nextDistrict)
     setDate(conditions.date || '')
     setStartTime(
-      conditions.startTime || conditions.start_time || ''
+      conditions.startTime ||
+      conditions.start_time ||
+      ''
     )
     setEndTime(
-      conditions.endTime || conditions.end_time || ''
+      conditions.endTime ||
+      conditions.end_time ||
+      ''
     )
 
     if (conditions.headcount != null) {
@@ -425,20 +590,20 @@ function App() {
     }, 100)
   }
 
-  // 직접 입력 영역으로 이동
   function handleDirectInput() {
     document.getElementById('search')?.scrollIntoView({
       behavior: 'smooth',
     })
   }
 
-  // 선택한 시설을 각각의 이용시간으로 비교
   async function handleCompare() {
     setCompareError('')
     setResults([])
 
     if (selectedIds.length === 0) {
-      setCompareError('비교할 시설을 하나 이상 선택해 주세요.')
+      setCompareError(
+        '비교할 시설을 하나 이상 선택해 주세요.'
+      )
       return
     }
 
@@ -460,10 +625,54 @@ function App() {
       return
     }
 
+    for (const id of selectedIds) {
+      const facility = searchResults.find(
+        (item) => item.id === id
+      )
+
+      const detail = facilityDetails[id]
+
+      if (!facility || !detail) {
+        setCompareError(
+          '시설 상세정보를 확인한 뒤 비교해 주세요.'
+        )
+        return
+      }
+
+      const [selectedStart, selectedEnd] =
+        facilityTimes[id].split('|')
+
+      if (
+        !isValidFacilityTime(
+          detail,
+          facility.sport,
+          selectedStart,
+          selectedEnd
+        )
+      ) {
+        setCompareError(
+          `${facility.name}의 이용시간을 다시 선택해 주세요.`
+        )
+        return
+      }
+
+      const duration =
+        toMinutes(selectedEnd) -
+        toMinutes(selectedStart)
+
+      if (
+        Number(optionalLightingMinutes) > duration
+      ) {
+        setCompareError(
+          `${facility.name}의 선택 조명 사용 시간이 이용시간보다 깁니다.`
+        )
+        return
+      }
+    }
+
     setLoading(true)
 
     try {
-      // 시설마다 서로 다른 시간으로 API 요청
       const responses = await Promise.all(
         selectedIds.map(async (facilityId) => {
           const [selectedStart, selectedEnd] =
@@ -474,21 +683,32 @@ function App() {
             conditions: {
               sport,
               districts:
-                district === '전체' ? [] : [district],
+                district === '전체'
+                  ? []
+                  : [district],
               date,
               start_time: selectedStart,
               end_time: selectedEnd,
               headcount: Number(people),
-              discount_types:
-                discountType === 'none' ||
-                Number(eligibleCount) === 0
+              discount_types: [],
+              discounts:
+                discountType === 'none'
                   ? []
-                  : [discountType],
+                  : [
+                      {
+                        type: discountType,
+                        count: Number(eligibleCount),
+                        holder: representativeEligible,
+                      },
+                    ],
+              optional_lighting_minutes:
+                Number(optionalLightingMinutes),
               source: 'direct',
             },
           }
 
-          const response = await compareFacilities(request)
+          const response =
+            await compareFacilities(request)
 
           if (
             !response ||
@@ -499,7 +719,6 @@ function App() {
             )
           }
 
-          // 결과에 시설별 선택 날짜 및 시간 추가
           return response.results.map((result) => ({
             ...result,
             selected_date: date,
@@ -518,7 +737,8 @@ function App() {
       }, 100)
     } catch (err) {
       setCompareError(
-        err.message || '시설 비교 중 오류가 발생했습니다.'
+        err.message ||
+        '시설 비교 중 오류가 발생했습니다.'
       )
     } finally {
       setLoading(false)
@@ -531,7 +751,6 @@ function App() {
       <HeroBanner />
 
       <main className="main-container">
-        {/* 자연어 이용조건 입력 */}
         <NaturalLanguageInput
           onApply={handleApplyAI}
           onDirectInput={handleDirectInput}
@@ -539,7 +758,6 @@ function App() {
 
         <div style={{ height: '28px' }} />
 
-        {/* 이용조건 직접 입력 */}
         <SearchForm
           sport={sport}
           setSport={setSport}
@@ -557,6 +775,10 @@ function App() {
           setDiscountType={setDiscountType}
           eligibleCount={eligibleCount}
           setEligibleCount={setEligibleCount}
+          representativeEligible={representativeEligible}
+          setRepresentativeEligible={setRepresentativeEligible}
+          optionalLightingMinutes={optionalLightingMinutes}
+          setOptionalLightingMinutes={setOptionalLightingMinutes}
           onSearch={handleSearch}
           loading={loading}
           error={error}
@@ -567,7 +789,6 @@ function App() {
           onRetryOptions={retryOptions}
         />
 
-        {/* 시설 검색 결과 */}
         <FacilityList
           facilities={searchResults}
           selectedIds={selectedIds}
@@ -579,15 +800,16 @@ function App() {
           onTimeChange={handleTimeChange}
           date={date}
           error={compareError}
+          facilityDetails={facilityDetails}
+          detailLoading={detailLoading}
+          detailErrors={detailErrors}
         />
 
-        {/* 시설별 요금 비교 결과 */}
         <FeeResult
           results={results}
           facilities={facilities}
         />
 
-        {/* 서비스 이용 안내 */}
         <section className="guide-section">
           <h2>서비스 이용 안내</h2>
 
