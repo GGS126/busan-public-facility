@@ -1,11 +1,13 @@
 """SQLite 시설 카탈로그와 시간 정책을 DB 파일 버전별로 캐시한다."""
 
 import sys
+from datetime import date
 from functools import cache, lru_cache
 from importlib import import_module
 from pathlib import Path
 
-from app.models import Option, OptionsResponse
+from app.models import HolidayCalendar, Option, OptionsResponse
+from app.repository import HOLIDAYS_PATH
 
 DB_PATH = Path(__file__).resolve().parents[2] / "database" / "facilities.sqlite3"
 SPORT_LABELS = {"tennis": "테니스", "soccer": "축구", "futsal": "풋살"}
@@ -56,6 +58,30 @@ def read_fixed_slots(path: Path, use_date: str):
 
 def read_search_time_policies(path: Path, use_date: str):
     return _time_data(path, use_date, _file_version(path))[0]
+
+
+@cache
+def holiday_calendar() -> HolidayCalendar:
+    return HolidayCalendar.model_validate_json(HOLIDAYS_PATH.read_text(encoding="utf-8"))
+
+
+def facility_closures(path: Path, day: date) -> dict[str, dict]:
+    return _facility_closures(path, day, _file_version(path))
+
+
+@lru_cache(maxsize=32)
+def _facility_closures(path: Path, day: date, _version) -> dict[str, dict]:
+    return load_query_api().closure_statuses(path, day.isoformat(), closure_holiday_codes(day))
+
+
+def closure_holiday_codes(day: date):
+    calendar = holiday_calendar()
+    codes = None
+    if calendar.covers(day):
+        holiday_codes = {"설날": "lunar_new_year_day", "추석": "chuseok_day"}
+        codes = [holiday_codes[item.name] for item in calendar.holidays
+                 if item.date == day and item.name in holiday_codes]
+    return codes
 
 
 def read_search_time_data(path: Path, use_date: str):

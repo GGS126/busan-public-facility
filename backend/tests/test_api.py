@@ -65,6 +65,7 @@ def test_calculated_response_matches_api_draft():
                     ],
                     "total": 30000,
                     "payment_due": 50000,
+                    "online_prepay": None, "onsite_payment": None, "payment_unverified": None,
                     "expected_refund": 20000,
                     "net_cost_after_refund": 30000,
                     "review_items": [],
@@ -128,7 +129,11 @@ def test_sport_offered_elsewhere_returns_review_for_this_facility(monkeypatch):
     assert fee["review_items"][0]["source_id"] == "S-01"
 
 
-def test_unknown_facility_returns_404():
+def test_unknown_facility_returns_404(monkeypatch, tmp_path):
+    database = tmp_path / "catalog.sqlite3"
+    database.touch()
+    monkeypatch.setattr(main, "DB_PATH", database)
+    monkeypatch.setattr(main, "read_catalog", lambda path: ([], main.available_options))
     body = payload()
     body["facility_ids"] = ["F001", "NOPE"]
     response = client.post("/api/compare", json=body)
@@ -252,3 +257,12 @@ def test_server_error_hides_details_and_input(monkeypatch, caplog):
     assert "secret detail" not in response.text
     assert "multi_child" not in caplog.text
     assert "secret detail" not in caplog.text
+
+
+def test_missing_database_returns_503_for_any_unknown_id(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "missing.sqlite3")
+    body = payload()
+    body["facility_ids"] = ["NOPE"]
+    response = client.post("/api/compare", json=body)
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "facility_catalog_unavailable"
