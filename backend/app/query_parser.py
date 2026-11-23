@@ -7,7 +7,7 @@ from datetime import date
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.models import BandTime, ClockTime, Headcount, SportCode, validate_not_past, validate_time_order
+from app.models import BandTime, ClockTime, Headcount, OptionsResponse, SportCode, validate_not_past, validate_time_order
 
 QUESTIONS = {
     "sport": "어떤 종목을 이용하시나요?",
@@ -39,6 +39,7 @@ def parse_query(
     *,
     today: date,
     extract: Callable[[str, date], Mapping[str, object]],
+    catalog: OptionsResponse | None = None,
 ) -> dict:
     """Normalize extracted fields; `ok` still requires user confirmation in the UI."""
     if len(query) <= 500:
@@ -60,11 +61,26 @@ def parse_query(
     if not isinstance(raw, Mapping):
         return _result("llm_failed", {})
 
+    allowed = {}
+    if catalog is not None:
+        sports, discounts, districts = catalog.extraction_key
+        allowed = {"sport": {code for code, _ in sports},
+                   "discount_types": {code for code, _ in discounts}, "districts": set(districts)}
+
+    def valid(field, value):
+        if not _valid(field, value, today):
+            return False
+        if field not in allowed:
+            return True
+        normalized = _clean(value)
+        return (all(item in allowed[field] for item in normalized) if isinstance(normalized, list)
+                else normalized in allowed[field])
+
     conditions = {"source": "llm"}
     missing = []
     for field in REQUIRED_FIELDS:
         value = raw.get(field)
-        if not _valid(field, value, today):
+        if not valid(field, value):
             missing.append(field)
             continue
         conditions[field] = _clean(value)
@@ -75,7 +91,7 @@ def parse_query(
             value = []
         if field == "headcount" and value is None:
             continue
-        if not _valid(field, value, today):
+        if not valid(field, value):
             missing.append(field)
             continue
         conditions[field] = _clean(value)

@@ -26,6 +26,8 @@ app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
 rule_data = load_rule_data()
 facilities = {facility.facility_id: facility for facility in rule_data.facilities}
 available_options = build_options(rule_data)
+# Prepare the fixed catalog once; DB-backed catalogs prepare their own cached key.
+available_options.extraction_key
 
 HTTP_ERRORS = {
     404: ("not_found", "요청한 경로를 찾을 수 없습니다."),
@@ -114,14 +116,6 @@ def gemini_provider(key, model, sports, discounts, districts):
     )
 
 
-def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
-    return (
-        tuple((option.code, option.label) for option in catalog.sports),
-        tuple((option.code, option.label) for option in catalog.discount_types),
-        tuple(catalog.districts),
-    )
-
-
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
     deadline = monotonic() + REQUEST_TIMEOUT_SECONDS
     def extract(query, today):
@@ -133,7 +127,7 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             provider = gemini_provider(
                 key,
                 os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
-                *gemini_catalog_key(catalog),
+                *catalog.extraction_key,
             )
         except ValueError:
             logger.warning("Gemini extraction failed: code=invalid_model_configuration")
@@ -171,19 +165,7 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                 gemini_slots.release()
         return None
 
-    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
-    extracted = result["conditions"]
-    invalid = []
-    if extracted.get("sport") and extracted["sport"] not in {item.code for item in catalog.sports}:
-        invalid.append("sport")
-    if "discount_types" in extracted and not set(extracted["discount_types"]) <= {item.code for item in catalog.discount_types}:
-        invalid.append("discount_types")
-    for field in invalid:
-        extracted.pop(field)
-        if field not in result["missing_fields"]:
-            result["missing_fields"].append(field)
-        result["questions"][field] = "선택 가능한 항목으로 다시 확인해 주세요."
-        result["status"] = "need_more"
+    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract, catalog=catalog)
     if result["status"] == "llm_failed":
         result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
     return result

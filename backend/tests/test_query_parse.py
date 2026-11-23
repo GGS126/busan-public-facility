@@ -71,7 +71,7 @@ def test_provider_exception_returns_failed_without_details():
     ("gemini-3.5-flash-lite", "minimal"),
     ("gemini-3.1-pro-preview", "low"),
 ])
-def test_gemini_rejects_unknown_sport(monkeypatch, model, level):
+def test_gemini_leaves_code_validation_to_parser(monkeypatch, model, level):
     connection = Mock()
     connection.getresponse.return_value.status = 200
     connection.getresponse.return_value.read.return_value = json.dumps({"candidates": [{
@@ -81,8 +81,7 @@ def test_gemini_rejects_unknown_sport(monkeypatch, model, level):
     monkeypatch.setattr("app.gemini_extractor.http.client.HTTPSConnection", Mock(return_value=connection))
     extractor = GeminiExtractor("test-key", sport_codes={"futsal": "풋살"},
                                discount_codes={}, districts=["해운대구"], model=model)
-    with pytest.raises(GeminiResponseError, match="^unsupported_sport_code$"):
-        extractor("풋살", TODAY)
+    assert extractor("풋살", TODAY)["sport"] == "unknown"
     payload = json.loads(connection.request.call_args.args[2])
     assert payload["generationConfig"]["thinkingConfig"] == {"thinkingLevel": level}
     assert payload["generationConfig"]["maxOutputTokens"] == (4096 if level == "low" else 1024)
@@ -238,3 +237,28 @@ def test_dns_block_does_not_block_request_deadline(monkeypatch):
         assert monotonic() - started < 1
     finally:
         release.set()
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("sport", "unknown"), ("districts", ["unknown"]), ("discount_types", ["unknown"]),
+    ("sport", []), ("districts", [123]), ("discount_types", "disabled"),
+])
+def test_parser_validates_catalog_codes_in_one_place(field, value):
+    from app.models import Option, OptionsResponse
+    catalog = OptionsResponse(sports=[Option(code="futsal", label="Futsal")],
+                              districts=["해운대구"], discount_types=[])
+    result = parse_query("test", today=TODAY, extract=Mock(return_value=CONDITIONS | {field: value}),
+                         catalog=catalog)
+    assert result["status"] == "need_more"
+    assert result["missing_fields"] == [field]
+    assert field not in result["conditions"]
+    assert result["conditions"]["date"] == CONDITIONS["date"]
+
+
+def test_catalog_key_is_cached_per_instance_and_not_serialized():
+    from app.models import OptionsResponse
+    catalog = OptionsResponse(sports=[], districts=[], discount_types=[])
+    assert catalog.extraction_key is catalog.extraction_key
+    replacement = OptionsResponse(sports=[], districts=["new"], discount_types=[])
+    assert replacement.extraction_key != catalog.extraction_key
+    assert "extraction_key" not in catalog.model_dump()
