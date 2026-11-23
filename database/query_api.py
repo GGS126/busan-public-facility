@@ -38,40 +38,41 @@ def fetch(db,sql,params=()):
         return [dict(row) for row in con.execute(sql, params)]
 
 
-def search_time_data(db, use_date):
-    """검색에 필요한 유효한 시간 정책과 회차를 한 연결에서 읽는다."""
+def search_time_data(db, use_date, *, include_status=False):
+    """Read policies and slots from the caller's snapshot, or open one snapshot."""
     day = normalize_use_date(use_date)
-    con = sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
-    con.row_factory = sqlite3.Row
-    try:
-        con.execute("BEGIN")
-        policies = {}
-        for row in con.execute("""
-            SELECT f.id, f.open_time, f.close_time, t.selection_type,
-                   t.available_start_time, t.available_end_time, t.min_minutes,
-                   t.max_minutes, t.step_minutes, t.daily_limit_minutes, r.id AS rule_set_id
-            FROM facilities f
-            LEFT JOIN rule_sets r ON r.facility_id=f.id AND ? BETWEEN r.effective_from AND r.effective_to
-            LEFT JOIN time_selection_policies t ON t.rule_set_id=r.id
-        """, (day,)):
-            key = row['id']
-            if key in policies:
-                policies[key] = None
-            else:
-                policies[key] = dict(row) if row['selection_type'] is not None else None
-        slots_by_facility = {}
-        for row in con.execute("""
-            SELECT r.facility_id, p.start_time, p.end_time
-            FROM rule_sets r JOIN pricing_rules p ON p.rule_set_id=r.id
-            WHERE ? BETWEEN r.effective_from AND r.effective_to AND p.selection_type='fixed_slot'
-            ORDER BY r.facility_id, p.slot_no
-        """, (day,)):
-            if policies.get(row['facility_id']) is not None:
-                slots_by_facility.setdefault(row['facility_id'], []).append(
-                    {'start_time': row['start_time'], 'end_time': row['end_time']})
-        return policies, slots_by_facility
-    finally:
-        con.close()
+    if not isinstance(db, sqlite3.Connection):
+        with read_snapshot(db) as connection:
+            return search_time_data(connection, day, include_status=include_status)
+    con = db
+    policies = {}
+    states = {}
+    for row in con.execute("""
+        SELECT f.id, f.open_time, f.close_time, t.selection_type,
+               t.available_start_time, t.available_end_time, t.min_minutes,
+               t.max_minutes, t.step_minutes, t.daily_limit_minutes, r.id AS rule_set_id
+        FROM facilities f
+        LEFT JOIN rule_sets r ON r.facility_id=f.id AND ? BETWEEN r.effective_from AND r.effective_to
+        LEFT JOIN time_selection_policies t ON t.rule_set_id=r.id
+    """, (day,)):
+        key = row['id']
+        if key in policies:
+            policies[key] = None
+            states[key] = 'rule_conflict'
+        else:
+            policies[key] = dict(row) if row['selection_type'] is not None else None
+            states[key] = None if policies[key] else ('rule_missing' if row['rule_set_id'] else 'rule_not_in_effect')
+    slots_by_facility = {}
+    for row in con.execute("""
+        SELECT r.facility_id, p.start_time, p.end_time
+        FROM rule_sets r JOIN pricing_rules p ON p.rule_set_id=r.id
+        WHERE ? BETWEEN r.effective_from AND r.effective_to AND p.selection_type='fixed_slot'
+        ORDER BY r.facility_id, p.slot_no
+    """, (day,)):
+        if policies.get(row['facility_id']) is not None:
+            slots_by_facility.setdefault(row['facility_id'], []).append(
+                {'start_time': row['start_time'], 'end_time': row['end_time']})
+    return (policies, slots_by_facility, states) if include_status else (policies, slots_by_facility)
 
 
 def time_policy_allows(policy, start, end):

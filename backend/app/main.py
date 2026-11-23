@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_search_time_data, load_query_api
+from app.facility_catalog import DB_PATH, read_catalog, read_search_snapshot, load_query_api
 from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -109,13 +109,11 @@ def search_facilities(request: FacilitySearchRequest):
     if not DB_PATH.is_file():
         return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
     conditions = request.conditions
-    catalog_facilities, _ = read_catalog(DB_PATH)
+    catalog_facilities, _, time_policies, fixed_slots, policy_states, closures = read_search_snapshot(DB_PATH, conditions.date)
     candidates = [facility for facility in catalog_facilities if facility["sport"] == conditions.sport]
     if not candidates:
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
-    time_policies, fixed_slots = read_search_time_data(DB_PATH, conditions.date.isoformat())
-    closures = facility_closures(DB_PATH, conditions.date)
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
@@ -136,11 +134,11 @@ def search_facilities(request: FacilitySearchRequest):
             time_status = "eligible" if allowed else "not_eligible"
         results.append({
             **facility,
-            "slot_status": "no_slots" if not slots and policy is None else None,
+            "slot_status": policy_states.get(facility["facility_id"]) if policy is None else None,
             "time_options": {"selection": "fixed_slot", "slots": slots} if slots else (
                 {"selection": "flexible", **policy} if not closure["is_closed"] and policy and policy["selection_type"] == "flexible_interval" else None
             ),
-            "time_check": {"status": time_status},
+            "time_check": {"status": time_status, **({"code": "rule_conflict"} if policy_states.get(facility["facility_id"]) == "rule_conflict" else {})},
             "closure": closure,
         })
     order = {"eligible": 0, "unknown": 1, "not_eligible": 2}

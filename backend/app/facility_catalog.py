@@ -33,12 +33,17 @@ def read_catalog(path: Path):
 @lru_cache(maxsize=4)
 def _read_catalog(path, _version):
     query = load_query_api()
+    with query.read_snapshot(path) as connection:
+        return _catalog_from_snapshot(query, connection)
+
+
+def _catalog_from_snapshot(query, connection):
     facilities = [
         {"facility_id": row["id"], "name": row["name"], "sport": row["facility_type"],
          "district": row["district"], "address": row["address"], "booking_url": row["booking_url"]}
-        for row in query.facilities(path)
+        for row in query.facilities(connection)
     ]
-    discounts = query.fetch(path, "SELECT id, name FROM discount_categories ORDER BY id")
+    discounts = query.fetch(connection, "SELECT id, name FROM discount_categories ORDER BY id")
     return facilities, OptionsResponse(
         sports=[Option(code=code, label=SPORT_LABELS.get(code, code))
                 for code in sorted({facility["sport"] for facility in facilities})],
@@ -86,3 +91,17 @@ def closure_holiday_codes(day: date):
 
 def read_search_time_data(path: Path, use_date: str):
     return _time_data(path, use_date, _file_version(path))
+
+
+def read_search_snapshot(path: Path, day: date):
+    return _search_snapshot(path, day, _file_version(path))
+
+
+@lru_cache(maxsize=32)
+def _search_snapshot(path: Path, day: date, _version):
+    query = load_query_api()
+    with query.read_snapshot(path) as connection:
+        facilities, options = _catalog_from_snapshot(query, connection)
+        policies, slots, states = query.search_time_data(connection, day.isoformat(), include_status=True)
+        closures = query.closure_statuses(connection, day.isoformat(), closure_holiday_codes(day))
+    return facilities, options, policies, slots, states, closures
