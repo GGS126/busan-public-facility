@@ -44,6 +44,7 @@ def search_time_data(db, use_date):
     con = sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
     con.row_factory = sqlite3.Row
     try:
+        con.execute("BEGIN")
         policies = {}
         for row in con.execute("""
             SELECT f.id, f.open_time, f.close_time, t.selection_type,

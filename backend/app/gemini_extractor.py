@@ -168,14 +168,4 @@ class GeminiExtractor:
             raise GeminiResponseError("invalid_output_json") from error
         if not isinstance(conditions, dict) or conditions.keys() != PROPERTIES.keys():
             raise GeminiResponseError("unexpected_extraction_fields")
-        sport = conditions["sport"]
-        if sport is not None and (not isinstance(sport, str) or sport not in self.sport_codes):
-            raise GeminiResponseError("unsupported_sport_code")
-        for field, allowed in (("districts", self.districts), ("discount_types", self.discount_codes)):
-            values = conditions[field]
-            if values is not None and (
-                not isinstance(values, list)
-                or any(not isinstance(value, str) or value not in allowed for value in values)
-            ):
-                raise GeminiResponseError("unsupported_" + field)
         return conditions

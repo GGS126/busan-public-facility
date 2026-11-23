@@ -136,7 +136,7 @@ function App() {
     if (facility?.time_check?.status === 'not_eligible') return ''
     if (facility?.time_options?.selection === 'flexible') return `${startTime}|${endTime}`
     if (facility?.time_options?.selection === 'fixed_slot' && facility.time_check?.status === 'eligible') {
-      return facility.time_check.status === 'eligible' ? `${startTime}|${endTime}` : ''
+      return `${startTime}|${endTime}`
     }
     const slots = getFacilitySlots(facilityId, facility?.time_options)
 

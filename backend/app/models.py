@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from datetime import date as CalendarDate
 from decimal import Decimal
+from functools import cached_property
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -269,6 +270,15 @@ class OptionsResponse(BaseModel):
     sports: list[Option]
     districts: list[str]
     discount_types: list[Option]
+
+    @cached_property
+    def extraction_key(self) -> tuple:
+        """Read-only catalog snapshot, prepared once for each catalog instance."""
+        return (
+            tuple((item.code, item.label) for item in self.sports),
+            tuple((item.code, item.label) for item in self.discount_types),
+            tuple(self.districts),
+        )
 
 
 class QueryParseRequest(BaseModel):

@@ -74,7 +74,16 @@ function FacilityList({
 
                   <h3>{facility.name}</h3>
                   <p>{facility.address}</p>
-                  {facility.time_check?.status === 'not_eligible' && (
+                  {facility.closure?.is_closed && (
+                    <div>
+                      <p>정기 휴장일입니다. {facility.closure.matched_rules.map(rule => rule.note).join(' / ')}</p>
+                      {facility.closure.source_url && <a href={facility.closure.source_url} target="_blank" rel="noopener noreferrer">휴장 규정 출처</a>}
+                    </div>
+                  )}
+                  {facility.closure?.status === 'needs_calendar_resolution' && (
+                    <p>명절 휴장 여부는 공식 예약 안내에서 확인해 주세요.</p>
+                  )}
+                  {!facility.closure?.is_closed && facility.time_check?.status === 'not_eligible' && (
                     <p>희망 시간이 시설의 이용시간 규정과 맞지 않습니다. 시간을 다시 확인해 주세요.</p>
                   )}
 
@@ -82,6 +91,7 @@ function FacilityList({
                     <input
                       type="checkbox"
                       checked={selected}
+                      disabled={facility.closure?.is_closed === true}
                       onChange={() => onToggle(facility.id)}
                     />
                     비교 대상에 포함
