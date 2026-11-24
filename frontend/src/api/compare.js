@@ -85,6 +85,9 @@ function createMockResult(facilityId) {
       status: 'needs_review',
       items: [],
       payment_due: null,
+      online_prepay: null,
+      onsite_payment: null,
+      payment_unverified: null,
       expected_refund: null,
       net_cost_after_refund: null,
       review_items: [
