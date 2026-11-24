@@ -11,15 +11,15 @@ function handler(name) {
   return app.slice(start, end);
 }
 
-function fixture() {
+function fixture(settings = {}) {
   const state = { results: [], error: '', loading: false, scrolls: 0 };
   const pending = [];
   const timers = [];
   // Run the real App handlers with controlled state setters and deferred API responses.
-  const create = new Function('state', 'pending', 'timers', `
+  const create = new Function('state', 'pending', 'timers', 'settings', `
     const selectedIds=['facility'], facilityTimes={facility:'10:00|12:00'};
     const sport='tennis', districts=[], date='2026-12-01', people='1';
-    const discountTypes=[], discountType='none', eligibleCount='0', source='direct';
+    const discountTypes=settings.discountTypes || [], discountType=discountTypes[0] || 'none', eligibleCount=settings.eligibleCount || '0', source='direct';
     const searchRequest={current:0}, compareRequest={current:0};
     const noop=()=>{};
     const setSearching=noop, setSearched=noop, setSearchResults=noop, setSelectedIds=noop;
@@ -29,11 +29,11 @@ function fixture() {
     const setLoading=value=>{state.loading=value;};
     const setTimeout=fn=>timers.push(fn);
     const document={getElementById:()=>({scrollIntoView:()=>{state.scrolls++;}})};
-    const compareFacilities=()=>new Promise((resolve,reject)=>pending.push({resolve,reject}));
+    const compareFacilities=request=>new Promise((resolve,reject)=>pending.push({resolve,reject,request}));
     ${['resetComparison', 'clearResult', 'toggleFacility', 'handleTimeChange', 'handleCompare'].map(handler).join('\n')}
     return {clearResult,toggleFacility,handleTimeChange,handleCompare};
   `);
-  return { state, pending, timers, ...create(state, pending, timers) };
+  return { state, pending, timers, ...create(state, pending, timers, settings) };
 }
 const response = id => ({ results: [{facility_id:id, fee:{status:'calculated'}}] });
 
@@ -82,4 +82,25 @@ test('invalidated comparison cannot scroll back to old results', async () => {
   f.clearResult();
   f.timers.forEach(fn=>fn());
   assert.equal(f.state.scrolls, 0);
+});
+
+
+test('single discount sends the entered eligible count to the common engine', async () => {
+  const f=fixture({discountTypes:['multi_child'], eligibleCount:'1'});
+  const request=f.handleCompare();
+  const conditions=f.pending[0].request.conditions;
+  assert.deepEqual(conditions.discount_types, []);
+  assert.deepEqual(conditions.discounts, [{type:'multi_child',count:1,holder:false}]);
+  f.pending[0].resolve(response('valid'));
+  await request;
+});
+
+test('multiple discount types are not assigned an invented per-type count', async () => {
+  const f=fixture({discountTypes:['multi_child','disabled'], eligibleCount:'1'});
+  const request=f.handleCompare();
+  const conditions=f.pending[0].request.conditions;
+  assert.deepEqual(conditions.discount_types, ['multi_child','disabled']);
+  assert.deepEqual(conditions.discounts, []);
+  f.pending[0].resolve(response('valid'));
+  await request;
 });
