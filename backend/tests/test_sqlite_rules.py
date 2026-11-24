@@ -1,0 +1,258 @@
+"""팀 DB(SQLite)의 실제 규정을 규칙 엔진으로 계산해 database/의 정답 사례와 비교한다(AC-006)."""
+
+import json
+import sqlite3
+import sys
+from contextlib import closing
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+from app.compare import compare_facility
+from app.engine import calculate
+from app.models import Conditions
+from app.repository import load_sqlite_rule_data
+
+DATABASE_DIR = Path(__file__).resolve().parents[2] / "database"
+CASE_FILES = ["test_cases.json", "samrak_test_cases.json", "gudeok_test_cases.json"]
+WEEKDAY, WEEKEND = date(2026, 11, 9), date(2026, 11, 7)
+
+# 정답 사례 중 요금 계산 API의 범위가 아닌 것. 사유가 없어지면 이 목록에서 빼고 검증한다.
+NOT_FEE_CASES = {
+    "T09", "T10", "T11", "T12", "S05", "S06", "S07", "gudeok_cancel_d1", "gudeok_rain_d0",
+}  # 취소·환불 금액은 계산하지 않고 terms 문구로만 안내한다.
+NOT_YET_SUPPORTED = {
+    "T08", "H_OPTION_30", "H_OPTION_60",
+}  # 선택 조명 사용 시간(optional_lighting_minutes)은 아직 입력받지 않는다.
+
+# 시간이 적혀 있지 않은 사례는 사례 설명의 요금(기본요금, 조명료 유무, 1시간 요금 미확인)에 맞는 시간으로 계산한다.
+CASE_TIMES = {
+    "T_rounding_unverified": ("07:00", "09:00"),
+    "S_rounding_unverified": ("08:00", "10:00"),
+    "gudeok_discount": ("10:00", "12:00"),
+    "gudeok_companion_eligible_only": ("10:00", "12:00"),
+    "gudeok_holder_eligible_night": ("18:00", "20:00"),
+    "gudeok_holder_eligible_one_hour": ("10:00", "11:00"),
+    "gudeok_rounding_unverified": ("10:00", "12:00"),
+}
+
+
+def build_database(directory: Path) -> Path:
+    sys.path.insert(0, str(DATABASE_DIR))
+    try:
+        from build_db import build
+    finally:
+        sys.path.remove(str(DATABASE_DIR))
+    return build(directory / "facilities.sqlite3")
+
+
+@pytest.fixture(scope="module")
+def facilities(tmp_path_factory):
+    path = build_database(tmp_path_factory.mktemp("db"))
+    return {facility.facility_id: facility for facility in load_sqlite_rule_data(path).facilities}
+
+
+def load_cases():
+    return [
+        pytest.param(case, id=case["id"])
+        for name in CASE_FILES
+        for case in json.loads((DATABASE_DIR / name).read_text(encoding="utf-8"))["cases"]
+    ]
+
+
+def slot_times(facility, slot: int) -> tuple[str, str]:
+    policy = facility.time_policies[0]
+    selected = policy.slots[slot - 1]
+    return selected.start_time, selected.end_time
+
+
+def conditions_for(case, facility) -> Conditions:
+    inputs = case["inputs"]
+    if "slot" in inputs:
+        start, end = slot_times(facility, inputs["slot"])
+    elif "start" in inputs:
+        start, end = inputs["start"], inputs["end"]
+    else:
+        start, end = CASE_TIMES[case["id"]]
+
+    if "use_date" in inputs:
+        day = date.fromisoformat(inputs["use_date"])
+    else:
+        day = WEEKEND if inputs.get("is_weekend_or_holiday") else WEEKDAY
+
+    holder = inputs.get("reservation_holder_eligible", False)
+    # 대표자도 감면 대상 인원에 포함한다.
+    eligible = inputs.get("eligible_count") or (1 if holder else 0)
+    discounts = (
+        [{"type": inputs.get("discount_category", "disabled"), "count": eligible, "holder": holder}]
+        if eligible or holder
+        else []
+    )
+    headcount = inputs.get("party_size") or (4 if discounts else None)
+    return Conditions(
+        sport=facility.time_policies[0].sport if facility.time_policies else "tennis",
+        date=day,
+        start_time=start,
+        end_time=end,
+        headcount=headcount,
+        discounts=discounts,
+        source="direct",
+    )
+
+
+@pytest.mark.parametrize("case", load_cases())
+def test_matches_official_case(case, facilities):
+    if case["id"] in NOT_FEE_CASES | NOT_YET_SUPPORTED:
+        pytest.skip("요금 계산 범위 밖이거나 아직 입력받지 않는 조건")
+
+    expected = case["expected"]
+    facility = facilities[case["inputs"]["facility_id"]]
+    result = calculate(facility, conditions_for(case, facility))
+
+    if expected.get("status") == "needs_review":
+        assert result.status == "needs_review"
+        assert result.net_cost_after_refund is None
+        return
+
+    assert result.status == "calculated", result.review_items
+    by_type = {}
+    for item in result.items:
+        by_type[item.type] = by_type.get(item.type, 0) + item.amount
+    checks = {
+        "initial_payment_won": result.payment_due,
+        "discount_refund_won": result.expected_refund,
+        "final_expected_cost_won": result.net_cost_after_refund,
+        "total_fee_won": result.payment_due,
+        "base_court_won": by_type.get("base", 0),
+        "mandatory_lighting_won": by_type.get("lighting", 0),
+        "lighting_won": by_type.get("lighting", 0),
+    }
+    for key, actual in checks.items():
+        if key in expected:
+            assert actual == expected[key], key
+
+
+def test_every_case_is_checked_or_listed():
+    ids = {param.id for param in load_cases()}
+    assert (NOT_FEE_CASES | NOT_YET_SUPPORTED | CASE_TIMES.keys()) <= ids
+
+
+def test_slot_mismatch_not_eligible(facilities):
+    rules = facilities["busan_haeundae_arboretum_tennis"]
+    result = calculate(
+        rules, Conditions(sport="tennis", date=WEEKDAY, start_time="08:00", end_time="10:00", source="direct")
+    )
+
+    assert result.status == "not_eligible"
+    assert result.review_items[0].code == "slot_mismatch"
+
+
+def test_discount_types_without_count_needs_review(facilities):
+    rules = facilities["busan_samrak_ecopark_tennis"]
+    result = calculate(
+        rules,
+        Conditions(sport="tennis", date=WEEKDAY, start_time="08:00", end_time="10:00", discount_types=["disabled"], source="direct"),
+    )
+
+    assert result.status == "needs_review"
+    assert result.review_items[0].target == "discount"
+
+
+def test_terms_and_sources_from_database(facilities):
+    rules = facilities["busan_samrak_ecopark_tennis"]
+    terms = rules.terms_on(WEEKDAY)
+
+    assert terms.booking_open == "이용일 60일 전부터 2일 전까지 온라인 신청"
+    assert terms.refund == "3일 전까지 취소 100%, 2일 전 취소 90%, 1일 전 취소 80%, 당일 취소 0%"
+    assert [source.source_id for source in rules.sources] == ["busan_reserve_395_winter_2026"]
+
+
+@pytest.mark.parametrize(("start", "end"), [("10:00", "13:00"), ("08:00", "11:00")])
+def test_gudeok_over_two_hours_not_eligible(facilities, start, end):
+    rules = facilities["busan_gudeok_stadium_tennis"]
+    result = calculate(rules, Conditions(sport="tennis", date=WEEKDAY, start_time=start, end_time=end, source="direct"))
+
+    assert result.status == "not_eligible"
+    assert result.review_items[0].code == "duration_not_allowed"
+    assert result.review_items[0].source_id == "busan_reserve_472_2026winter"
+
+
+def test_gudeok_outside_operating_hours_not_eligible(facilities):
+    rules = facilities["busan_gudeok_stadium_tennis"]
+    result = calculate(rules, Conditions(sport="tennis", date=WEEKDAY, start_time="07:00", end_time="09:00", source="direct"))
+
+    assert result.status == "not_eligible"
+    assert result.review_items[0].code == "outside_hours"
+
+
+@pytest.fixture(scope="module")
+def two_period_facility(tmp_path_factory):
+    """같은 출처를 쓰는 규정 기간이 둘이고, 출처와 예약 조건이 다른 기간이 하나 더 있는 시설."""
+    path = build_database(tmp_path_factory.mktemp("db"))
+    with closing(sqlite3.connect(path)) as con, con:
+        con.execute(
+            "INSERT INTO sources (id, url, title, checked_on, verification_level) VALUES (?, ?, ?, ?, ?)",
+            ("haeundae_2027h1", "https://example.com/2027h1", "2027년 상반기", "2026-12-20", "official_page_verified"),
+        )
+        con.executemany(
+            "INSERT INTO rule_sets (id, facility_id, source_id, effective_from, effective_to, status)"
+            " VALUES (?, ?, ?, ?, ?, 'confirmed')",
+            [
+                ("haeundae_2026h1", "busan_haeundae_arboretum_tennis", "busan_reserve_619_2026h2", "2026-01-01", "2026-06-30"),
+                ("haeundae_2027h1", "busan_haeundae_arboretum_tennis", "haeundae_2027h1", "2027-01-01", "2027-06-30"),
+            ],
+        )
+        con.execute("INSERT INTO reservation_rules VALUES ('haeundae_2027h1', 30, 2, 5, NULL)")
+    return {f.facility_id: f for f in load_sqlite_rule_data(path).facilities}["busan_haeundae_arboretum_tennis"]
+
+
+def test_rule_sets_sharing_source_load(two_period_facility):
+    ids = [source.source_id for source in two_period_facility.sources]
+
+    assert sorted(ids) == ["busan_reserve_619_2026h2", "haeundae_2027h1"]
+
+
+def test_terms_and_source_follow_use_date(two_period_facility):
+    rules = two_period_facility
+    later = date(2027, 2, 1)
+
+    assert rules.terms_on(WEEKDAY).booking_open == "이용일 14일 전부터 1일 전까지 온라인 신청"
+    assert rules.terms_on(WEEKDAY).source_id == "busan_reserve_619_2026h2"
+    assert rules.terms_on(later).booking_open == "이용일 30일 전부터 2일 전까지 온라인 신청"
+    assert rules.terms_on(later).source_id == "haeundae_2027h1"
+    # 근거 규정이 없을 때 안내하는 출처도 이용일의 규정 기간을 따른다.
+    assert rules.source_on(WEEKDAY) == "busan_reserve_619_2026h2"
+    assert rules.source_on(later) == "haeundae_2027h1"
+
+
+def test_compare_shows_terms_and_sources_of_use_date(two_period_facility):
+    later = Conditions(sport="tennis", date=date(2027, 2, 1), start_time="07:00", end_time="09:00", source="direct")
+    result = compare_facility(two_period_facility, later)
+
+    assert result.terms.source_id == "haeundae_2027h1"
+    assert result.terms.cancel_deadline == "이용일 5일 전까지 온라인 취소"
+    # 2027년 요금 규정은 없으므로 '확인 필요'의 근거로 만료된 요금 규정의 출처도 함께 보인다.
+    assert result.fee.review_items[0].code == "rule_not_in_effect"
+    assert {source.source_id for source in result.sources} == {"haeundae_2027h1", "busan_reserve_619_2026h2"}
+
+
+# 정답 사례가 아직 없는 시설(PR #27). DB 요금표 그대로 변환되는지 확인한다.
+@pytest.mark.parametrize(
+    ("facility_id", "sport", "day", "start", "end", "expected"),
+    [
+        ("busan_hwamyeong_ecopark_night_soccer", "soccer", WEEKDAY, "18:00", "21:00", (20000, 30000, 50000)),
+        ("busan_haeundae_arboretum_soccer", "soccer", WEEKDAY, "19:00", "22:00", (120000, 20000, 140000)),
+        ("busan_samrak_ecopark_soccer", "soccer", WEEKEND, "08:00", "11:00", (30000, 0, 30000)),
+        ("busan_hwamyeong_ecopark_tennis", "tennis", WEEKDAY, "08:00", "10:00", (6000, 0, 6000)),
+    ],
+)
+def test_added_facilities_follow_database(facilities, facility_id, sport, day, start, end, expected):
+    conditions = Conditions(sport=sport, date=day, start_time=start, end_time=end, source="direct")
+    result = calculate(facilities[facility_id], conditions)
+
+    by_type = {}
+    for item in result.items:
+        by_type[item.type] = by_type.get(item.type, 0) + item.amount
+    assert result.status == "calculated", result.review_items
+    assert (by_type["base"], by_type.get("lighting", 0), result.payment_due) == expected

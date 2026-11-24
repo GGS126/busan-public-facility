@@ -58,7 +58,7 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
                 code="rule_missing",
                 target=_differing_target(results),
                 reason="이용일이 공휴일인지 확인할 수 없습니다.",
-                source_id=rules.source_id,
+                source_id=rules.source_on(conditions.date),
             )
         ],
     )
@@ -100,7 +100,7 @@ def _calculate(rules: FacilityRules, conditions: Conditions, day_types: set[str]
                     target=target,
                     reason=review.reason,
                     # 근거 규정이 없으면 시설의 공식 출처로 안내한다(AC-007).
-                    source_id=review.source_id or rules.source_id,
+                    source_id=review.source_id or rules.source_on(conditions.date),
                 )
             )
             return False
@@ -159,7 +159,10 @@ def _check_time(rules: FacilityRules, conditions: Conditions) -> FeeResult | Non
             choices = ", ".join(f"{slot_start}~{slot_end}" for slot_start, slot_end in slots)
             reason = f"정해진 회차로만 예약할 수 있습니다. 가능한 회차: {choices}"
             return _not_calculated("not_eligible", "slot_mismatch", reason, policy.source_id)
-    elif end - start not in policy.allowed_minutes:
+    elif policy.max_minutes is not None and end - start > policy.max_minutes:
+        reason = f"이용 시간은 최대 {policy.max_minutes}분까지 선택할 수 있습니다."
+        return _not_calculated("not_eligible", "duration_not_allowed", reason, policy.source_id)
+    elif policy.allowed_minutes and end - start not in policy.allowed_minutes:
         choices = ", ".join(f"{minutes}분" for minutes in policy.allowed_minutes)
         reason = f"이용 시간은 {choices} 중에서 선택할 수 있습니다."
         return _not_calculated("not_eligible", "duration_not_allowed", reason, policy.source_id)
@@ -314,34 +317,55 @@ def _discount_items(
     base_ok: bool,
     lighting_ok: bool,
 ) -> list[FeeItem]:
-    types = list(dict.fromkeys(conditions.discount_types))
-    if not types:
+    selections = conditions.discount_selections
+    if not selections:
         return []
 
-    selected = [_discount_rule(rules, conditions.date, discount_type) for discount_type in types]
+    selected = [
+        (_discount_rule(rules, conditions.date, discount_type), count, holder)
+        for discount_type, count, holder in selections
+    ]
 
-    # 중복 감면의 계산 순서는 공식 근거를 확인하기 전까지 추정하지 않는다.
-    if len(selected) > 1:
-        names = ", ".join(types)
+    # 서로 다른 이용자의 감면을 인원별로 나눠 계산할 수 있을 때만 함께 계산한다.
+    # 한 요금 전체에 감면을 겹쳐 적용하는 순서는 공식 근거를 확인하기 전까지 추정하지 않는다.
+    if len(selected) > 1 and any(count is None or rule.basis != "per_eligible_person" for rule, count, _ in selected):
+        names = ", ".join(rule.discount_type for rule, _, _ in selected)
         reason = (
             f"{names} 감면의 중복 적용 여부를 확인할 수 없습니다."
-            if any(rule.stackable is None for rule in selected)
+            if any(rule.stackable is None for rule, _, _ in selected)
             else f"{names} 감면을 함께 선택했을 때의 계산 방식을 확인할 수 없습니다."
         )
-        raise NeedsReview("rule_missing", reason, selected[0].source_id)
+        raise NeedsReview("rule_missing", reason, selected[0][0].source_id)
 
-    rule = selected[0]
-    if rule.applies_to is None or rule.method is None:
-        raise NeedsReview("rule_missing", "감면 대상 요금이나 감면 방식을 확인할 수 없습니다.", rule.source_id)
-    if not base_ok or (rule.applies_to == "base_and_lighting" and not lighting_ok):
-        raise NeedsReview("rule_missing", "감면 대상 요금을 계산하지 못해 감면액을 계산할 수 없습니다.", rule.source_id)
+    discounts = []
+    for rule, count, holder in selected:
+        if rule.applies_to is None or rule.method is None:
+            raise NeedsReview("rule_missing", "감면 대상 요금이나 감면 방식을 확인할 수 없습니다.", rule.source_id)
+        if not base_ok or (rule.applies_to == "base_and_lighting" and not lighting_ok):
+            raise NeedsReview("rule_missing", "감면 대상 요금을 계산하지 못해 감면액을 계산할 수 없습니다.", rule.source_id)
 
-    target_types = {"base"} if rule.applies_to == "base" else {"base", "lighting"}
-    target = sum(item.amount for item in items if item.type in target_types)
-    amount = _discount_amount(rule, target)
-    return [
-        FeeItem(type="discount", amount=-amount, rule_id=rule.rule_id, source_id=rule.source_id, method=rule.method)
-    ]
+        target_types = {"base"} if rule.applies_to == "base" else {"base", "lighting"}
+        target = sum(item.amount for item in items if item.type in target_types)
+        amount = _discount_amount(rule, target, _discount_share(rule, conditions.headcount, count, holder))
+        discounts.append(
+            FeeItem(type="discount", amount=-amount, rule_id=rule.rule_id, source_id=rule.source_id, method=rule.method)
+        )
+    return discounts
+
+
+def _discount_share(
+    rule: DiscountRule, headcount: int | None, count: int | None, holder: bool | None
+) -> tuple[int, int]:
+    """감면 대상 요금 중 이 감면이 적용되는 비율(분자, 분모)."""
+    if rule.basis == "whole_fee":
+        return (1, 1)
+    if rule.basis == "per_eligible_person":
+        if count is None or headcount is None:
+            raise NeedsReview("rule_missing", f"{rule.discount_type} 감면은 감면 대상 인원과 전체 이용 인원을 입력해야 계산할 수 있습니다.", rule.source_id)
+        return (count, headcount)
+    if holder is None:
+        raise NeedsReview("rule_missing", f"{rule.discount_type} 감면은 예약 대표자가 감면 대상인지 입력해야 계산할 수 있습니다.", rule.source_id)
+    return (1 if holder else 0, 1)
 
 
 def _discount_rule(rules: FacilityRules, day: date, discount_type: str) -> DiscountRule:
@@ -356,23 +380,33 @@ def _discount_rule(rules: FacilityRules, day: date, discount_type: str) -> Disco
     return in_effect[0]
 
 
-def _discount_amount(rule: DiscountRule, target: int) -> int:
-    amount = _uncapped_discount_amount(rule, target)
+def _discount_amount(rule: DiscountRule, target: int, share: tuple[int, int]) -> int:
+    amount = _uncapped_discount_amount(rule, target, share)
     if amount > target:
         raise NeedsReview("rule_conflict", "감면액이 감면 대상 요금보다 큽니다.", rule.source_id)
     return amount
 
 
-def _uncapped_discount_amount(rule: DiscountRule, target: int) -> int:
+def _uncapped_discount_amount(rule: DiscountRule, target: int, share: tuple[int, int]) -> int:
     if rule.fixed_amount is not None:
         return rule.fixed_amount
     if rule.rate is None:
         raise NeedsReview("rule_missing", "감면율이나 감면액을 확인할 수 없습니다.", rule.source_id)
 
-    value = Decimal(target) * rule.rate
+    numerator, denominator = share
+    if rule.basis == "per_eligible_person":
+        # 감면은 대상자 한 명씩 적용되므로 인당 감면액의 끝전을 처리한 뒤 인원을 곱한다.
+        # 합계가 나눠 떨어져도(20,000원 ÷ 3명 × 3명) 인당 금액에 끝전이 있으면 추정하지 않는다.
+        per_person = Decimal(target) * rule.rate / denominator
+        return _rounded(rule, per_person, "인당 감면액의 끝전 처리 방식을 확인할 수 없습니다.") * numerator
+    value = Decimal(target) * rule.rate * numerator / denominator
+    return _rounded(rule, value, "감면액의 끝전 처리 방식을 확인할 수 없습니다.")
+
+
+def _rounded(rule: DiscountRule, value: Decimal, reason: str) -> int:
     if rule.rounding is not None:
         mode, unit = rule.rounding.split("_")
         return int((value / int(unit)).to_integral_value(ROUNDING_MODES[mode]) * int(unit))
     if value != value.to_integral_value():
-        raise NeedsReview("rule_missing", "감면액의 끝전 처리 방식을 확인할 수 없습니다.", rule.source_id)
+        raise NeedsReview("rule_missing", reason, rule.source_id)
     return int(value)
