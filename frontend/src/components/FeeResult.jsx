@@ -164,6 +164,11 @@ function FeeResult({ results, facilities = [] }) {
                   null
                 : null
 
+            // 결제 방식이 확인되지 않은 금액이 있는지 확인
+            const hasUnverifiedPayment =
+              hasValidAmount(fee.payment_unverified) &&
+              fee.payment_unverified > 0
+
             const hasPaymentBreakdown =
               hasValidAmount(fee.online_prepay) ||
               hasValidAmount(fee.onsite_payment) ||
@@ -302,10 +307,14 @@ function FeeResult({ results, facilities = [] }) {
                         amount={fee.total}
                       />
 
-                      <FeeAmountRow
-                        label="최초 결제 예상액"
-                        amount={fee.payment_due}
-                      />
+                      {/* 결제 방식 미확인 금액이 있으면
+                          최초 결제 예상액을 표시하지 않음 */}
+                      {!hasUnverifiedPayment && (
+                        <FeeAmountRow
+                          label="최초 결제 예상액"
+                          amount={fee.payment_due}
+                        />
+                      )}
 
                       <FeeAmountRow
                         label="예상 환급액"
@@ -326,12 +335,12 @@ function FeeResult({ results, facilities = [] }) {
                       <h4>결제 방식별 금액</h4>
 
                       <FeeAmountRow
-                        label="온라인 선결제액"
+                        label="온라인 선결제 예상액"
                         amount={fee.online_prepay}
                       />
 
                       <FeeAmountRow
-                        label="현장 결제액"
+                        label="현장 결제 예상액"
                         amount={fee.onsite_payment}
                       />
 
@@ -339,6 +348,20 @@ function FeeResult({ results, facilities = [] }) {
                         label="결제 방식 미확인 금액"
                         amount={fee.payment_unverified}
                       />
+
+                      {hasUnverifiedPayment && (
+                        <div className="review-box">
+                          <h4>결제 방식 확인 필요</h4>
+
+                          <p>
+                            일부 요금의 결제 방식이
+                            확인되지 않아 최초 결제 예상액을
+                            확정할 수 없습니다.
+                            확인된 온라인 선결제액과
+                            현장 결제액을 참고해 주세요.
+                          </p>
+                        </div>
+                      )}
 
                       <p>
                         결제 방식별 금액은 백엔드에서
