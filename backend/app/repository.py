@@ -146,6 +146,19 @@ def _sqlite_facility(rows, facility: dict) -> dict:
             for reservation in rows("SELECT closure_note FROM reservation_rules WHERE rule_set_id = ?", rule_set["id"])
             if reservation["closure_note"]
         ],
+        # 정기 휴장일. 휴장 판정은 비교 서비스가 요금 계산 전에 한다(#23 합의).
+        "closure_rules": [
+            {
+                "type": closure["closure_type"],
+                "value": closure["closure_value"],
+                "note": closure["note"],
+                "source_id": rule_set["source_id"],
+                "effective_from": rule_set["effective_from"],
+                "effective_to": rule_set["effective_to"],
+            }
+            for rule_set in rule_sets
+            for closure in rows("SELECT * FROM closure_rules WHERE rule_set_id = ? ORDER BY id", rule_set["id"])
+        ],
         "fee_rules": fee_rules,
         "discount_rules": discount_rules,
         "time_policies": time_policies,

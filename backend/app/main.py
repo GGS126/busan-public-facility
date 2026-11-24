@@ -1,5 +1,7 @@
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -8,14 +10,36 @@ from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
 from app.detail import facility_detail
-from app.models import KST, CompareRequest, CompareResponse, Conditions, FacilityDetail, FacilityRules, IsoDate, OptionsResponse
+from app.models import (
+    KST, CompareRequest, CompareResponse, Conditions, FacilityDetail, FacilityRules, IsoDate, OptionsResponse, RuleData,
+)
 from app.options import build_options
-from app.repository import load_rule_data
+from app.repository import SQLITE_PATH, load_rule_data, load_sqlite_rule_data
 
 logger = logging.getLogger(__name__)
 
+
+def load_service_data(source: str | None = None, sqlite_path: Path = SQLITE_PATH) -> RuleData:
+    """서비스가 쓸 규정. 기본은 팀 DB(SQLite)이고, RULE_DATA_SOURCE=sample이면 가상 데이터를 쓴다.
+
+    DB가 없을 때 가상 데이터로 몰래 바꾸면 실제 시설 요금처럼 보이므로, 시작하지 않고 생성 방법을 알린다.
+    DB를 다시 생성하면 서버를 재시작해야 반영된다.
+    """
+    source = source if source is not None else os.getenv("RULE_DATA_SOURCE", "sqlite").strip() or "sqlite"
+    if source == "sample":
+        return load_rule_data()
+    if source != "sqlite":
+        raise RuntimeError(f"RULE_DATA_SOURCE는 sqlite 또는 sample이어야 합니다: {source}")
+    if not sqlite_path.is_file():
+        raise RuntimeError(
+            f"규정 DB가 없습니다: {sqlite_path}. 'python database/build_db.py'로 생성하거나, "
+            "가상 데이터로 실행하려면 RULE_DATA_SOURCE=sample을 설정하세요."
+        )
+    return load_sqlite_rule_data(sqlite_path)
+
+
 app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
-rule_data = load_rule_data()
+rule_data = load_service_data()
 facilities = {facility.facility_id: facility for facility in rule_data.facilities}
 available_options = build_options(rule_data)
 
