@@ -6,15 +6,17 @@ from functools import lru_cache
 from threading import BoundedSemaphore, Lock
 from time import monotonic
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
+from app.detail import facility_detail
 from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST, CompareRequest, CompareResponse, Conditions, OptionsResponse, QueryParseRequest, QueryParseResponse,
+    FacilityDetail, FacilityRules, IsoDate,
 )
 from app.options import build_options
 from app.query_parser import parse_query
@@ -49,14 +51,15 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
     fields = []
     for error in exc.errors():
         code = error["type"]
-        custom = code in ("invalid_time_range", "past_date", "invalid_option")
+        custom = code in ("invalid_time_range", "past_date", "invalid_option", "invalid_discount", "invalid_lighting_minutes")
         # JSON 형식 오류의 위치는 항목이 아니라 문자 위치이므로 요청 본문 전체의 오류로 표시한다.
         location = [] if code == "json_invalid" else error["loc"][1:]
         fields.append(
             {
                 "field": ".".join(str(part) for part in location) or "body",
                 "code": code if custom else ("required" if code == "missing" else "invalid_value"),
-                "message": error["msg"] if custom else ("필수 항목입니다." if code == "missing" else "값을 확인해 주세요."),
+                # 날짜 형식 오류는 코드는 invalid_value로 두고 YYYY-MM-DD 안내 문구를 그대로 전한다.
+                "message": error["msg"] if custom or code == "date_format" else ("필수 항목입니다." if code == "missing" else "값을 확인해 주세요."),
             }
         )
     return error_response(400, "validation_error", "입력값을 확인해 주세요.", fields=fields)
@@ -178,7 +181,8 @@ def check_against_options(conditions: Conditions) -> None:
         errors.append(
             {"type": "invalid_option", "loc": ("body", "conditions", "sport"), "msg": "선택할 수 없는 종목입니다."}
         )
-    if not set(conditions.discount_types) <= {option.code for option in available_options.discount_types}:
+    discount_codes = {option.code for option in available_options.discount_types}
+    if not set(conditions.discount_types) <= discount_codes:
         errors.append(
             {
                 "type": "invalid_option",
@@ -186,6 +190,15 @@ def check_against_options(conditions: Conditions) -> None:
                 "msg": "선택할 수 없는 감면 유형입니다.",
             }
         )
+    for index, discount in enumerate(conditions.discounts):
+        if discount.type not in discount_codes:
+            errors.append(
+                {
+                    "type": "invalid_option",
+                    "loc": ("body", "conditions", "discounts", index, "type"),
+                    "msg": "선택할 수 없는 감면 유형입니다.",
+                }
+            )
     if errors:
         raise RequestValidationError(errors)
 
@@ -200,3 +213,24 @@ def compare(request: CompareRequest) -> CompareResponse:
             raise FacilityNotFound
         selected.append(rules)
     return CompareResponse(results=[compare_facility(rules, request.conditions) for rules in selected])
+
+
+def known_facility(facility_id: str) -> FacilityRules:
+    # 의존성은 엔드포인트의 쿼리 검증보다 먼저 실행되므로, 없는 시설이면 날짜 형식과 관계없이 404다.
+    rules = facilities.get(facility_id)
+    if rules is None:
+        raise FacilityNotFound
+    return rules
+
+
+# 경로 매개변수라서 /api/facilities/options 같은 고정 경로보다 뒤에 둔다.
+@app.get("/api/facilities/{facility_id}", response_model=FacilityDetail)
+def facility(
+    rules: FacilityRules = Depends(known_facility), day: IsoDate | None = Query(default=None, alias="date")
+) -> FacilityDetail:
+    today = datetime.now(KST).date()
+    if day is not None and day < today:
+        raise RequestValidationError(
+            [{"type": "past_date", "loc": ("query", "date"), "msg": "지난 날짜는 선택할 수 없습니다."}]
+        )
+    return facility_detail(rules, day or today)

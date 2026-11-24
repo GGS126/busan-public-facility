@@ -6,14 +6,15 @@ from app.models import CompareResult, Conditions, FacilityRules, ReviewItem
 
 def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareResult:
     fee = calculate(rules, conditions)
+    terms = rules.terms_on(conditions.date)
 
     used = {item.source_id for item in fee.items} | {item.source_id for item in fee.review_items}
-    if rules.terms.source_id is not None:
-        used.add(rules.terms.source_id)
+    if terms.source_id is not None:
+        used.add(terms.source_id)
 
     checklist: list[str] = []
     checklist_reviews: list[ReviewItem] = []
-    for discount_type in dict.fromkeys(conditions.discount_types):
+    for discount_type, _, _ in conditions.discount_selections:
         matched = [
             rule
             for rule in rules.discount_rules
@@ -25,7 +26,7 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
                 used.add(rule.source_id)
         # 증빙서류를 모르는 것과 필요 없는 것을 구분해, 빈 목록이 '서류 불필요'로 보이지 않게 한다.
         if not matched or any(rule.required_documents is None for rule in matched):
-            source_id = matched[0].source_id if matched else rules.source_id
+            source_id = matched[0].source_id if matched else rules.source_on(conditions.date)
             used.add(source_id)
             checklist_reviews.append(
                 ReviewItem(
@@ -46,7 +47,7 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
         facility_id=rules.facility_id,
         facility_name=rules.name,
         fee=fee,
-        terms=rules.terms,
+        terms=terms,
         checklist=checklist,
         checklist_review_items=checklist_reviews,
         sources=sources,
