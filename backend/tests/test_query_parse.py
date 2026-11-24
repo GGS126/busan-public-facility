@@ -144,11 +144,11 @@ def test_landline_is_blocked_before_extraction(phone):
     extract.assert_not_called()
 
 
-def test_input_limit_counts_original_characters():
+def test_input_limit_checks_normalized_characters():
     extract = Mock(return_value=CONDITIONS)
     result = parse_query("㎞" * 500, today=TODAY, extract=extract)
-    assert result["status"] == "ok"
-    extract.assert_called_once_with("km" * 500, TODAY)
+    assert result["status"] == "llm_failed"
+    extract.assert_not_called()
 
 
 def test_long_raw_query_returns_llm_failed():
@@ -263,3 +263,16 @@ def test_catalog_key_is_cached_per_instance_and_not_serialized():
     replacement = OptionsResponse(sports=[], districts=["new"], discount_types=[])
     assert replacement.extraction_key != catalog.extraction_key
     assert "extraction_key" not in catalog.model_dump()
+
+
+def test_known_busan_district_without_facilities_is_preserved():
+    from app.models import Option, OptionsResponse
+    catalog = OptionsResponse(sports=[Option(code="futsal", label="Futsal")],
+                              districts=["해운대구"], discount_types=[])
+    provider = GeminiExtractor("test-key", sport_codes={"futsal": "Futsal"}, discount_codes={},
+                               districts=list(catalog.extraction_key[2]))
+    assert provider.properties["districts"]["items"]["enum"] == list(catalog.extraction_key[2])
+    result = parse_query("test", today=TODAY, extract=Mock(return_value=CONDITIONS | {"districts": ["동구"]}),
+                         catalog=catalog)
+    assert result["status"] == "ok"
+    assert result["conditions"]["districts"] == ["동구"]

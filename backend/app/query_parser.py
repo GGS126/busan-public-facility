@@ -45,6 +45,8 @@ def parse_query(
     if len(query) > 500:
         return {**_result("llm_failed", {}), "message": "이용 조건은 500자 이내로 입력해 주세요."}
     query = unicodedata.normalize("NFKC", query).strip()
+    if len(query) > 500:
+        return {**_result("llm_failed", {}), "message": "이용 조건은 500자 이내로 입력해 주세요."}
     if not query:
         return _result("need_more", {}, list(REQUIRED_FIELDS))
     privacy_query = re.sub(r"(?<!\d)(?:\d{4}[-./])?\d{1,2}(?:[-./]|월\s*)\d{1,2}(?:일)?(?=\s)", "", query)

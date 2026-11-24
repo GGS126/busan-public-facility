@@ -8,6 +8,8 @@ from queue import Empty, Queue
 from time import monotonic
 from datetime import date
 
+from app.models import BUSAN_DISTRICTS
+
 REQUEST_TIMEOUT_SECONDS = 30
 _transport_slots = BoundedSemaphore(4)
 
@@ -19,8 +21,6 @@ THINKING_LEVELS = {
     "gemini-3-flash-preview": "minimal",
     "gemini-3.1-pro-preview": "low",
 }
-BUSAN_DISTRICTS = ("중구", "서구", "동구", "영도구", "부산진구", "동래구", "남구", "북구", "해운대구",
-                   "사하구", "금정구", "강서구", "연제구", "수영구", "사상구", "기장군")
 NULLABLE_TEXT = {"type": ["string", "null"]}
 PROPERTIES = {
     "sport": NULLABLE_TEXT,
