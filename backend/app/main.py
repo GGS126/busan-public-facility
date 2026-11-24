@@ -1,12 +1,14 @@
 import logging
+from datetime import datetime
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.models import CompareRequest, CompareResponse, Conditions, OptionsResponse
+from app.detail import facility_detail
+from app.models import KST, CompareRequest, CompareResponse, Conditions, FacilityDetail, FacilityRules, IsoDate, OptionsResponse
 from app.options import build_options
 from app.repository import load_rule_data
 
@@ -44,7 +46,8 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
             {
                 "field": ".".join(str(part) for part in location) or "body",
                 "code": code if custom else ("required" if code == "missing" else "invalid_value"),
-                "message": error["msg"] if custom else ("필수 항목입니다." if code == "missing" else "값을 확인해 주세요."),
+                # 날짜 형식 오류는 코드는 invalid_value로 두고 YYYY-MM-DD 안내 문구를 그대로 전한다.
+                "message": error["msg"] if custom or code == "date_format" else ("필수 항목입니다." if code == "missing" else "값을 확인해 주세요."),
             }
         )
     return error_response(400, "validation_error", "입력값을 확인해 주세요.", fields=fields)
@@ -115,3 +118,24 @@ def compare(request: CompareRequest) -> CompareResponse:
             raise FacilityNotFound
         selected.append(rules)
     return CompareResponse(results=[compare_facility(rules, request.conditions) for rules in selected])
+
+
+def known_facility(facility_id: str) -> FacilityRules:
+    # 의존성은 엔드포인트의 쿼리 검증보다 먼저 실행되므로, 없는 시설이면 날짜 형식과 관계없이 404다.
+    rules = facilities.get(facility_id)
+    if rules is None:
+        raise FacilityNotFound
+    return rules
+
+
+# 경로 매개변수라서 /api/facilities/options 같은 고정 경로보다 뒤에 둔다.
+@app.get("/api/facilities/{facility_id}", response_model=FacilityDetail)
+def facility(
+    rules: FacilityRules = Depends(known_facility), day: IsoDate | None = Query(default=None, alias="date")
+) -> FacilityDetail:
+    today = datetime.now(KST).date()
+    if day is not None and day < today:
+        raise RequestValidationError(
+            [{"type": "past_date", "loc": ("query", "date"), "msg": "지난 날짜는 선택할 수 없습니다."}]
+        )
+    return facility_detail(rules, day or today)

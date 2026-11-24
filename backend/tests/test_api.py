@@ -188,6 +188,8 @@ def test_missing_required_fields_reported_together():
     ("overrides", "field"),
     [
         ({"date": "2026-13-40"}, "conditions.date"),
+        ({"date": "2099-01-01T00:00:00"}, "conditions.date"),
+        ({"date": 4070908800}, "conditions.date"),
         ({"start_time": "25:00"}, "conditions.start_time"),
         ({"end_time": "24:01"}, "conditions.end_time"),
         ({"start_time": "24:00"}, "conditions.start_time"),
@@ -276,3 +278,65 @@ def test_unknown_discount_selection_type_rejected():
 
     assert response.status_code == 400
     assert response.json()["error"]["fields"][0]["field"] == "conditions.discounts.0.type"
+
+
+def test_facility_detail():
+    response = client.get("/api/facilities/F001", params={"date": next_saturday()})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["facility_id"] == "F001"
+    assert body["sports"] == ["futsal"]
+    # 가상 데이터에는 주소·예약 링크가 없으므로 모르는 값으로 둔다.
+    assert (body["address"], body["booking_url"], body["closure_note"]) == (None, None, None)
+    assert body["time_options"] == []
+    assert [source["source_id"] for source in body["sources"]] == [body["source_id"]]
+
+
+def test_facility_detail_defaults_to_today():
+    assert client.get("/api/facilities/F001").status_code == 200
+
+
+@pytest.mark.parametrize("params", [{}, {"date": "2020-01-01"}, {"date": "abc"}, {"date": "20990101"}])
+def test_facility_detail_unknown_facility(params):
+    # 지난 날짜나 형식이 틀린 날짜여도 없는 시설이면 404다.
+    response = client.get("/api/facilities/NOPE", params=params)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "facility_not_found"
+
+
+@pytest.mark.parametrize(
+    ("value", "code"),
+    [
+        ("2020-01-01", "past_date"),
+        ("abc", "invalid_value"),
+        # 명세의 YYYY-MM-DD 외 형식은 날짜로 바꿀 수 있어도 받지 않는다.
+        ("2099-01-01T00:00:00", "invalid_value"),
+        ("20990101", "invalid_value"),
+        ("4070908800", "invalid_value"),
+        ("2099-02-30", "invalid_value"),
+    ],
+)
+def test_facility_detail_invalid_date(value, code):
+    response = client.get("/api/facilities/F001", params={"date": value})
+
+    assert fields_of(response) == {"date": code}
+
+
+def test_facility_detail_route_after_fixed_facility_routes():
+    # /api/facilities/options·search 같은 고정 경로가 시설 ID로 잡히지 않도록 상세 경로는 맨 뒤에 둔다.
+    paths = [route.path for route in main.app.routes if getattr(route, "path", "").startswith("/api/facilities/")]
+
+    assert paths[-1] == "/api/facilities/{facility_id}"
+
+
+def test_facility_detail_date_format_message_and_schema():
+    response = client.get("/api/facilities/F001", params={"date": "20990101"})
+
+    [field] = response.json()["error"]["fields"]
+    assert field["message"] == "날짜는 YYYY-MM-DD 형식으로 입력해 주세요."
+    # API 문서에는 date가 날짜 형식으로 나타난다.
+    parameters = main.app.openapi()["paths"]["/api/facilities/{facility_id}"]["get"]["parameters"]
+    schema = next(p["schema"] for p in parameters if p["name"] == "date")
+    assert {"type": "string", "format": "date"} in schema["anyOf"]

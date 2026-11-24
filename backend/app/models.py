@@ -1,11 +1,13 @@
 """규정 데이터와 요청·응답 형식. 규정의 모르는 값은 추정하지 않고 None으로 둔다."""
 
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     Field,
     StringConstraints,
     ValidationInfo,
@@ -16,6 +18,18 @@ from pydantic import (
 from pydantic_core import PydanticCustomError
 
 KST = timezone(timedelta(hours=9))
+
+
+def _date_only(value):
+    """날짜는 YYYY-MM-DD만 받는다. 기본 변환은 시각이 붙은 문자열이나 타임스탬프도 날짜로 바꾼다."""
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return value
+    raise PydanticCustomError("date_format", "날짜는 YYYY-MM-DD 형식으로 입력해 주세요.")
+
+
+IsoDate = Annotated[date, BeforeValidator(_date_only)]
 
 ClockTime = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
 BandTime = Annotated[str, StringConstraints(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|24:00)$")]
@@ -47,7 +61,7 @@ class DiscountSelection(BaseModel):
 class Conditions(BaseModel):
     sport: str = Field(min_length=1)
     districts: list[str] = []
-    date: date
+    date: IsoDate
     start_time: ClockTime
     end_time: BandTime
     headcount: int | None = Field(default=None, ge=1)
@@ -258,11 +272,35 @@ class TimePolicy(EffectivePeriod):
         return self
 
 
+class OperatingHours(BaseModel):
+    open_time: ClockTime | None = None
+    close_time: BandTime | None = None
+    note: str | None = None
+
+
+class FacilityInfo(BaseModel):
+    """시설 기본정보. 요금 계산에는 쓰지 않고 상세 화면에만 보여 준다."""
+
+    address: str | None = None
+    phone: str | None = None
+    booking_url: str | None = None
+    operating_hours: OperatingHours = OperatingHours()
+
+
+class PeriodNote(EffectivePeriod):
+    """규정 기간마다 다른 안내 문구(휴장 안내 등)."""
+
+    note: str
+    source_id: str
+
+
 class FacilityRules(BaseModel):
     facility_id: str
     name: str
     district: str | None = None
     source_id: str
+    info: FacilityInfo = FacilityInfo()
+    closure_notes: list[PeriodNote] = []
     # 공통 공휴일 목록을 저장소에서 붙인다. 없으면 모든 날짜의 공휴일 여부를 알 수 없다.
     holiday_calendar: HolidayCalendar | None = None
     fee_rules: list[FeeRule] = []
@@ -289,8 +327,16 @@ class FacilityRules(BaseModel):
 
     def source_on(self, day: date) -> str:
         """근거 규정이 없을 때 안내할 공식 출처. 규정 기간별 출처가 있으면 이용일의 출처를 쓴다."""
+        return self.period_source_on(day) or self.source_id
+
+    def period_source_on(self, day: date) -> str | None:
+        """이용일에 유효한 규정 기간의 출처. 기간별 규정이 없거나 기간에 출처가 없으면 시설 출처, 유효한 기간이 없으면 None"""
+        if not self.terms_by_period:
+            return self.source_id
         period = self._period_terms(day)
-        return period.source_id if period is not None and period.source_id is not None else self.source_id
+        if period is None:
+            return None
+        return period.source_id or self.source_id
 
     @property
     def sports(self) -> set[str]:
@@ -300,7 +346,7 @@ class FacilityRules(BaseModel):
     @model_validator(mode="after")
     def check_sources(self) -> "FacilityRules":
         known = {source.source_id for source in self.sources}
-        rules = [*self.fee_rules, *self.discount_rules, *self.time_policies]
+        rules = [*self.fee_rules, *self.discount_rules, *self.time_policies, *self.closure_notes]
         used = {self.source_id, *(rule.source_id for rule in rules)}
         used |= {terms.source_id for terms in [self.terms, *self.terms_by_period] if terms.source_id is not None}
         if used - known:
@@ -408,3 +454,35 @@ class CompareResult(BaseModel):
 
 class CompareResponse(BaseModel):
     results: list[CompareResult]
+
+
+# 시설 상세
+
+
+class TimeOption(BaseModel):
+    """이용일에 유효한 이용시간 규정. 화면의 회차·이용시간 선택지로 쓴다."""
+
+    sport: str
+    selection: Literal["fixed_slot", "flexible"]
+    slots: list[Slot]
+    allowed_minutes: list[int]
+    max_minutes: int | None
+    open_time: str | None
+    close_time: str | None
+    source_id: str
+
+
+class FacilityDetail(BaseModel):
+    facility_id: str
+    name: str
+    sports: list[str]
+    district: str | None
+    address: str | None
+    phone: str | None
+    operating_hours: OperatingHours
+    closure_note: str | None
+    booking_url: str | None
+    time_options: list[TimeOption]
+    # 이용일에 유효한 규정 기간이 없으면 None. 지난 기간의 출처는 보여 주지 않는다.
+    source_id: str | None
+    sources: list[Source]

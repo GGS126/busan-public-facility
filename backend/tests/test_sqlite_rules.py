@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.compare import compare_facility
+from app.detail import facility_detail
 from app.engine import calculate
 from app.models import Conditions
 from app.repository import load_sqlite_rule_data
@@ -304,3 +305,90 @@ def test_gudeok_lighting_payment_unverified(facilities):
     assert (result.total, result.payment_due, result.onsite_payment, result.payment_unverified) == (28000, None, 0, 20000)
     # 기본요금 8,000원은 예약할 때 온라인으로 낸다.
     assert result.online_prepay == 8000
+
+
+def test_facility_detail_flexible(facilities):
+    detail = facility_detail(facilities["busan_gudeok_stadium_tennis"], WEEKDAY)
+
+    assert detail.address == "부산 서구 망양로 57 (서대신동3가, 구덕운동장)"
+    assert detail.booking_url == "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472"
+    assert (detail.operating_hours.open_time, detail.operating_hours.close_time) == ("08:00", "22:00")
+    assert detail.closure_note == "연중무휴(명절 등 별도 공지일 제외)"
+    [option] = detail.time_options
+    assert (option.selection, option.max_minutes, option.slots) == ("flexible", 120, [])
+    assert [source.source_id for source in detail.sources] == ["busan_reserve_472_2026winter"]
+
+
+def test_facility_detail_fixed_slots(facilities):
+    detail = facility_detail(facilities["busan_samrak_ecopark_tennis"], WEEKDAY)
+
+    [option] = detail.time_options
+    assert [(slot.start_time, slot.end_time) for slot in option.slots] == [
+        ("08:00", "10:00"), ("10:00", "12:00"), ("13:00", "15:00"), ("15:00", "17:00"),
+    ]
+
+
+def test_facility_detail_outside_rule_period_shows_unknown(facilities):
+    # 동절기 규정이 끝난 날에는 지난 회차나 휴장 안내를 보여 주지 않는다.
+    detail = facility_detail(facilities["busan_samrak_ecopark_tennis"], date(2027, 5, 1))
+
+    assert detail.time_options == []
+    assert detail.closure_note is None
+    assert detail.booking_url is not None
+    # 만료된 동절기 규정의 출처와 종목도 보여 주지 않는다.
+    assert detail.source_id is None
+    assert detail.sources == []
+    assert detail.sports == []
+
+
+def test_facility_detail_follows_use_date(two_period_facility):
+    detail = facility_detail(two_period_facility, date(2027, 2, 1))
+
+    assert detail.source_id == "haeundae_2027h1"
+    assert [source.source_id for source in detail.sources] == ["haeundae_2027h1"]
+
+
+def test_facility_detail_api_with_database(facilities, monkeypatch):
+    # 실제 DB의 모든 시설을 API로 조회한다. 날짜를 생략하면 오늘 기준이다.
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    monkeypatch.setattr(main, "facilities", facilities)
+    client = TestClient(main.app)
+    for facility_id in facilities:
+        response = client.get(f"/api/facilities/{facility_id}")
+
+        assert response.status_code == 200, facility_id
+        detail = response.json()
+        assert detail["facility_id"] == facility_id
+        used = {detail["source_id"], *(option["source_id"] for option in detail["time_options"])} - {None}
+        assert used == {source["source_id"] for source in detail["sources"]}
+
+
+def test_period_without_source_uses_facility_source(two_period_facility):
+    # 유효한 기간에 출처가 비어 있으면 기간 밖처럼 숨기지 않고 시설 출처를 보여 준다.
+    periods = [
+        period.model_copy(update={"source_id": None}) if period.effective_from == date(2027, 1, 1) else period
+        for period in two_period_facility.terms_by_period
+    ]
+    rules = two_period_facility.model_copy(update={"terms_by_period": periods})
+    detail = facility_detail(rules, date(2027, 2, 1))
+
+    assert detail.source_id == rules.source_id
+    assert rules.source_id in [source.source_id for source in detail.sources]
+
+
+def test_facility_detail_sports_follow_rule_months(facilities):
+    # 적용 기간 안이어도 그 달에 기본요금 규정이 없는 종목은 보여 주지 않는다.
+    rules = facilities["busan_samrak_ecopark_tennis"]
+    winter_only = rules.model_copy(
+        update={
+            "fee_rules": [
+                r.model_copy(update={"months": [11, 12, 1, 2]}) if r.type == "base" else r for r in rules.fee_rules
+            ]
+        }
+    )
+
+    assert facility_detail(winter_only, WEEKDAY).sports == ["tennis"]
+    assert facility_detail(winter_only, date(2027, 3, 10)).sports == []
