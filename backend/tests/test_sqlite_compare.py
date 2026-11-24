@@ -183,16 +183,13 @@ def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path, monkeypatc
 
 
 
-def test_sqlite_compare_uses_one_read_connection(sqlite_db, gudeok):
+def test_common_engine_loader_uses_one_read_connection(sqlite_db, gudeok):
     from unittest.mock import patch
     query = load_query_api()
-    from app.facility_catalog import facility_closures
-    from datetime import date
-    closures = facility_closures(sqlite_db, date(2026, 11, 30))
     with patch.object(query.sqlite3, "connect", wraps=query.sqlite3.connect) as connect:
         result = compare_database(sqlite_db, gudeok, Conditions(
             sport="tennis", date="2026-11-30", start_time="10:00", end_time="12:00", source="direct",
-        ), closures=closures)
+        ))
     assert result.fee.status == "calculated"
     assert connect.call_count == 1
 
