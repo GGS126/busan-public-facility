@@ -37,7 +37,7 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
     fields = []
     for error in exc.errors():
         code = error["type"]
-        custom = code in ("invalid_time_range", "past_date", "invalid_option", "invalid_discount")
+        custom = code in ("invalid_time_range", "past_date", "invalid_option", "invalid_discount", "invalid_lighting_minutes")
         # JSON 형식 오류의 위치는 항목이 아니라 문자 위치이므로 요청 본문 전체의 오류로 표시한다.
         location = [] if code == "json_invalid" else error["loc"][1:]
         fields.append(

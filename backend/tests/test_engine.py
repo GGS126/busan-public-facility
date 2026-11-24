@@ -27,7 +27,7 @@ def base_rule(**overrides) -> FeeRule:
 
 
 def lighting_rule(**overrides) -> FeeRule:
-    values = dict(rule_id="LIGHT", type="lighting", amount=5000, time_from="18:00", time_to="22:00")
+    values = dict(rule_id="LIGHT", type="lighting", amount=5000, time_from="18:00", time_to="22:00", payment="prepay")
     return base_rule(**(values | overrides))
 
 
@@ -108,7 +108,8 @@ def amounts(result) -> dict[str, int]:
 
 def assert_review(result, target, code):
     assert result.status == "needs_review"
-    assert (result.total, result.payment_due, result.expected_refund, result.net_cost_after_refund) == (None,) * 4
+    totals = (result.total, result.payment_due, result.onsite_payment, result.expected_refund, result.net_cost_after_refund)
+    assert totals == (None,) * 5
     assert [(item.target, item.code) for item in result.review_items] == [(target, code)]
 
 
@@ -575,6 +576,179 @@ def test_invalid_discount_selection_rejected(discounts, headcount, message):
         selection_conditions(discounts, headcount=headcount)
 
 
+def optional_lighting_rule(**overrides) -> FeeRule:
+    values = dict(
+        rule_id="OPT_LIGHT", type="optional_lighting", amount=10000, time_from="07:00", time_to="20:00",
+        extra_unit_minutes=10, extra_unit_amount=1600, partial_unit=None, payment="onsite",
+    )
+    return base_rule(**(values | overrides))
+
+
+def lighting_conditions(minutes, start="10:00", end="12:00") -> Conditions:
+    return Conditions(
+        sport="futsal", date=MONDAY, start_time=start, end_time=end,
+        optional_lighting_minutes=minutes, source="direct",
+    )
+
+
+@pytest.mark.parametrize(("minutes", "amount"), [(30, 4800), (60, 10000), (80, 13200), (120, 20000)])
+def test_optional_lighting_hour_blocks_plus_steps(minutes, amount):
+    result = calculate(facility([base_rule(), optional_lighting_rule()]), lighting_conditions(minutes))
+
+    assert amounts(result)["lighting"] == amount
+    assert (result.payment_due, result.onsite_payment) == (40000, amount)
+    assert result.net_cost_after_refund == result.total == 40000 + amount
+
+
+def test_prepaid_optional_lighting_in_payment_due():
+    rule = optional_lighting_rule(payment="prepay")
+    result = calculate(facility([base_rule(), rule]), lighting_conditions(60))
+
+    assert (result.payment_due, result.onsite_payment, result.net_cost_after_refund) == (50000, 0, 50000)
+
+
+def test_optional_lighting_unknown_payment_not_in_payment_due():
+    rule = optional_lighting_rule(payment=None)
+    result = calculate(facility([base_rule(), rule]), lighting_conditions(60))
+
+    assert result.status == "calculated"
+    assert result.items[-1].payment == "unverified"
+    assert (result.payment_due, result.onsite_payment, result.payment_unverified) == (None, 0, 10000)
+    # 최초 납부액은 확정하지 않아도 확인된 온라인 선결제액은 알려 준다.
+    assert result.online_prepay == 40000
+    assert result.total == result.net_cost_after_refund == 50000
+
+
+def test_mandatory_lighting_unknown_payment_not_in_payment_due():
+    rules = facility([base_rule(), lighting_rule(payment=None)], [discount_rule()])
+    conditions = Conditions(
+        sport="futsal", date=MONDAY, start_time="18:00", end_time="20:00", discount_types=["multi_child"], source="direct"
+    )
+    result = calculate(rules, conditions)
+
+    # 기본요금 40,000원은 선결제지만 조명료 10,000원의 결제 방식을 몰라 최초 납부액을 확정하지 않는다.
+    assert result.status == "calculated"
+    assert (result.payment_due, result.payment_unverified, result.expected_refund) == (None, 10000, 20000)
+    assert result.online_prepay == 40000
+    assert result.net_cost_after_refund == 30000
+
+
+def test_onsite_lighting_with_refund_discount():
+    rules = facility([base_rule(), optional_lighting_rule()], [discount_rule()])
+    conditions = lighting_conditions(60).model_copy(update={"discount_types": ["multi_child"]})
+    result = calculate(rules, conditions)
+
+    assert (result.payment_due, result.onsite_payment, result.expected_refund) == (40000, 10000, 20000)
+    assert result.net_cost_after_refund == 30000
+
+
+def test_optional_lighting_rounds_up_to_hour():
+    rule = optional_lighting_rule(extra_unit_minutes=None, extra_unit_amount=None, partial_unit="round_up")
+    result = calculate(facility([base_rule(), rule]), lighting_conditions(80))
+
+    assert amounts(result)["lighting"] == 20000
+
+
+def test_optional_lighting_leftover_below_step_needs_review():
+    result = calculate(facility([base_rule(), optional_lighting_rule()]), lighting_conditions(85))
+
+    assert_review(result, "lighting", "rule_missing")
+
+
+def test_optional_lighting_only_within_selectable_time():
+    # 19:00~21:00 이용 중 선택 조명 시간대(07:00~20:00)와 겹치는 19:00~20:00에만 쓸 수 있다.
+    rules = facility([base_rule(), optional_lighting_rule()])
+    result = calculate(rules, lighting_conditions(60, start="19:00", end="21:00"))
+
+    assert amounts(result)["lighting"] == 10000
+
+    result = calculate(rules, lighting_conditions(70, start="19:00", end="21:00"))
+
+    assert_review(result, "lighting", "duration_not_allowed")
+    assert result.review_items[0].reason == "선택 조명은 19:00~20:00 사이 최대 60분까지 사용할 수 있습니다."
+
+
+def test_optional_lighting_outside_selectable_time_not_allowed():
+    result = calculate(
+        facility([base_rule(), optional_lighting_rule()]), lighting_conditions(30, start="20:00", end="22:00")
+    )
+
+    assert_review(result, "lighting", "duration_not_allowed")
+    assert result.review_items[0].reason == "이 이용 시간에는 선택 조명을 사용할 수 없습니다. 선택 조명 시간대: 07:00~20:00"
+
+
+def test_facility_without_optional_lighting_ignores_minutes():
+    # 여러 시설을 함께 비교할 때 선택 조명이 없는 시설은 입력한 조명 시간과 관계없이 계산한다.
+    rules = facility([base_rule(), lighting_rule()])
+    result = calculate(rules, lighting_conditions(60, start="18:00", end="20:00"))
+
+    assert result.status == "calculated"
+    assert amounts(result) == {"base": 40000, "lighting": 10000}
+
+
+def test_optional_lighting_only_in_other_period_ignores_minutes():
+    # 선택 조명이 지난 기간에만 있으면 이용일에는 없는 시설과 같다.
+    expired = optional_lighting_rule(effective_from="2026-01-01", effective_to="2026-06-30")
+    result = calculate(facility([base_rule(), lighting_rule(), expired]), lighting_conditions(60, start="18:00", end="20:00"))
+
+    assert result.status == "calculated"
+    assert amounts(result) == {"base": 40000, "lighting": 10000}
+
+
+def test_optional_lighting_not_on_use_day():
+    # 평일에만 있는 선택 조명을 토요일에 고르면 시간대가 아니라 이용일을 사유로 안내한다.
+    rules = facility([base_rule(), optional_lighting_rule(day_types=["weekday"], time_from="18:00", time_to="22:00")])
+    conditions = lighting_conditions(60, start="19:00", end="21:00").model_copy(update={"date": SATURDAY})
+    result = calculate(rules, conditions)
+
+    assert_review(result, "lighting", "duration_not_allowed")
+    assert result.review_items[0].reason == "이용일에는 선택 조명을 사용할 수 없습니다."
+
+
+def test_adjacent_optional_lighting_bands_need_review():
+    # 이어 붙은 두 시간대는 충돌이 아니지만, 조명을 어느 쪽에 쓸지 몰라 요금을 정하지 않는다.
+    rules = facility([
+        base_rule(),
+        optional_lighting_rule(rule_id="DAY", time_from="07:00", time_to="18:00"),
+        optional_lighting_rule(rule_id="NIGHT", time_from="18:00", time_to="22:00", amount=15000),
+    ])
+    result = calculate(rules, lighting_conditions(60, start="17:00", end="19:00"))
+
+    assert_review(result, "lighting", "rule_missing")
+
+
+def test_overlapping_optional_lighting_bands_conflict():
+    rules = facility([
+        base_rule(),
+        optional_lighting_rule(rule_id="A", time_from="07:00", time_to="19:00"),
+        optional_lighting_rule(rule_id="B", time_from="18:00", time_to="22:00"),
+    ])
+    result = calculate(rules, lighting_conditions(60, start="17:00", end="19:00"))
+
+    assert_review(result, "lighting", "rule_conflict")
+
+
+def test_no_optional_lighting_selected_ignores_rule():
+    result = calculate(facility([base_rule(), optional_lighting_rule()]), lighting_conditions(0))
+
+    assert "lighting" not in amounts(result)
+
+
+def test_optional_lighting_longer_than_use_rejected():
+    with pytest.raises(ValueError, match="이용 시간보다 길 수 없습니다"):
+        lighting_conditions(150)
+
+
+def test_extra_unit_only_for_optional_lighting():
+    with pytest.raises(ValueError, match="선택 조명 규정에만"):
+        lighting_rule(extra_unit_minutes=10, extra_unit_amount=1600)
+
+
+def test_payment_only_for_lighting():
+    with pytest.raises(ValueError, match="조명 규정에만"):
+        base_rule(payment="onsite")
+
+
 def test_repeated_discount_type_applied_once():
     rules = facility(discount_rules=[discount_rule()])
     result = calculate(rules, conditions(discounts=["multi_child", "multi_child"]))
@@ -742,7 +916,8 @@ def test_same_input_gives_same_result():
 def assert_not_eligible(result, code, source_id="S-01"):
     assert result.status == "not_eligible"
     assert result.items == []
-    assert (result.total, result.payment_due, result.expected_refund, result.net_cost_after_refund) == (None,) * 4
+    totals = (result.total, result.payment_due, result.onsite_payment, result.expected_refund, result.net_cost_after_refund)
+    assert totals == (None,) * 5
     assert [(item.target, item.code, item.source_id) for item in result.review_items] == [("time", code, source_id)]
 
 

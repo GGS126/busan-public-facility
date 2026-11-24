@@ -29,6 +29,7 @@ DISCOUNT_ROUNDING = {
     "truncate_100_won": "floor_100",
 }
 LIGHTING_PARTIAL_UNIT = {"exact_units": None, "round_up": "round_up", "proportional_if_exact": "prorate"}
+OPTION_PAYMENT = {"online_prepay": "prepay", "onsite": "onsite", None: None}
 ALL_DAYS = ["weekday", "weekend", "holiday"]
 
 
@@ -210,15 +211,17 @@ def _base_rules(prices: list[dict], policy: dict | None, facility: dict, sport: 
 
 
 def _lighting_rules(prices: list[dict], options: list[dict], sport: str, period: dict, source_id: str) -> list[dict]:
-    """이용 시간으로 정해지는 필수 조명료만 만든다. 선택 조명은 사용 시간을 입력받기 전까지 계산하지 않는다."""
+    """필수 조명료는 이용 시간으로, 선택 조명료는 사용자가 고른 조명 사용 시간으로 계산하는 규정을 만든다."""
     common = {"sport": sport, "type": "lighting", "day_types": ALL_DAYS, "source_id": source_id, **period}
     # 회차 요금에 포함된 필수 조명료는 회차와 같은 시간대의 조명 항목으로 따로 보여 준다.
+    # 회차 요금과 함께 예약 시 온라인으로 결제한다.
     rules = [
         {
             "rule_id": f"{price['id']}_lighting",
             "amount": price["mandatory_light_won"],
             "unit_minutes": price["duration_minutes"],
             "partial_unit": None,
+            "payment": "prepay",
             "time_from": price["start_time"],
             "time_to": price["end_time"],
             **common,
@@ -227,7 +230,10 @@ def _lighting_rules(prices: list[dict], options: list[dict], sport: str, period:
         if price["selection_type"] == "fixed_slot" and price["mandatory_light_won"] > 0
     ]
     for option in options:
-        if option["option_id"] != "lighting" or option["application_type"] != "mandatory_when_applicable":
+        if option["option_id"] != "lighting" or option["application_type"] == "included_in_base_price":
+            continue
+        if option["application_type"] == "optional":
+            rules.append(_optional_lighting_rule(option, common))
             continue
         if option["calculation_type"] != "time_overlap_units" or option["extra_unit_minutes"] is not None:
             raise ValueError(f"변환할 수 없는 필수 조명 규정: {option['id']}")
@@ -237,12 +243,31 @@ def _lighting_rules(prices: list[dict], options: list[dict], sport: str, period:
                 "amount": option["hour_price"],
                 "unit_minutes": 60,
                 "partial_unit": _mapped(LIGHTING_PARTIAL_UNIT, option["rounding_policy"], "조명료 단위 처리"),
+                "payment": _mapped(OPTION_PAYMENT, option["payment_type"], "조명료 결제 방식"),
                 "time_from": option["applies_from"],
                 "time_to": option["applies_to"],
                 **common,
             }
         )
     return rules
+
+
+def _optional_lighting_rule(option: dict, common: dict) -> dict:
+    if option["calculation_type"] not in ("hour_blocks_plus_steps", "rounded_units"):
+        raise ValueError(f"변환할 수 없는 선택 조명 규정: {option['id']}")
+    return {
+        **common,
+        "type": "optional_lighting",
+        "rule_id": option["id"],
+        "amount": option["hour_price"],
+        "unit_minutes": 60,
+        "extra_unit_minutes": option["extra_unit_minutes"],
+        "extra_unit_amount": option["extra_unit_price"],
+        "partial_unit": _mapped(LIGHTING_PARTIAL_UNIT, option["rounding_policy"], "조명료 단위 처리"),
+        "payment": _mapped(OPTION_PAYMENT, option["payment_type"], "선택 조명료 결제 방식"),
+        "time_from": option["applies_from"],
+        "time_to": option["applies_to"],
+    }
 
 
 def _terms(rows, rule_set: dict) -> dict:

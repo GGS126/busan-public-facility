@@ -22,6 +22,9 @@ BandTime = Annotated[str, StringConstraints(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|
 Rounding = Annotated[str, StringConstraints(pattern=r"^(floor|ceil|round)_(1|10|100|1000)$")]
 DayType = Literal["weekday", "weekend", "holiday"]
 DiscountMethod = Literal["onsite", "prepay_refund"]
+PaymentMethod = Literal["prepay", "onsite"]
+# 금액 항목의 결제 방식. unverified: 공식 자료에서 결제 시점·장소를 확인하지 못함
+ItemPayment = Literal["prepay", "onsite", "unverified"]
 DiscountBasis = Literal["whole_fee", "per_eligible_person", "holder_whole_fee"]
 
 
@@ -51,6 +54,8 @@ class Conditions(BaseModel):
     # 인원을 모르는 감면 선택. 인원 비례 감면 시설은 discounts로 받아야 계산한다.
     discount_types: list[str] = []
     discounts: list[DiscountSelection] = []
+    # 지정 회차 중 사용자가 조명을 켤 시간. 필수 조명은 이용 시간으로 자동 계산한다.
+    optional_lighting_minutes: int = Field(default=0, ge=0)
     source: Literal["direct", "llm"]
 
     @field_validator("end_time")
@@ -60,6 +65,12 @@ class Conditions(BaseModel):
         if start is not None and to_minutes(value) <= to_minutes(start):
             raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
         return value
+
+    @model_validator(mode="after")
+    def check_optional_lighting(self) -> "Conditions":
+        if self.optional_lighting_minutes > to_minutes(self.end_time) - to_minutes(self.start_time):
+            raise PydanticCustomError("invalid_lighting_minutes", "선택 조명 사용 시간은 이용 시간보다 길 수 없습니다.")
+        return self
 
     @model_validator(mode="after")
     def check_discounts(self) -> "Conditions":
@@ -119,10 +130,16 @@ class EffectivePeriod(BaseModel):
 class FeeRule(EffectivePeriod):
     rule_id: str
     sport: str
-    type: Literal["base", "lighting"]
+    # optional_lighting: 사용자가 고른 조명 사용 시간으로 계산한다. time_from~time_to는 선택할 수 있는 이용 시간대다.
+    type: Literal["base", "lighting", "optional_lighting"]
     amount: int | None = Field(default=None, ge=0)
     unit_minutes: int | None = Field(default=None, gt=0)
+    # 단위 시간을 채우고 남은 시간에 붙는 요금. 예: 60분 10,000원 + 남은 10분마다 1,600원
+    extra_unit_minutes: int | None = Field(default=None, gt=0)
+    extra_unit_amount: int | None = Field(default=None, ge=0)
     partial_unit: Literal["round_up", "prorate"] | None = None
+    # 조명료를 온라인으로 선결제하는지 현장에서 결제하는지. 모르면 None
+    payment: PaymentMethod | None = None
     day_types: list[DayType] | None = None
     months: list[Annotated[int, Field(ge=1, le=12)]] | None = None
     time_from: BandTime | None = None
@@ -135,6 +152,12 @@ class FeeRule(EffectivePeriod):
             raise ValueError("time_from과 time_to는 함께 입력해야 합니다.")
         if self.time_from is not None and to_minutes(self.time_from) >= to_minutes(self.time_to):
             raise ValueError("time_from은 time_to보다 빨라야 합니다.")
+        if (self.extra_unit_minutes is None) != (self.extra_unit_amount is None):
+            raise ValueError("extra_unit_minutes와 extra_unit_amount는 함께 입력해야 합니다.")
+        if self.extra_unit_minutes is not None and self.type != "optional_lighting":
+            raise ValueError("추가 단위 요금은 선택 조명 규정에만 입력할 수 있습니다.")
+        if self.payment is not None and self.type == "base":
+            raise ValueError("결제 방식은 조명 규정에만 입력할 수 있습니다.")
         return self
 
 
@@ -331,12 +354,15 @@ class FeeItem(BaseModel):
     rule_id: str
     source_id: str
     method: DiscountMethod | None = None
+    # 조명료만. 다른 금액 항목은 온라인 선결제다.
+    payment: ItemPayment | None = None
 
     @model_serializer(mode="wrap")
     def omit_empty_method(self, handler):
         data = handler(self)
-        if data["method"] is None:
-            del data["method"]
+        for key in ("method", "payment"):
+            if data[key] is None:
+                del data[key]
         return data
 
 
@@ -359,6 +385,12 @@ class FeeResult(BaseModel):
     items: list[FeeItem]
     total: int | None
     payment_due: int | None
+    # 결제 방식이 확인된 온라인 선결제액. payment_due가 None이어도 계산했으면 값이 있다.
+    online_prepay: int | None
+    # 이용 당일 현장에서 따로 내는 금액. payment_due에는 들어가지 않는다.
+    onsite_payment: int | None
+    # 결제 방식을 확인하지 못한 금액. 0보다 크면 payment_due는 None이다.
+    payment_unverified: int | None
     expected_refund: int | None
     net_cost_after_refund: int | None
     review_items: list[ReviewItem]

@@ -51,6 +51,9 @@ def calculate(rules: FacilityRules, conditions: Conditions) -> FeeResult:
         items=[],
         total=None,
         payment_due=None,
+        online_prepay=None,
+        onsite_payment=None,
+        payment_unverified=None,
         expected_refund=None,
         net_cost_after_refund=None,
         review_items=[
@@ -71,7 +74,15 @@ def _amount_key(result: FeeResult) -> tuple:
     sums = {}
     for item in result.items:
         sums[item.type] = sums.get(item.type, 0) + item.amount
-    return (result.status, tuple(sorted(sums.items())), result.payment_due, result.expected_refund)
+    return (
+        result.status,
+        tuple(sorted(sums.items())),
+        result.payment_due,
+        result.online_prepay,
+        result.onsite_payment,
+        result.payment_unverified,
+        result.expected_refund,
+    )
 
 
 def _differing_target(results: list[FeeResult]) -> str:
@@ -107,6 +118,8 @@ def _calculate(rules: FacilityRules, conditions: Conditions, day_types: set[str]
 
     base_ok = attempt("base", lambda: _base_items(rules, conditions, day_types))
     lighting_ok = attempt("lighting", lambda: _lighting_items(rules, conditions, day_types))
+    optional_lighting_ok = attempt("lighting", lambda: _optional_lighting_items(rules, conditions, day_types))
+    lighting_ok = lighting_ok and optional_lighting_ok
     attempt("discount", lambda: _discount_items(rules, conditions, items, base_ok, lighting_ok))
 
     if reviews:
@@ -115,20 +128,32 @@ def _calculate(rules: FacilityRules, conditions: Conditions, day_types: set[str]
             items=items,
             total=None,
             payment_due=None,
+            online_prepay=None,
+            onsite_payment=None,
+            payment_unverified=None,
             expected_refund=None,
             net_cost_after_refund=None,
             review_items=reviews,
         )
 
     refund = -sum(item.amount for item in items if item.method == "prepay_refund")
-    due = sum(item.amount for item in items if item.method != "prepay_refund")
+    onsite = sum(item.amount for item in items if item.payment == "onsite")
+    unverified = sum(item.amount for item in items if item.payment == "unverified")
+    due = sum(
+        item.amount for item in items if item.method != "prepay_refund" and item.payment not in ("onsite", "unverified")
+    )
     return FeeResult(
         status="calculated",
         items=items,
-        total=due - refund,
-        payment_due=due,
+        total=due + onsite + unverified - refund,
+        # 결제 방식을 모르는 금액이 있으면 최초 납부액을 확정하지 않는다.
+        payment_due=None if unverified else due,
+        # 결제 방식이 확인된 온라인 선결제액. 미확인 금액이 있어도 예약할 때 낼 금액은 알려 준다.
+        online_prepay=due,
+        onsite_payment=onsite,
+        payment_unverified=unverified,
         expected_refund=refund,
-        net_cost_after_refund=due - refund,
+        net_cost_after_refund=due + onsite + unverified - refund,
         review_items=[],
     )
 
@@ -175,6 +200,9 @@ def _not_calculated(status: str, code: str, reason: str, source_id: str) -> FeeR
         items=[],
         total=None,
         payment_due=None,
+        online_prepay=None,
+        onsite_payment=None,
+        payment_unverified=None,
         expected_refund=None,
         net_cost_after_refund=None,
         review_items=[ReviewItem(code=code, target="time", reason=reason, source_id=source_id)],
@@ -306,8 +334,86 @@ def _lighting_items(rules: FacilityRules, conditions: Conditions, day_types: set
                     raise NeedsReview("rule_missing", "요금 단위가 조명 시간대 경계를 넘을 때의 처리 방식을 확인할 수 없습니다.", rule.source_id)
                 charged_units.append((rule.rule_id, unit_start, unit_end))
                 amount += _unit_charge(rule, unit_end - unit_start)
-        items.append(FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id))
+        items.append(
+            FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id, payment=_item_payment(rule))
+        )
     return items
+
+
+def _optional_lighting_items(rules: FacilityRules, conditions: Conditions, day_types: set[str]) -> list[FeeItem]:
+    """사용자가 고른 조명 사용 시간만큼 계산한다.
+
+    조명은 이용 시간 중 선택 조명 시간대와 겹치는 동안에만 쓸 수 있다.
+    예: 19:00~22:00 회차에서 선택 조명 시간대가 07:00~20:00이면 19:00~20:00의 60분까지
+    """
+    minutes = conditions.optional_lighting_minutes
+    if not minutes:
+        return []
+    # 이용일에 유효한 선택 조명 규정만 본다. 다른 기간에만 있는 선택 조명은 없는 것과 같다.
+    options = [
+        r
+        for r in rules.fee_rules
+        if r.type == "optional_lighting" and r.sport == conditions.sport and r.in_effect(conditions.date)
+    ]
+    # 선택 조명이 없는 시설(예: 18시 이후 조명이 필수인 구덕)은 여러 시설을 비교할 때 입력한 조명 시간을 쓰지 않는다.
+    if not options:
+        return []
+    on_day = [
+        r
+        for r in options
+        if (r.months is None or conditions.date.month in r.months)
+        and (r.day_types is None or day_types & set(r.day_types))
+    ]
+    if not on_day:
+        # 요일·월 조건 때문에 이용일에는 선택 조명이 없다. 시간대를 안내하면 이용 시간과 모순된다.
+        raise NeedsReview("duration_not_allowed", "이용일에는 선택 조명을 사용할 수 없습니다.", options[0].source_id)
+    start, end = to_minutes(conditions.start_time), to_minutes(conditions.end_time)
+    active = _active_fee_rules(rules, conditions, "optional_lighting", day_types)
+    if not active:
+        # 규정은 있지만 이용 시간과 겹치지 않는다. 데이터 누락이 아니라 이 시간에 고를 수 없는 것이다.
+        bands = ", ".join(sorted({f"{r.time_from}~{r.time_to}" for r in on_day if r.time_from is not None}))
+        raise NeedsReview(
+            "duration_not_allowed",
+            f"이 이용 시간에는 선택 조명을 사용할 수 없습니다. 선택 조명 시간대: {bands}",
+            on_day[0].source_id,
+        )
+    for index, rule in enumerate(active):
+        for other in active[index + 1 :]:
+            if to_minutes(rule.time_from) < to_minutes(other.time_to) and to_minutes(other.time_from) < to_minutes(rule.time_to):
+                raise NeedsReview("rule_conflict", "이용 시간에 적용되는 선택 조명 규정이 충돌합니다.", rule.source_id)
+    if len(active) > 1:
+        # 시간대가 이어 붙은 규정이 둘 이상이면 조명을 어느 시간대에 쓸지 몰라 요금을 정하지 않는다.
+        raise NeedsReview(
+            "rule_missing", "선택 조명을 어느 시간대에 사용할지 알 수 없어 요금을 정할 수 없습니다.", active[0].source_id
+        )
+
+    rule = active[0]
+    band_start, band_end = max(start, to_minutes(rule.time_from)), min(end, to_minutes(rule.time_to))
+    if minutes > band_end - band_start:
+        reason = (
+            f"선택 조명은 {_clock(band_start)}~{_clock(band_end)} 사이 "
+            f"최대 {band_end - band_start}분까지 사용할 수 있습니다."
+        )
+        raise NeedsReview("duration_not_allowed", reason, rule.source_id)
+    unit = _require_unit(rule)
+    full_units, rest = divmod(minutes, unit)
+    amount = full_units * _unit_charge(rule, unit)
+    if rest and rule.extra_unit_minutes is None:
+        amount += _unit_charge(rule, rest)
+    elif rest:
+        steps, leftover = divmod(rest, rule.extra_unit_minutes)
+        if leftover and rule.partial_unit != "round_up":
+            raise NeedsReview("rule_missing", "조명 추가 단위 미만의 처리 방식을 확인할 수 없습니다.", rule.source_id)
+        amount += (steps + (1 if leftover else 0)) * rule.extra_unit_amount
+    return [FeeItem(type="lighting", amount=amount, rule_id=rule.rule_id, source_id=rule.source_id, payment=_item_payment(rule))]
+
+
+def _clock(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+def _item_payment(rule: FeeRule) -> str:
+    # 결제 방식을 모르면 금액은 계산하되 최초 납부액과 현장 결제액 어느 쪽에도 넣지 않는다.
+    return rule.payment or "unverified"
 
 
 def _discount_items(
