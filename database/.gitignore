@@ -1,0 +1,4 @@
+# build_db.py가 생성하는 결과물. 원본은 같은 폴더의 JSON이다.
+facilities.sqlite3
+facilities.sqlite3-journal
+__pycache__/

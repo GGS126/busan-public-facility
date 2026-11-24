@@ -59,6 +59,9 @@ def test_sqlite_options_match_facility_search(monkeypatch, tmp_path):
     db = tmp_path / "facilities.sqlite3"
     subprocess.run([sys.executable, str(build_script), "--db", str(db)], check=True)
     monkeypatch.setattr(main, "DB_PATH", db)
+    data = main.load_service_data("sqlite", db)
+    monkeypatch.setattr(main, "facilities", {item.facility_id: item for item in data.facilities})
+    monkeypatch.setattr(main, "available_options", build_options(data))
     day = (datetime.now(KST).date() + timedelta(days=1)).isoformat()
     conditions = {"sport": "tennis", "date": day, "source": "direct"}
     options = client.get("/api/facilities/options").json()

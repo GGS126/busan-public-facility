@@ -11,7 +11,27 @@ from app import main, models
 
 from app.facility_catalog import DB_PATH, read_catalog
 from app.models import KST, Conditions
-from app.sqlite_compare import compare_sqlite, load_query_api
+from app.compare import compare_facility
+from app.facility_catalog import load_query_api
+from app.repository import load_sqlite_rule_data
+
+
+def compare_database(path, facility, conditions, **_unused):
+    data = load_sqlite_rule_data(path)
+    rules = next(item for item in data.facilities if item.facility_id == facility["facility_id"])
+    return compare_facility(rules, conditions)
+
+
+def configure_service(monkeypatch, path):
+    data = main.load_service_data("sqlite", path)
+    monkeypatch.setattr(main, "DB_PATH", path)
+    monkeypatch.setattr(main, "facilities", {item.facility_id: item for item in data.facilities})
+    monkeypatch.setattr(main, "available_options", main.build_options(data))
+
+
+@pytest.fixture(autouse=True)
+def sqlite_service(sqlite_db, monkeypatch):
+    configure_service(monkeypatch, sqlite_db)
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +48,7 @@ def gudeok(sqlite_db):
 
 
 def test_gudeok_quote_includes_mandatory_lighting_and_source(sqlite_db, gudeok):
-    result = compare_sqlite(sqlite_db, gudeok, Conditions(
+    result = compare_database(sqlite_db, gudeok, Conditions(
         sport="tennis", date="2026-11-09", start_time="19:00", end_time="21:00", source="direct",
     ))
 
@@ -43,7 +63,7 @@ def test_gudeok_quote_includes_mandatory_lighting_and_source(sqlite_db, gudeok):
 
 
 def test_sqlite_quote_leaves_unresolved_discount_out_of_total(sqlite_db, gudeok):
-    result = compare_sqlite(sqlite_db, gudeok, Conditions(
+    result = compare_database(sqlite_db, gudeok, Conditions(
         sport="tennis", date="2026-11-09", start_time="19:00", end_time="21:00",
         discount_types=["multi_child"], source="direct",
     ))
@@ -54,7 +74,7 @@ def test_sqlite_quote_leaves_unresolved_discount_out_of_total(sqlite_db, gudeok)
 
 
 def test_expired_rule_source_is_not_displayed(sqlite_db, gudeok):
-    result = compare_sqlite(sqlite_db, gudeok, Conditions(
+    result = compare_database(sqlite_db, gudeok, Conditions(
         sport="tennis", date="2099-01-01", start_time="19:00", end_time="21:00", source="direct",
     ))
     assert result.sources == []
@@ -101,7 +121,7 @@ def test_search_and_compare_agree_on_holiday_closure(
     facility_id = "busan_samrak_ecopark_tennis"
     with closing(sqlite3.connect(db)) as connection, connection:
         connection.execute("UPDATE rule_sets SET effective_to = ? WHERE facility_id = ?", ("2099-04-05", facility_id))
-    monkeypatch.setattr(main, "DB_PATH", db)
+    configure_service(monkeypatch, db)
     conditions = {
         "sport": "tennis", "districts": ["사상구"], "date": day,
         "start_time": "08:00", "end_time": "10:00", "source": "direct",
@@ -125,7 +145,7 @@ def test_search_and_compare_agree_on_holiday_closure(
 def test_samrak_uses_calendar_for_weekday_and_holiday(sqlite_db, day, amount):
     catalog, _ = read_catalog(sqlite_db)
     samrak = next(facility for facility in catalog if facility["facility_id"] == "busan_samrak_ecopark_tennis")
-    result = compare_sqlite(sqlite_db, samrak, Conditions(
+    result = compare_database(sqlite_db, samrak, Conditions(
         sport="tennis", date=day, start_time="08:00", end_time="10:00", source="direct",
     ))
     assert result.fee.status == "calculated"
@@ -133,7 +153,7 @@ def test_samrak_uses_calendar_for_weekday_and_holiday(sqlite_db, day, amount):
 
 
 def test_gudeok_rejects_duration_over_limit(sqlite_db, gudeok):
-    result = compare_sqlite(sqlite_db, gudeok, Conditions(
+    result = compare_database(sqlite_db, gudeok, Conditions(
         sport="tennis", date="2026-11-10", start_time="10:00", end_time="14:00", source="direct",
     ))
     assert result.fee.status == "not_eligible"
@@ -150,7 +170,7 @@ def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path, monkeypatc
             con.execute("INSERT INTO rule_sets VALUES(?,?,?,?,?,?)", (suffix, row[1], row[2], starts, row[4], row[5]))
             con.execute("INSERT INTO time_selection_policies SELECT ?, selection_type, available_start_time, available_end_time, min_minutes, max_minutes, step_minutes, daily_limit_minutes, status, note FROM time_selection_policies WHERE rule_set_id=?", (suffix,row[0]))
     assert read_search_time_policies(path,"2026-11-30")["busan_gudeok_stadium_tennis"] is None
-    monkeypatch.setattr(main, "DB_PATH", path)
+    configure_service(monkeypatch, path)
     response = TestClient(main.app).post("/api/facilities/search", json={"conditions": {
         "sport": "tennis", "districts": ["서구"], "date": "2026-11-30", "source": "direct",
         "start_time": "10:00", "end_time": "12:00",
@@ -163,16 +183,13 @@ def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path, monkeypatc
 
 
 
-def test_sqlite_compare_uses_one_read_connection(sqlite_db, gudeok):
+def test_common_engine_loader_uses_one_read_connection(sqlite_db, gudeok):
     from unittest.mock import patch
     query = load_query_api()
-    from app.facility_catalog import facility_closures
-    from datetime import date
-    closures = facility_closures(sqlite_db, date(2026, 11, 30))
     with patch.object(query.sqlite3, "connect", wraps=query.sqlite3.connect) as connect:
-        result = compare_sqlite(sqlite_db, gudeok, Conditions(
+        result = compare_database(sqlite_db, gudeok, Conditions(
             sport="tennis", date="2026-11-30", start_time="10:00", end_time="12:00", source="direct",
-        ), closures=closures)
+        ))
     assert result.fee.status == "calculated"
     assert connect.call_count == 1
 
@@ -180,7 +197,7 @@ def test_sqlite_compare_uses_one_read_connection(sqlite_db, gudeok):
 def test_closed_day_cannot_be_quoted(sqlite_db):
     facilities, _ = read_catalog(sqlite_db)
     facility = next(item for item in facilities if item["facility_id"] == "busan_samrak_ecopark_tennis")
-    result = compare_sqlite(sqlite_db, facility, Conditions(
+    result = compare_database(sqlite_db, facility, Conditions(
         sport="tennis", date="2027-02-07", start_time="10:00", end_time="12:00", source="direct",
     ))
     assert result.fee.status == "not_eligible"
@@ -268,7 +285,7 @@ def test_sqlite_comparison_uses_only_common_engine(sqlite_db, gudeok, monkeypatc
     data = load_sqlite_rule_data(sqlite_db)
     rules = next(item for item in data.facilities if item.facility_id == gudeok["facility_id"])
     conditions = Conditions(sport="tennis", date="2026-11-30", start_time="18:00", end_time="20:00", source="direct")
-    assert compare_sqlite(sqlite_db, gudeok, conditions) == compare_facility(rules, conditions)
+    assert compare_database(sqlite_db, gudeok, conditions) == compare_facility(rules, conditions)
 
 
 def test_fixed_routes_and_sqlite_detail_are_available_together(sqlite_db, monkeypatch):
@@ -291,7 +308,7 @@ def test_compare_reports_overlapping_periods(sqlite_db, tmp_path, monkeypatch, g
     with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("""INSERT INTO rule_sets SELECT 'conflict',facility_id,source_id,'2026-10-02',effective_to,status
             FROM rule_sets WHERE facility_id=?""", (gudeok["facility_id"],))
-    monkeypatch.setattr(main, "DB_PATH", path)
+    configure_service(monkeypatch, path)
     response = TestClient(main.app).post("/api/compare", json={"facility_ids": [gudeok["facility_id"]], "conditions": {
         "sport": "tennis", "date": "2026-12-01", "start_time": "10:00", "end_time": "12:00", "source": "direct",
     }})
