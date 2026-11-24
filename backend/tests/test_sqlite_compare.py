@@ -32,7 +32,8 @@ def test_gudeok_quote_includes_mandatory_lighting_and_source(sqlite_db, gudeok):
         sport="tennis", date="2026-11-09", start_time="19:00", end_time="21:00", source="direct",
     ))
 
-    assert result.fee.status == "needs_review"
+    assert result.fee.status == "calculated"
+    assert result.fee.total == 28000
     assert [(item.type, item.amount) for item in result.fee.items] == [("base", 8000), ("lighting", 20000)]
     assert result.fee.payment_due is None
     assert result.fee.online_prepay == 8000
@@ -65,14 +66,9 @@ def test_expired_rule_source_is_not_displayed(sqlite_db, gudeok):
 @pytest.mark.parametrize(("overrides", "code"), [
     ({"sport": "futsal"}, "invalid_option"),
     ({"discount_types": ["unknown"]}, "invalid_option"),
-    ({}, "rule_conflict"),
 ])
 def test_sqlite_compare_handles_invalid_options_and_conflicts(sqlite_db, gudeok, monkeypatch, overrides, code):
     monkeypatch.setattr(main, "DB_PATH", sqlite_db)
-    query = load_query_api()
-    def conflicting_quote(*args):
-        raise ValueError("중복된 요금 규정")
-    monkeypatch.setattr(query, "quote", conflicting_quote)
     with TestClient(main.app) as client:
         day = (datetime.now(KST).date() + timedelta(days=1)).isoformat()
         conditions = {
@@ -81,14 +77,9 @@ def test_sqlite_compare_handles_invalid_options_and_conflicts(sqlite_db, gudeok,
         response = client.post("/api/compare", json={
             "facility_ids": [gudeok["facility_id"]], "conditions": conditions | overrides,
         })
-    if overrides:
-        assert response.status_code == 400
-        assert response.json()["error"]["fields"][0]["code"] == code
-    else:
-        assert response.status_code == 200
-        fee = response.json()["results"][0]["fee"]
-        assert fee["payment_due"] is None
-        assert fee["review_items"][0]["code"] == code
+    assert response.status_code == 400
+    assert response.json()["error"]["fields"][0]["code"] == code
+
 
 
 @pytest.mark.parametrize(("day", "closure_status", "time_status", "has_slots", "expected_fee"), [
@@ -197,3 +188,66 @@ def test_all_catalog_discount_codes_are_accepted_by_compare(sqlite_db, gudeok, m
         })
         assert response.status_code == 200, discount["code"]
         assert response.json()["results"][0]["fee"]["status"] == "needs_review"
+
+
+def test_sqlite_comparison_uses_only_common_engine(sqlite_db, gudeok, monkeypatch):
+    from app.compare import compare_facility
+    from app.repository import load_sqlite_rule_data
+    query = load_query_api()
+    def forbidden_quote(*args, **kwargs):
+        raise AssertionError("Legacy quote must not be called")
+    monkeypatch.setattr(query, "quote", forbidden_quote)
+    data = load_sqlite_rule_data(sqlite_db)
+    rules = next(item for item in data.facilities if item.facility_id == gudeok["facility_id"])
+    conditions = Conditions(sport="tennis", date="2026-11-30", start_time="18:00", end_time="20:00", source="direct")
+    assert compare_sqlite(sqlite_db, gudeok, conditions) == compare_facility(rules, conditions)
+
+
+def test_fixed_routes_and_sqlite_detail_are_available_together(sqlite_db, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", sqlite_db)
+    client = TestClient(main.app)
+    assert client.get("/api/facilities/options").status_code == 200
+    assert client.post("/api/facilities/search", json={"conditions": {
+        "sport": "tennis", "date": "2026-12-01", "source": "direct",
+    }}).status_code == 200
+    catalog, _ = read_catalog(sqlite_db)
+    for facility in catalog:
+        detail = client.get(f"/api/facilities/{facility['facility_id']}", params={"date": "2026-12-01"})
+        assert detail.status_code == 200
+        assert detail.json()["facility_id"] == facility["facility_id"]
+
+
+def test_compare_reports_overlapping_periods(sqlite_db, tmp_path, monkeypatch, gudeok):
+    path = tmp_path / "conflicting.sqlite3"
+    path.write_bytes(sqlite_db.read_bytes())
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("""INSERT INTO rule_sets SELECT 'conflict',facility_id,source_id,'2026-10-02',effective_to,status
+            FROM rule_sets WHERE facility_id=?""", (gudeok["facility_id"],))
+    monkeypatch.setattr(main, "DB_PATH", path)
+    response = TestClient(main.app).post("/api/compare", json={"facility_ids": [gudeok["facility_id"]], "conditions": {
+        "sport": "tennis", "date": "2026-12-01", "start_time": "10:00", "end_time": "12:00", "source": "direct",
+    }})
+    assert response.status_code == 200
+    fee = response.json()["results"][0]["fee"]
+    assert fee["status"] == "needs_review"
+    assert fee["review_items"][0]["code"] == "rule_conflict"
+
+
+@pytest.mark.parametrize(("facility_id", "conditions", "amounts"), [
+    ("busan_gudeok_stadium_tennis", {
+        "sport": "tennis", "start_time": "10:00", "end_time": "12:00", "headcount": 2,
+        "discounts": [{"type": "multi_child", "count": 1}],
+    }, (8000, 0, 2000, 6000)),
+    ("busan_haeundae_arboretum_soccer", {
+        "sport": "soccer", "start_time": "19:00", "end_time": "22:00", "optional_lighting_minutes": 60,
+    }, (140000, 10000, 0, 150000)),
+])
+def test_compare_api_uses_engine_discount_and_optional_lighting(sqlite_db, monkeypatch, facility_id, conditions, amounts):
+    monkeypatch.setattr(main, "DB_PATH", sqlite_db)
+    response = TestClient(main.app).post("/api/compare", json={
+        "facility_ids": [facility_id], "conditions": {"date": "2026-12-01", "source": "direct", **conditions},
+    })
+    assert response.status_code == 200
+    fee = response.json()["results"][0]["fee"]
+    assert fee["status"] == "calculated"
+    assert (fee["payment_due"], fee["onsite_payment"], fee["expected_refund"], fee["total"]) == amounts
