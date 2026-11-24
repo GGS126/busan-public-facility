@@ -41,6 +41,7 @@ function App() {
 
   // 시설 검색 및 비교 상태
   const searchRequest = useRef(0)
+  const compareRequest = useRef(0)
   const [searching, setSearching] = useState(false)
   const [searched, setSearched] = useState(false)
   const [searchResults, setSearchResults] = useState([])
@@ -64,6 +65,14 @@ function App() {
     return () => { active = false }
   }, [optionsAttempt])
 
+  function resetComparison() {
+    const requestId = ++compareRequest.current
+    setLoading(false)
+    setResults([])
+    setCompareError('')
+    return requestId
+  }
+
   // 입력 조건 변경 시 이전 검색 및 비교 결과 초기화
   function clearResult() {
     searchRequest.current += 1
@@ -72,9 +81,8 @@ function App() {
     setSearchResults([])
     setSelectedIds([])
     setFacilityTimes({})
-    setResults([])
+    resetComparison()
     setError('')
-    setCompareError('')
   }
 
   // 이용조건 유효성 검사
@@ -212,8 +220,7 @@ function App() {
       return updated
     })
 
-    setResults([])
-    setCompareError('')
+    resetComparison()
   }
 
   // 시설별 이용시간 저장
@@ -223,8 +230,7 @@ function App() {
       [facilityId]: value,
     }))
 
-    setResults([])
-    setCompareError('')
+    resetComparison()
   }
 
   // 자연어 입력에서 확인한 조건을 직접 입력 폼에 적용
@@ -262,8 +268,7 @@ function App() {
 
   // 선택한 시설을 각자의 이용시간으로 비교
   async function handleCompare() {
-    setCompareError('')
-    setResults([])
+    const requestId = resetComparison()
 
     if (selectedIds.length === 0) {
       setCompareError('비교할 시설을 하나 이상 선택해 주세요.')
@@ -342,19 +347,22 @@ function App() {
         })
       )
 
+      if (requestId !== compareRequest.current) return
       setResults(responses.flat())
 
       setTimeout(() => {
+        if (requestId !== compareRequest.current) return
         document.getElementById('results')?.scrollIntoView({
           behavior: 'smooth',
         })
       }, 100)
     } catch (err) {
+      if (requestId !== compareRequest.current) return
       setCompareError(
         err.message || '시설 비교 중 오류가 발생했습니다.'
       )
     } finally {
-      setLoading(false)
+      if (requestId === compareRequest.current) setLoading(false)
     }
   }
 
