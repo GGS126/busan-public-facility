@@ -31,6 +31,7 @@
           "amount": 5000,
           "unit_minutes": 60,
           "partial_unit": "round_up",
+          "payment": "prepay",
           "day_types": ["weekday", "weekend", "holiday"],
           "time_from": "18:00",
           "time_to": "22:00",

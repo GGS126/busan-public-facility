@@ -137,12 +137,40 @@ function FeeResult({ results, facilities = [] }) {
                       </div>
 
                       <div className="fee-total">
-                        <div className="fee-row">
-                          <span>최초 결제 예상액</span>
-                          <strong>
-                            {formatWon(fee.payment_due)}
-                          </strong>
-                        </div>
+                        {fee.payment_unverified > 0 ? (
+                          <>
+                            {/* 결제 방식을 모르는 금액이 있으면 최초 결제액 대신 확인된 선결제액과 미확인 금액을 나눠 보여 준다. */}
+                            <div className="fee-row">
+                              <span>온라인 선결제 예상액</span>
+                              <strong>
+                                {formatWon(fee.online_prepay)}
+                              </strong>
+                            </div>
+
+                            <div className="fee-row">
+                              <span>결제 방식 확인 필요</span>
+                              <strong>
+                                {formatWon(fee.payment_unverified)}
+                              </strong>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="fee-row">
+                            <span>최초 결제 예상액</span>
+                            <strong>
+                              {formatWon(fee.payment_due)}
+                            </strong>
+                          </div>
+                        )}
+
+                        {fee.onsite_payment > 0 && (
+                          <div className="fee-row">
+                            <span>현장 결제 예상액</span>
+                            <strong>
+                              {formatWon(fee.onsite_payment)}
+                            </strong>
+                          </div>
+                        )}
 
                         <div className="fee-row">
                           <span>예상 환급액</span>

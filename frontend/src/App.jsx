@@ -322,7 +322,10 @@ function App() {
                 discountType === 'none' ||
                 Number(eligibleCount) === 0
                   ? []
-                  : discountTypes,
+                  : discountTypes.length === 1 ? [] : discountTypes,
+              discounts: discountTypes.length === 1 && Number(eligibleCount) > 0
+                ? [{ type: discountTypes[0], count: Number(eligibleCount), holder: false }]
+                : [],
               source,
             },
           }

@@ -77,11 +77,14 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
         "status": "calculated",
         "items": [
           { "type": "base", "amount": 40000, "rule_id": "R-F001-01", "source_id": "S-01" },
-          { "type": "lighting", "amount": 10000, "rule_id": "R-F001-02", "source_id": "S-01" },
+          { "type": "lighting", "amount": 10000, "rule_id": "R-F001-02", "source_id": "S-01", "payment": "prepay" },
           { "type": "discount", "amount": -20000, "rule_id": "R-F001-05", "source_id": "S-02", "method": "prepay_refund" }
         ],
         "total": 30000,
         "payment_due": 50000,
+        "online_prepay": 50000,
+        "onsite_payment": 0,
+        "payment_unverified": 0,
         "expected_refund": 20000,
         "net_cost_after_refund": 30000,
         "review_items": []
@@ -108,9 +111,12 @@ AI 추출 조건도 사용자가 확인·수정한 뒤 같은 검증을 거치�
 
 | 결과 | 계산 | 예시 |
 |---|---|---|
-| `payment_due` (최초 납부액) | `prepay_refund`를 제외한 모든 항목의 합 | 40,000 + 10,000 = 50,000 |
+| `payment_due` (최초 납부액, 온라인 선결제) | `prepay_refund`와 현장 결제(`payment: "onsite"`)·결제 방식 미확인(`payment: "unverified"`) 항목을 제외한 모든 항목의 합. 미확인 항목이 있으면 `null` | 40,000 + 10,000 = 50,000 |
+| `online_prepay` (확인된 온라인 선결제액) | `payment_due`와 같은 항목의 합. 결제 방식 미확인 항목이 있어 `payment_due`가 `null`이어도 값을 반환 | 50,000 |
+| `onsite_payment` (현장 결제액) | `payment: "onsite"` 항목의 합 | 0 |
+| `payment_unverified` (결제 방식 미확인액) | `payment: "unverified"` 항목의 합 | 0 |
 | `expected_refund` (예상 환급액) | `prepay_refund` 항목의 합의 절댓값 | 20,000 |
-| `net_cost_after_refund` (환급 후 예상 부담액) | 최초 납부액 − 예상 환급액 | 50,000 − 20,000 = 30,000 |
+| `net_cost_after_refund` (환급 후 예상 부담액) | 최초 납부액 + 현장 결제액 + 결제 방식 미확인액 − 예상 환급액 | 50,000 + 0 + 0 − 20,000 = 30,000 |
 | `total` | `net_cost_after_refund`와 같은 값 | 30,000 |
 
 납부 시 바로 깎는 현장 감면은 `method: "onsite"`로 표시하며, 음수 금액이 최초 납부액에 반영됩니다.
@@ -136,6 +142,9 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
         ],
         "total": null,
         "payment_due": null,
+        "online_prepay": null,
+        "onsite_payment": null,
+        "payment_unverified": null,
         "expected_refund": null,
         "net_cost_after_refund": null,
         "review_items": [
@@ -209,15 +218,14 @@ SDD 3.5절에 따라 합계 대신 계산된 항목과 ‘확인 필요’ 항�
 ## API-06 입력 확장안
 
 작성일: 2026-11-09  
-상태: 팀 검토용 제안 (#7, #16)
+상태: 팀 검토용 제안 (#7, #16). `discounts`, 감면 계산 방식(`basis`), `optional_lighting_minutes` 구현
 
 PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식으로는 정답 사례를 계산할 수 없어 입력을 확장합니다.
 이 절의 금액은 PR #12의 정답 사례를 기준으로 합니다.
 
 | 규정 | 시설 | 현재 형식의 문제 |
 |---|---|---|
-| 감면 대상 인원에 비례한 감면 | 해운대수목원, 삼락생태공원 | 감면 유형만 받아 기본요금 전체를 감면함 |
-| 예약 대표자가 대상일 때만 감면 | 구덕운동장 | 대표자 여부를 받지 않음 |
+| 감면 대상 인원에 비례한 감면 | 3곳 모두 | 감면 유형만 받아 기본요금 전체를 감면함 |
 | 사용자가 고르는 선택 조명 | 해운대수목원, 삼락생태공원 | 조명 사용 시간을 받지 않음 |
 | 지정 회차, 허용 이용시간 | 3곳 모두 | 선택할 수 없는 시간을 '확인 필요'로 잘못 안내함 |
 
@@ -253,9 +261,10 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `conditions.optional_lighting_minutes` | 아니요 | 0 이상의 정수, 기본값 0. 이용 시간보다 길 수 없음 |
 
 - `discounts[].count`의 합은 `headcount`를 넘을 수 없습니다. 대표자도 `count`에 포함합니다.
-- `discount_types`는 `discounts`로 대체합니다. 한 사람에게는 감면 유형 하나만 적용한다고 보고, 서로 다른 사람의 유형은 함께 받을 수 있습니다.
+- `discount_types`는 `discounts`로 대체합니다. 프론트엔드가 옮겨 갈 때까지 `discount_types`도 받지만, 인원을 모르므로 인원 비례 감면 시설에서는 '확인 필요'를 반환합니다.
+- 한 사람에게는 감면 유형 하나만 적용한다고 보고, 서로 다른 사람의 유형은 함께 받을 수 있습니다. 인원 비례(`per_eligible_person`) 감면끼리만 함께 계산하고, 그 밖의 조합은 '확인 필요'입니다.
 - 입력은 인원수와 유형 코드뿐이며 이름·증빙 번호 같은 개인정보는 받지 않습니다.
-- 위 항목을 위반하면 지금처럼 `400 validation_error`와 항목별 `fields`로 응답합니다.
+- 위 항목을 위반하면 지금처럼 `400 validation_error`와 항목별 `fields`로 응답합니다. `discounts` 조합 오류는 `code: "invalid_discount"`와 사유를 반환합니다.
 
 ### 감면 계산 방식
 
@@ -263,19 +272,20 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 
 | `basis` | 계산 | 시설 |
 |---|---|---|
-| `per_eligible_person` | 기본요금 ÷ `headcount` × `count` × 감면율 | 해운대수목원, 삼락생태공원 |
-| `holder_whole_fee` | 대표자가 대상(`holder: true`)이면 기본요금 × 감면율, 아니면 0원 | 구덕운동장 |
+| `per_eligible_person` | 기본요금 × 감면율 × `count` ÷ `headcount` | 해운대수목원, 삼락생태공원, 구덕운동장 |
+| `holder_whole_fee` | 대표자가 대상(`holder: true`)이면 기본요금 × 감면율, 아니면 0원 | 해당 시설 없음 |
 | `whole_fee` | 기본요금 × 감면율 (현재 엔진 방식) | 해당 시설 없음 |
 
 | 사례 | 조건 | 감면액 |
 |---|---|---|
 | T06 해운대 평일 07~09시 | 8,000원, 4명 중 감면 대상 2명 | 8,000 ÷ 4 × 2 × 50% = 2,000원 환급 |
 | S04 삼락 주말 15~17시 | 9,000원, 3명 중 1명 | 9,000 ÷ 3 × 1 × 50% = 1,500원 환급 |
-| 구덕 대표자 대상 | 8,000원, 대표자 장애인 | 8,000 × 50% = 4,000원 환급 |
-| 구덕 동반자만 대상 | 8,000원, 동반자 3명 | 0원 |
+| 구덕 대표자 대상 | 8,000원, 4명 중 대표자 1명 | 8,000 ÷ 4 × 1 × 50% = 1,000원 환급 |
+| 구덕 동반자만 대상 | 8,000원, 4명 중 동반자 3명 | 8,000 ÷ 4 × 3 × 50% = 3,000원 환급 |
 
 - 감면 유형별로 금액 항목(`type: "discount"`)을 하나씩 반환하고, 조명료는 세 시설 모두 감면 대상에서 제외합니다.
 - 나눠 떨어지지 않는 금액은 규정의 `rounding`으로 처리하고, 끝전 기준이 없으면 '확인 필요'(`rule_missing`)로 반환합니다.
+- `per_eligible_person`은 **인당 감면액**(대상 요금 × 감면율 ÷ 전체 인원)의 끝전을 먼저 처리한 뒤 대상 인원을 곱합니다. 합계가 나눠 떨어져도(20,000원 ÷ 3명 × 3명) 인당 금액에 끝전이 있고 `rounding`이 없으면 '확인 필요'입니다.
 - `per_eligible_person`은 대표자 여부와 관계없이 인원으로 계산하고, `holder_whole_fee`는 `count`와 관계없이 대표자 여부로 계산합니다.
 
 ### 선택 조명
@@ -285,8 +295,20 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 시설 | 선택 조명 규정 |
 |---|---|
 | 해운대수목원 | 07~20시 회차, 60분 10,000원 + 남은 10분마다 1,600원, 현장 결제 |
-| 삼락생태공원 | 08~17시 회차, 60분 단위 올림 10,000원 |
+| 삼락생태공원 | 08~17시 회차, 60분 단위 올림 10,000원, 결제 방식 미확인 |
 | 구덕운동장 | 없음 (조명은 18시 이후 필수 부과) |
+
+- 선택 조명은 이용 시간 중 선택 조명 시간대와 겹치는 동안에만 쓸 수 있습니다. 예: 해운대 축구 19~22시 회차는 19~20시의 60분까지 선택할 수 있고, 20~22시 필수 조명료 20,000원은 회차 요금과 함께 선결제합니다. 겹치는 시간보다 길거나 겹치지 않으면(예: 해운대 테니스 20~22시 회차) 선택할 수 있는 시간대를 사유에 담아 `duration_not_allowed`로 '확인 필요'입니다.
+- 이용일에 유효한 선택 조명 규정이 없는 시설(구덕, 또는 다른 기간에만 선택 조명이 있는 시설)은 여러 시설을 함께 비교할 때 `optional_lighting_minutes`를 쓰지 않고, 필수 조명료만 계산합니다.
+- 선택 조명이 요일·월 조건 때문에 이용일에 없으면 시간대 대신 '이용일에는 선택 조명을 사용할 수 없습니다'를 사유로 `duration_not_allowed`입니다.
+- 이용 시간에 걸치는 선택 조명 규정이 둘 이상이면, 시간대가 서로 겹칠 때는 `rule_conflict`, 이어 붙어 있을 때는 조명을 어느 시간대에 쓸지 몰라 `rule_missing`으로 '확인 필요'입니다.
+- 조명료는 `type: "lighting"` 금액 항목으로 반환하고 결제 방식을 `payment`(`prepay`, `onsite`, `unverified`)로 표시합니다.
+  현장 결제(해운대)는 `payment_due`(최초 납부액)에서 빼고 `onsite_payment`(현장 결제액)로 반환합니다.
+  예: T08(평일 18~20시, 선택 조명 80분)은 `payment_due` 8,000, `onsite_payment` 13,200, `net_cost_after_refund` 21,200입니다.
+- 결제 방식을 모르는 조명료(삼락 선택 조명, 구덕 18시 이후 필수 조명)는 금액을 계산해 `payment: "unverified"`로 표시하고, `payment_unverified`에 합산합니다. 이때 `payment_due`는 선결제액으로 확정하지 않도록 `null`입니다(`database/README.md`의 결제 방식 기준).
+  예약할 때 온라인으로 낼 금액은 `online_prepay`로 따로 반환합니다.
+  예: 구덕 평일 18~20시는 `total` 28,000, `payment_due` null, `online_prepay` 8,000, `payment_unverified` 20,000입니다.
+- 해운대처럼 남은 시간이 추가 단위(10분)로 나눠 떨어지지 않으면 처리 기준이 없어 '확인 필요'입니다.
 
 ### 이용할 수 없는 시간
 
@@ -359,10 +381,12 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 |---|---|---|
 | `rule_id` | 규정 식별자 | `R-F001-02` |
 | `facility_id`, `sport` | 적용 시설과 종목 | `F001`, `futsal` |
-| `type` | 기본요금 또는 조명료 | `base`, `lighting` |
+| `type` | 기본요금, 조명료, 선택 조명료. 선택 조명료의 `time_from`~`time_to`는 선택할 수 있는 이용 시간대 | `base`, `lighting`, `optional_lighting` |
 | `amount` | 단위당 금액 | `5000` |
 | `unit_minutes` | 요금 단위 시간 | `60` |
 | `partial_unit` | 단위 미만 처리 방식 | `round_up` |
+| `extra_unit_minutes`, `extra_unit_amount` | 선택 조명료만. 단위 시간을 채우고 남은 시간의 추가 단위와 금액 | `10`, `1600` |
+| `payment` | 기본요금 외 규정(필수·선택 조명료). 온라인 선결제(`prepay`) 또는 현장 결제(`onsite`). 모르면 `null`로 두고, 금액 항목에는 `unverified`로 표시되며 `payment_due`가 `null`이 됨 | `onsite` |
 | `day_types` | 적용 요일 구분. 모르면 `null`, 모든 요일이면 세 값을 모두 입력 | `["weekday", "weekend", "holiday"]` |
 | `time_from`, `time_to` | 적용 시간대, 조명 시간대. 모르면 `null`, 종일이면 `00:00`, `24:00` | `18:00`, `22:00` |
 | `months` | 적용 월, 계절 기준이 시설마다 다를 수 있어 월로 표시. 전체면 `null` | `[11, 12, 1, 2]` |
@@ -379,7 +403,8 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `policy_id`, `sport` | 규정 식별자와 종목 | `T-HAEUNDAE-01`, `tennis` |
 | `selection` | 지정 회차만 가능 또는 허용 이용시간 안에서 자유 선택 | `fixed_slot`, `flexible` |
 | `slots` | 지정 회차의 시작·종료 시간. `fixed_slot`에서 필수 | `[{"start_time": "07:00", "end_time": "09:00"}]` |
-| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 필수 | `[60, 120]` |
+| `allowed_minutes` | 고를 수 있는 이용시간. `flexible`에서 `max_minutes`가 없으면 필수 | `[60, 120]` |
+| `max_minutes` | 1회 최대 이용시간. 허용 이용시간 목록 없이 상한만 확인된 시설에 사용 | `120` |
 | `open_time`, `close_time` | 운영시간. 없으면 확인하지 않음 | `08:00`, `22:00` |
 | `effective_from`, `effective_to` | 규정 적용 기간. 동절기·하절기 회차를 구분 | `2026-10-01`, `2027-03-31` |
 | `source_id` | 근거 출처 | `S-01` |
@@ -387,7 +412,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 사유 코드 | 상황 |
 |---|---|
 | `slot_mismatch` | 지정 회차와 시간이 다름. 사유에 가능한 회차 목록을 포함 |
-| `duration_not_allowed` | `allowed_minutes`에 없는 이용시간 |
+| `duration_not_allowed` | `allowed_minutes`에 없거나 `max_minutes`보다 긴 이용시간 |
 | `outside_hours` | 운영시간 밖 |
 
 같은 종목에 유효한 규정이 둘 이상이면 `needs_review`와 `rule_conflict`(`target: "time"`)를 반환합니다.
@@ -401,6 +426,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `rate` 또는 `fixed_amount` | 감면율 또는 감면액 | `0.5` |
 | `applies_to` | 감면 대상 요금 | `base`, `base_and_lighting` |
 | `method` | 현장 감면 또는 선결제 후 환급 | `onsite`, `prepay_refund` |
+| `basis` | 감면 계산 방식. [감면 계산 방식](#감면-계산-방식) 참고, 기본값 `whole_fee` | `per_eligible_person` |
 | `stackable` | 다른 감면과 중복 가능 여부, 미확인이면 `null` | `false` |
 | `rounding` | 끝전 처리 방식 | `floor_10` |
 | `required_documents` | 증빙서류, 체크리스트에 사용 | `["다자녀 가정 확인 서류"]` |
@@ -434,6 +460,27 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `expected_fee` | `total`, `payment_due`, `expected_refund`, `net_cost_after_refund` |
 | `calculation_note` | 공식 자료 기준 계산 과정 |
 | `source_id` | 근거 출처 |
+
+`database/`의 정답 사례(`test_cases.json`, `samrak_test_cases.json`, `gudeok_test_cases.json`)는 `backend/tests/test_sqlite_rules.py`가
+SQLite DB를 새로 만들어 규칙 엔진으로 계산한 뒤 비교합니다. 취소·환불 금액 사례는 계산 범위가 아니어서 건너뜁니다.
+
+### SQLite 규정 변환
+
+`app.repository.load_sqlite_rule_data()`가 SQLite 규정을 위 항목으로 바꿉니다.
+
+| SQLite | 변환 결과 |
+|---|---|
+| `pricing_rules` | 기본요금 규정. 평일과 주말·공휴일 요금이 다르면 규정 2개. 단위 미만 요금은 `partial_unit: null`(확인 필요) |
+| `pricing_rules.mandatory_light_won` | 같은 회차 시간대의 조명료 규정 |
+| `facility_options` (`mandatory_when_applicable`) | 조명료 규정(60분 단위) |
+| `facility_options` (`optional`) | 선택 조명료 규정(60분 단위, `extra_unit_*`는 추가 단위 요금, `payment_type` → `payment`) |
+| `time_selection_policies` (`fixed_slot`) | 이용시간 규정. 운영시간은 `facilities.open_time`, `close_time` |
+| `time_selection_policies` (`flexible_interval`) | 이용시간 규정(`selection: flexible`, `max_minutes`). 운영시간은 `available_start_time`, `available_end_time`. 허용 이용시간 목록은 확인되지 않아 만들지 않으며, 하루 이용 한도(`daily_limit_minutes`)는 예약 이력이 필요해 확인하지 않음 |
+| `facility_discounts` | 감면 규정. `per_eligible_person_equal_split` → `basis: per_eligible_person` |
+| `reservation_rules`, `refund_rules` | 규정 기간별 `terms` 문구(`terms_by_period`). 응답에는 이용일에 유효한 기간의 문구와 출처를 사용 |
+| `sources.license`가 `null` | `"이용허락범위 미확인"` |
+
+변환 표에 없는 값(새 감면 계산 방식, 새 조명 계산 방식 등)이 들어오면 추정하지 않고 읽기 단계에서 오류를 냅니다.
 
 ## SDD 대비 추가 제안
 
@@ -633,7 +680,8 @@ GET /api/facilities/{facility_id}?date=2026-11-11
       "sport": "tennis",
       "selection": "flexible",
       "slots": [],
-      "allowed_minutes": [60, 120],
+      "allowed_minutes": [],
+      "max_minutes": 120,
       "open_time": "08:00",
       "close_time": "22:00",
       "source_id": "busan_reserve_472_2026winter"
@@ -645,13 +693,18 @@ GET /api/facilities/{facility_id}?date=2026-11-11
       "source_id": "busan_reserve_472_2026winter",
       "url": "https://reserve.busan.go.kr/rent/view?resveGroupSn=475&progrmSn=472",
       "checked_at": "2026-11-06",
-      "license": null
+      "license": "이용허락범위 미확인"
     }
   ]
 }
 ```
 
 - 모르는 값은 `null`이며 화면에는 '확인 필요'로 표시합니다(FR-004).
+- `sports`는 이용일에 유효한 요금 규정이 있는 종목입니다.
+- `time_options`는 이용일에 유효한 이용시간 규정입니다. 규정 기간이 아닌 날짜는 `sports`와 함께 빈 배열이고, `closure_note`도 그 기간의 안내만 보여 줍니다.
+- 구덕처럼 허용 이용시간 목록 없이 상한만 확인된 시설은 `allowed_minutes: []`, `max_minutes: 120`입니다.
+- `source_id`는 이용일의 규정 기간 출처이고, `sources`에는 응답에 쓴 출처만 넣습니다. 이용일이 규정 기간 밖이면 지난 기간의 출처를 보여 주지 않도록 `source_id`는 `null`, `sources`는 빈 배열입니다. 이용허락범위가 기록되지 않은 출처의 `license`는 API-06과 같이 `"이용허락범위 미확인"`입니다.
+- `date`는 `YYYY-MM-DD`만 받습니다. 시각이 붙은 값(`2026-11-11T00:00:00`), 숫자 타임스탬프, 없는 날짜는 `400 invalid_value`, 지난 날짜면 `400 past_date`(`field: "date"`)입니다. 없는 시설은 지난 날짜여도 `404 facility_not_found`입니다. `POST /api/compare`의 `conditions.date`도 같습니다.
 - `booking_url`이 `null`이면 공식 예약 링크 대신 '공식 예약 링크 확인 필요'를 표시합니다(FR-012).
 - 등록되지 않은 시설은 `404 facility_not_found`입니다.
 - 요금·예약·취소 조건은 API-06이 맡고, 상세 API에는 넣지 않습니다.

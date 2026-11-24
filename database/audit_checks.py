@@ -3,6 +3,8 @@ from contextlib import closing
 from unittest.mock import patch
 import load,query_api as q
 R=pathlib.Path(__file__).resolve().parent
+# 하위 프로세스(query_api.py)가 OS 기본 인코딩(Windows는 cp949) 대신 UTF-8로 출력하게 한다.
+UTF8_ENV={**os.environ,'PYTHONIOENCODING':'utf-8'}
 D=json.loads((R/'seed.json').read_text(encoding='utf-8'))
 files=['seed.json','samrak_winter_2026_2027.json','gudeok_winter_2026_2027.json']
 from copy import deepcopy
@@ -78,7 +80,7 @@ with tempfile.TemporaryDirectory() as tmp:
  # 새 조회 함수 네 가지를 실제 CLI 경로로 실행해 README의 명령과 일치시키는 회귀 테스트.
  def cli(resource, *args):
   proc=subprocess.run([sys.executable,str(R/'query_api.py'),resource,'--db',str(db),*args],
-                      text=True,encoding='utf-8',capture_output=True)
+                      text=True,encoding='utf-8',capture_output=True,env=UTF8_ENV)
   assert proc.returncode==0,(resource,proc.stderr)
   return json.loads(proc.stdout)
  f='busan_samrak_ecopark_tennis'
@@ -95,11 +97,11 @@ with tempfile.TemporaryDirectory() as tmp:
           '--participant-count','4','--eligible-count','2','--category-id','multi_child')
  assert calc['status']=='confirmed' and calc['discount_refund_won']==1500,calc
  invalid=subprocess.run([sys.executable,str(R/'query_api.py'),'discount_proration_check',
-                         '--db',str(db),*common],capture_output=True,text=True,encoding='utf-8')
+                         '--db',str(db),*common],capture_output=True,text=True,encoding='utf-8',env=UTF8_ENV)
  assert invalid.returncode!=0 and '--base-fee-won' in invalid.stderr,invalid.stderr
  invalid_code=subprocess.run([sys.executable,str(R/'query_api.py'),'closure_status',
                               '--db',str(db),*common,'--holiday-codes','unknown_holiday'],
-                              capture_output=True,text=True,encoding='utf-8')
+                              capture_output=True,text=True,encoding='utf-8',env=UTF8_ENV)
  assert invalid_code.returncode!=0 and 'holiday_codes' in invalid_code.stderr,invalid_code.stderr
  print('PASS: 신규 CLI sources/closure_rules/closure_status/discount_proration_check 및 필수 인자 검증')
  # 공통 테스트 사례 스키마: 같은 항목은 같은 이름, 선택적 항목은 의미를 보존.
