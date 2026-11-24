@@ -5,6 +5,7 @@ from datetime import datetime
 from functools import lru_cache
 from threading import BoundedSemaphore, Lock
 from time import monotonic
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -12,22 +13,41 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, read_catalog, read_search_snapshot, load_query_api
+from app.facility_catalog import DB_PATH, read_search_snapshot, load_query_api
 from app.detail import facility_detail
 from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST, CompareRequest, CompareResponse, Conditions, FacilitySearchRequest, OptionsResponse,
-    QueryParseRequest, QueryParseResponse, to_minutes, FacilityDetail, FacilityRules, IsoDate,
+    QueryParseRequest, QueryParseResponse, to_minutes, FacilityDetail, FacilityRules, IsoDate, RuleData,
 )
 from app.options import build_options
 from app.query_parser import parse_query
-from app.repository import load_rule_data, load_sqlite_rule_data
-from app.sqlite_compare import compare_sqlite
+from app.repository import SQLITE_PATH, load_rule_data, load_sqlite_rule_data
 
 logger = logging.getLogger(__name__)
 
+
+def load_service_data(source: str | None = None, sqlite_path: Path = SQLITE_PATH) -> RuleData:
+    """서비스가 쓸 규정. 기본은 팀 DB(SQLite)이고, RULE_DATA_SOURCE=sample이면 가상 데이터를 쓴다.
+
+    DB가 없을 때 가상 데이터로 몰래 바꾸면 실제 시설 요금처럼 보이므로, 시작하지 않고 생성 방법을 알린다.
+    DB를 다시 생성하면 서버를 재시작해야 반영된다.
+    """
+    source = source if source is not None else os.getenv("RULE_DATA_SOURCE", "sqlite").strip() or "sqlite"
+    if source == "sample":
+        return load_rule_data()
+    if source != "sqlite":
+        raise RuntimeError(f"RULE_DATA_SOURCE는 sqlite 또는 sample이어야 합니다: {source}")
+    if not sqlite_path.is_file():
+        raise RuntimeError(
+            f"규정 DB가 없습니다: {sqlite_path}. 'python database/build_db.py'로 생성하거나, "
+            "가상 데이터로 실행하려면 RULE_DATA_SOURCE=sample을 설정하세요."
+        )
+    return load_sqlite_rule_data(sqlite_path)
+
+
 app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
-rule_data = load_rule_data()
+rule_data = load_service_data()
 facilities = {facility.facility_id: facility for facility in rule_data.facilities}
 available_options = build_options(rule_data)
 # Prepare the fixed catalog once; DB-backed catalogs prepare their own cached key.
@@ -94,10 +114,8 @@ def options() -> OptionsResponse:
 
 
 @app.get("/api/facilities/options", response_model=OptionsResponse)
-def facility_search_options():
-    if not DB_PATH.is_file():
-        return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
-    return read_catalog(DB_PATH)[1]
+def facility_search_options() -> OptionsResponse:
+    return available_options
 
 
 @app.post("/api/facilities/search")
@@ -147,8 +165,7 @@ def search_facilities(request: FacilitySearchRequest):
 
 @app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
 def parse_natural_language(request: QueryParseRequest) -> dict:
-    catalog = read_catalog(DB_PATH)[1] if DB_PATH.is_file() else available_options
-    return parse_with_options(request, catalog)
+    return parse_with_options(request, available_options)
 
 
 gemini_slots = BoundedSemaphore(4)
@@ -266,47 +283,18 @@ def check_against_options(conditions: Conditions, options: OptionsResponse) -> N
 
 @app.post("/api/compare", response_model=CompareResponse)
 def compare(request: CompareRequest) -> CompareResponse:
-    sample_ids = {facility_id for facility_id in request.facility_ids if facility_id in facilities}
-    sqlite_ids = set(request.facility_ids) - sample_ids
-    if sample_ids and not sqlite_ids:
-        check_against_options(request.conditions, available_options)
-    sqlite_facilities = {}
-    if sqlite_ids and not DB_PATH.is_file():
-        return error_response(503, "facility_catalog_unavailable", "시설 DB를 생성한 뒤 다시 시도해 주세요.")
-    if sqlite_ids and DB_PATH.is_file():
-        catalog, options = read_catalog(DB_PATH)
-        sqlite_facilities = {facility["facility_id"]: facility for facility in catalog}
-        if sqlite_ids & sqlite_facilities.keys():
-            if sample_ids:
-                options = OptionsResponse(
-                    sports=list({item.code: item for item in [*available_options.sports, *options.sports]}.values()),
-                    districts=sorted(set(available_options.districts) | set(options.districts)),
-                    discount_types=list({item.code: item for item in [*available_options.discount_types, *options.discount_types]}.values()),
-                )
-            check_against_options(request.conditions, options)
-    results = []
+    check_against_options(request.conditions, available_options)
+    selected = []
     for facility_id in request.facility_ids:
         rules = facilities.get(facility_id)
-        if rules is not None:
-            results.append(compare_facility(rules, request.conditions))
-            continue
-        facility = sqlite_facilities.get(facility_id)
-        if facility is None:
+        if rules is None:
             raise FacilityNotFound
-        if facility["sport"] != request.conditions.sport:
-            return error_response(400, "invalid_option", "선택한 시설에서 이용할 수 없는 종목입니다.")
-        results.append(compare_sqlite(DB_PATH, facility, request.conditions))
-    return CompareResponse(results=results)
+        selected.append(rules)
+    return CompareResponse(results=[compare_facility(rules, request.conditions) for rules in selected])
 
 
 def known_facility(facility_id: str) -> FacilityRules:
-    # 의존성은 엔드포인트의 쿼리 검증보다 먼저 실행되므로, 없는 시설이면 날짜 형식과 관계없이 404다.
     rules = facilities.get(facility_id)
-    if rules is None and DB_PATH.is_file():
-        present = load_query_api().fetch(DB_PATH, "SELECT id FROM facilities WHERE id=?", (facility_id,))
-        if present:
-            rules = next((item for item in load_sqlite_rule_data(DB_PATH).facilities
-                          if item.facility_id == facility_id), None)
     if rules is None:
         raise FacilityNotFound
     return rules
