@@ -188,6 +188,10 @@ class DiscountRule(EffectivePeriod):
     stackable: bool | None = None
     rounding: Rounding | None = None
     required_documents: list[str] | None = None
+    # 감면을 받기 위한 신청 기한·방법. 사후 반환 감면은 이 기한을 놓치면 반환받지 못한다.
+    application_deadline: str | None = None
+    # 보호자 동반 감면의 증빙 안내
+    guardian_note: str | None = None
     source_id: str
 
     @model_validator(mode="after")
@@ -203,6 +207,8 @@ class Terms(BaseModel):
     booking_open: str | None = None
     cancel_deadline: str | None = None
     refund: str | None = None
+    # 환불 사유별 안내. 사용자 취소의 신청 방법·환급 시기와 우천·불가항력 환불을 함께 적는다.
+    refund_notes: list[str] = []
     source_id: str | None = None
 
 

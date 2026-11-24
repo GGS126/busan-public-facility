@@ -37,6 +37,7 @@ TERMS = {
     "booking_open": "이용일 30일 전 09:00부터",
     "cancel_deadline": "이용일 3일 전까지",
     "refund": "기한 내 취소 시 전액 환불",
+    "refund_notes": [],
     "source_id": "S-03",
 }
 

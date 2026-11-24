@@ -89,3 +89,35 @@ def test_day_after_lunar_new_year_is_not_closed(client):
     result = compare(client, "busan_hwamyeong_ecopark_tennis", "tennis", day, "10:00", "12:00")
 
     assert all(item["code"] != "facility_closed" for item in result["fee"]["review_items"])
+
+
+def test_terms_list_every_refund_reason(client):
+    result = compare(client, "busan_samrak_ecopark_tennis", "tennis", next_weekday(), "08:00", "10:00")
+    terms = result["terms"]
+
+    assert terms["refund"].startswith("3일 전까지 취소 100%")
+    notes = terms["refund_notes"]
+    # 사용자 취소 4단계 다음에 우천·불가항력 환불이 온다.
+    assert notes[1].startswith("2일 전 취소 90%: ") and "반환신청서" in notes[1]
+    assert any(note.startswith("우천으로 이용하지 못한 경우 100%") for note in notes)
+    assert any(note.startswith("천재지변·부산시 행사 등으로 이용할 수 없는 경우 100%") for note in notes)
+
+
+def test_discount_checklist_includes_application_deadline(client):
+    body = {
+        "facility_ids": ["busan_samrak_ecopark_tennis"],
+        "conditions": {
+            "sport": "tennis", "date": next_weekday(), "start_time": "08:00", "end_time": "10:00",
+            "headcount": 4, "discounts": [{"type": "disabled", "count": 1}], "source": "direct",
+        },
+    }
+    checklist = client.post("/api/compare", json=body).json()["results"][0]["checklist"]
+
+    assert "감면 신청 기한: 경기장 이용시간 전 반환신청 게시판 접수" in checklist
+
+
+def test_unknown_refund_reason_is_rejected_on_load():
+    from app.repository import _refund_label
+
+    with pytest.raises(ValueError, match="환불 사유"):
+        _refund_label({"reason": "rain_during_use", "rate_percent": 100, "days_before_min": None, "days_before_max": None})
