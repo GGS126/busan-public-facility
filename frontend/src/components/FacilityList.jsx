@@ -87,11 +87,14 @@ function FacilityList({
                     <p>희망 시간이 시설의 이용시간 규정과 맞지 않습니다. 시간을 다시 확인해 주세요.</p>
                   )}
 
+                  {facility.slot_status === 'rule_conflict' && (
+                    <p className="error-message">적용 기간이 겹치는 규정이 있습니다. 공식 안내를 확인해 주세요.</p>
+                  )}
                   <label className="facility-check">
                     <input
                       type="checkbox"
                       checked={selected}
-                      disabled={facility.closure?.is_closed === true}
+                      disabled={facility.closure?.is_closed === true || facility.slot_status === 'rule_conflict'}
                       onChange={() => onToggle(facility.id)}
                     />
                     비교 대상에 포함
@@ -133,7 +136,9 @@ function FacilityList({
                         </select>
                       ) : (
                         <p className="error-message">
-                          {facility.slot_status === 'no_slots'
+                          {facility.slot_status === 'rule_conflict'
+                            ? '적용 기간이 겹치는 규정이 있습니다. 공식 안내를 확인해 주세요.'
+                            : ['no_slots', 'rule_missing', 'rule_not_in_effect'].includes(facility.slot_status)
                             ? '선택한 날짜에 적용되는 예약 회차 정보가 없습니다.'
                             : facilitySlots[facility.id]?.message || '예약 회차 정보 확인이 필요합니다.'}
                         </p>

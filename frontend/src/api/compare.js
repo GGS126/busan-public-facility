@@ -27,11 +27,9 @@ async function requestAPI(path, options = {}, timeout = REQUEST_TIMEOUT) {
     })
 
     if (!response.ok) {
-      if (response.status >= 400) {
-        const payload = await response.json().catch(() => null)
-        const detail = payload?.error?.fields?.[0]?.message ?? payload?.error?.message
-        if (typeof detail === 'string' && detail) throw new Error(detail)
-      }
+      const payload = await response.json().catch(() => null)
+      const detail = payload?.error?.fields?.[0]?.message ?? payload?.error?.message
+      if (typeof detail === 'string' && detail) throw new Error(detail)
       if (response.status === 404) {
         throw new Error('요청한 API를 찾을 수 없습니다.')
       }

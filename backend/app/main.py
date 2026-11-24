@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.compare import compare_facility
-from app.facility_catalog import DB_PATH, facility_closures, read_catalog, read_search_time_data, load_query_api
+from app.facility_catalog import DB_PATH, read_catalog, read_search_snapshot, load_query_api
 from app.gemini_extractor import DEFAULT_MODEL, REQUEST_TIMEOUT_SECONDS, GeminiExtractor, GeminiHTTPError, GeminiResponseError
 from app.models import (
     KST,
@@ -35,6 +35,8 @@ app = FastAPI(title="부산 공공시설 이용조건 비교·판정 서비스")
 rule_data = load_rule_data()
 facilities = {facility.facility_id: facility for facility in rule_data.facilities}
 available_options = build_options(rule_data)
+# Prepare the fixed catalog once; DB-backed catalogs prepare their own cached key.
+available_options.extraction_key
 
 HTTP_ERRORS = {
     404: ("not_found", "요청한 경로를 찾을 수 없습니다."),
@@ -107,13 +109,11 @@ def search_facilities(request: FacilitySearchRequest):
     if not DB_PATH.is_file():
         return error_response(503, "facility_catalog_unavailable", "시설 데이터를 불러올 수 없습니다.")
     conditions = request.conditions
-    catalog_facilities, _ = read_catalog(DB_PATH)
+    catalog_facilities, _, time_policies, fixed_slots, policy_states, closures = read_search_snapshot(DB_PATH, conditions.date)
     candidates = [facility for facility in catalog_facilities if facility["sport"] == conditions.sport]
     if not candidates:
         return error_response(400, "invalid_option", "선택할 수 없는 종목입니다.")
 
-    time_policies, fixed_slots = read_search_time_data(DB_PATH, conditions.date.isoformat())
-    closures = facility_closures(DB_PATH, conditions.date)
     results = []
     for facility in candidates:
         if conditions.districts and facility["district"] not in conditions.districts:
@@ -134,11 +134,11 @@ def search_facilities(request: FacilitySearchRequest):
             time_status = "eligible" if allowed else "not_eligible"
         results.append({
             **facility,
-            "slot_status": "no_slots" if not slots and policy is None else None,
+            "slot_status": policy_states.get(facility["facility_id"]) if policy is None else None,
             "time_options": {"selection": "fixed_slot", "slots": slots} if slots else (
                 {"selection": "flexible", **policy} if not closure["is_closed"] and policy and policy["selection_type"] == "flexible_interval" else None
             ),
-            "time_check": {"status": time_status},
+            "time_check": {"status": time_status, **({"code": "rule_conflict"} if policy_states.get(facility["facility_id"]) == "rule_conflict" else {})},
             "closure": closure,
         })
     order = {"eligible": 0, "unknown": 1, "not_eligible": 2}
@@ -178,14 +178,6 @@ def gemini_provider(key, model, sports, discounts, districts):
     )
 
 
-def gemini_catalog_key(catalog: OptionsResponse) -> tuple:
-    return (
-        tuple((option.code, option.label) for option in catalog.sports),
-        tuple((option.code, option.label) for option in catalog.discount_types),
-        tuple(catalog.districts),
-    )
-
-
 def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> dict:
     limited = False
     deadline = monotonic() + REQUEST_TIMEOUT_SECONDS
@@ -199,7 +191,7 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
             provider = gemini_provider(
                 key,
                 os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL,
-                *gemini_catalog_key(catalog),
+                *catalog.extraction_key,
             )
         except ValueError:
             logger.warning("Gemini extraction failed: code=invalid_model_configuration")
@@ -239,21 +231,9 @@ def parse_with_options(request: QueryParseRequest, catalog: OptionsResponse) -> 
                 gemini_slots.release()
         return None
 
-    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract)
+    result = parse_query(request.query, today=datetime.now(KST).date(), extract=extract, catalog=catalog)
     if limited:
         result["message"] = "자연어 요청이 많습니다. 잠시 후 다시 시도하거나 직접 입력해 주세요."
-    extracted = result["conditions"]
-    invalid = []
-    if extracted.get("sport") and extracted["sport"] not in {item.code for item in catalog.sports}:
-        invalid.append("sport")
-    if "discount_types" in extracted and not set(extracted["discount_types"]) <= {item.code for item in catalog.discount_types}:
-        invalid.append("discount_types")
-    for field in invalid:
-        extracted.pop(field)
-        if field not in result["missing_fields"]:
-            result["missing_fields"].append(field)
-        result["questions"][field] = "선택 가능한 항목으로 다시 확인해 주세요."
-        result["status"] = "need_more"
     if result["status"] == "llm_failed":
         result.setdefault("message", "조건을 추출하지 못했습니다. 직접 입력해 주세요.")
     return result

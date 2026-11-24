@@ -149,7 +149,7 @@ def test_gudeok_rejects_duration_over_limit(sqlite_db, gudeok):
     assert result.fee.review_items[0].code == "duration_not_allowed"
 
 
-def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path):
+def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path, monkeypatch):
     from app.facility_catalog import read_search_time_policies
     path = tmp_path / "overlap.sqlite3"
     path.write_bytes(sqlite_db.read_bytes())
@@ -159,6 +159,17 @@ def test_three_overlapping_rules_stay_conflicted(sqlite_db, tmp_path):
             con.execute("INSERT INTO rule_sets VALUES(?,?,?,?,?,?)", (suffix, row[1], row[2], starts, row[4], row[5]))
             con.execute("INSERT INTO time_selection_policies SELECT ?, selection_type, available_start_time, available_end_time, min_minutes, max_minutes, step_minutes, daily_limit_minutes, status, note FROM time_selection_policies WHERE rule_set_id=?", (suffix,row[0]))
     assert read_search_time_policies(path,"2026-11-30")["busan_gudeok_stadium_tennis"] is None
+    monkeypatch.setattr(main, "DB_PATH", path)
+    response = TestClient(main.app).post("/api/facilities/search", json={"conditions": {
+        "sport": "tennis", "districts": ["서구"], "date": "2026-11-30", "source": "direct",
+        "start_time": "10:00", "end_time": "12:00",
+    }})
+    assert response.status_code == 200
+    result, = response.json()["results"]
+    assert result["slot_status"] == "rule_conflict"
+    assert result["time_check"] == {"status": "unknown", "code": "rule_conflict"}
+    assert result["time_options"] is None
+
 
 
 def test_sqlite_compare_uses_one_read_connection(sqlite_db, gudeok):
@@ -183,3 +194,74 @@ def test_closed_day_cannot_be_quoted(sqlite_db):
     ))
     assert result.fee.status == "not_eligible"
     assert result.fee.payment_due is None
+
+
+def test_all_catalog_discount_codes_are_accepted_by_compare(sqlite_db, gudeok, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", sqlite_db)
+    options = TestClient(main.app).get("/api/facilities/options").json()
+    day = (datetime.now(KST).date() + timedelta(days=1)).isoformat()
+    for discount in options["discount_types"]:
+        response = TestClient(main.app).post("/api/compare", json={
+            "facility_ids": [gudeok["facility_id"]],
+            "conditions": {"sport": "tennis", "date": day, "start_time": "10:00", "end_time": "12:00",
+                           "source": "direct", "discount_types": [discount["code"]]},
+        })
+        assert response.status_code == 200, discount["code"]
+        assert response.json()["results"][0]["fee"]["status"] == "needs_review"
+
+
+def test_search_snapshot_uses_one_version_and_connection(sqlite_db, tmp_path, monkeypatch):
+    from datetime import date
+    from unittest.mock import patch
+    from app import facility_catalog
+    path = tmp_path / "snapshot.sqlite3"
+    path.write_bytes(sqlite_db.read_bytes())
+    query = load_query_api()
+    with patch.object(facility_catalog, "_file_version", wraps=facility_catalog._file_version) as version:
+        with patch.object(query.sqlite3, "connect", wraps=query.sqlite3.connect) as connect:
+            snapshot = facility_catalog.read_search_snapshot(path, date(2026, 11, 30))
+    assert snapshot[0]
+    assert connect.call_count == 1
+    assert version.call_count == 1
+
+
+def test_search_keeps_original_snapshot_during_db_update(sqlite_db, tmp_path, monkeypatch):
+    from datetime import date
+    from app.facility_catalog import read_search_snapshot
+    path = tmp_path / "concurrent.sqlite3"
+    path.write_bytes(sqlite_db.read_bytes())
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+    query = load_query_api()
+    original = query.facilities
+    def read_then_update(connection):
+        rows = original(connection)
+        with closing(sqlite3.connect(path)) as writer, writer:
+            writer.execute("UPDATE time_selection_policies SET max_minutes=1")
+        return rows
+    monkeypatch.setattr(query, "facilities", read_then_update)
+    _, _, policies, _, _, _ = read_search_snapshot(path, date(2026, 11, 30))
+    assert policies["busan_gudeok_stadium_tennis"]["max_minutes"] == 120
+    with closing(sqlite3.connect(path)) as connection:
+        assert connection.execute("SELECT max_minutes FROM time_selection_policies LIMIT 1").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(("start", "end", "expected"), [
+    ("10:00", "11:30", "eligible"),
+    ("10:10", "11:40", "not_eligible"),
+    ("10:00", "12:00", "not_eligible"),
+])
+def test_flexible_search_checks_step_and_daily_limit(sqlite_db, tmp_path, monkeypatch, start, end, expected):
+    path = tmp_path / "time-policy.sqlite3"
+    path.write_bytes(sqlite_db.read_bytes())
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("""UPDATE time_selection_policies SET step_minutes=30, daily_limit_minutes=90
+            WHERE rule_set_id IN (SELECT id FROM rule_sets WHERE facility_id='busan_gudeok_stadium_tennis')""")
+    monkeypatch.setattr(main, "DB_PATH", path)
+    response = TestClient(main.app).post("/api/facilities/search", json={"conditions": {
+        "sport": "tennis", "districts": ["서구"], "date": "2026-11-30", "source": "direct",
+        "start_time": start, "end_time": end,
+    }})
+    assert response.status_code == 200
+    facility, = response.json()["results"]
+    assert facility["time_check"]["status"] == expected
