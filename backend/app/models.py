@@ -18,6 +18,8 @@ from pydantic import (
 from pydantic_core import PydanticCustomError
 
 KST = timezone(timedelta(hours=9))
+BUSAN_DISTRICTS = ("중구", "서구", "동구", "영도구", "부산진구", "동래구", "남구", "북구", "해운대구",
+                   "사하구", "금정구", "강서구", "연제구", "수영구", "사상구", "기장군")
 
 ClockTime = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
 BandTime = Annotated[str, StringConstraints(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|24:00)$")]
@@ -277,7 +279,7 @@ class OptionsResponse(BaseModel):
         return (
             tuple((item.code, item.label) for item in self.sports),
             tuple((item.code, item.label) for item in self.discount_types),
-            tuple(self.districts),
+            tuple(dict.fromkeys([*self.districts, *BUSAN_DISTRICTS])),
         )
 
 
