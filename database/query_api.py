@@ -327,6 +327,63 @@ def refund_rules(db,facility_id,use_date):
     rr.channel,rr.condition,rr.status FROM refund_rules rr JOIN rule_sets r ON r.id=rr.rule_set_id
     WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to''',(facility_id,use_date))
 
+def user_cancellation_refund(db, facility_id, use_date, cancellation_date, quote_result,
+                             discount_category_ids=None):
+    """확인된 직접 취소 규정으로 온라인 결제분 예상 환불을 산정한다.
+
+    우천/불가항력은 금액 산정하지 않으며, 별도 현장결제나 감면이 끼면
+    실제 결제액·반환 범위를 확정할 수 없으므로 금액을 내지 않는다.
+    """
+    used = dt.date.fromisoformat(normalize_use_date(use_date))
+    canceled = dt.date.fromisoformat(normalize_use_date(cancellation_date))
+    result = {'refund_status': 'needs_review', 'expected_refund': None,
+              'net_cost_after_refund': None, 'refund_rate_percent': None,
+              'refund_condition': None, 'refund_channel': None,
+              'refund_reason': None}
+    if canceled > used:
+        result['refund_reason'] = '이용일 이후 사용자 취소는 계산 대상이 아닙니다.'
+        return result
+    if quote_result.get('status') != 'priced':
+        result['refund_reason'] = '이용료가 확정되지 않아 환불액을 계산할 수 없습니다.'
+        return result
+    if discount_category_ids:
+        result['refund_reason'] = '감면 금액의 실제 결제·반환 기준이 확인되지 않았습니다.'
+        return result
+    if (quote_result.get('payment_status') != 'confirmed'
+        or quote_result.get('onsite_payment') != 0
+        or quote_result.get('payment_unverified_won') != 0):
+        result['refund_reason'] = '현장 결제액 또는 결제 방식 미확인 금액의 환불 기준이 확인되지 않았습니다.'
+        return result
+    rules = [r for r in refund_rules(db,facility_id,use_date) if r['reason']=='user_cancel']
+    days = (used-canceled).days
+    matches = [r for r in rules
+               if (r['days_before_min'] is None or days >= r['days_before_min'])
+               and (r['days_before_max'] is None or days <= r['days_before_max'])]
+    if (len(matches)!=1 or matches[0]['rate_percent'] is None
+        or matches[0]['status'] != 'confirmed'):
+        result['refund_reason'] = '취소 시점에 적용되는 확정 환불 규정이 없습니다.'
+        return result
+    rule=matches[0]
+    result['refund_rate_percent']=rule['rate_percent']
+    result['refund_condition']=rule['condition']
+    result['refund_channel']=rule['channel']
+    if rule['channel']=='not_allowed':
+        result['refund_reason']='해당 날짜의 일반 취소는 허용되지 않습니다.'
+        return result
+    paid=quote_result['online_prepay_won']
+    if paid is None or type(paid) is not int or paid < 0:
+        result['refund_reason']='실제 선결제 금액이 확인되지 않았습니다.'
+        return result
+    numerator=paid*rule['rate_percent']
+    if numerator % 100:
+        result['refund_reason']='원 미만 금액 처리 기준이 확인되지 않았습니다.'
+        return result
+    expected=numerator//100
+    result.update(refund_status='estimated',expected_refund=expected,
+                  net_cost_after_refund=paid-expected,refund_reason=None)
+    return result
+
+
 def facility_options(db,facility_id,use_date):
     use_date=normalize_use_date(use_date)
     records=fetch(db,'''SELECT o.*,c.name AS option_name FROM facility_options o
@@ -416,7 +473,7 @@ def _included_lighting_matches(start, end, rule):
     return _overlap_minutes(start, end, rule_start, rule_end)
 
 
-def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0,discount_category_ids=None):
+def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0,discount_category_ids=None,cancellation_date=None):
     # 동일 요청 형식으로 고정 회차와 자유 선택의 기본요금 및 조명료를 계산.
     use_date=normalize_use_date(use_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('주말·공휴일 판정은 bool이어야 합니다')
@@ -559,7 +616,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
 
     # 단일 감면은 이 함수에서 적용하지 않는다: 반환 금액은 감면 전 금액이다.
     single_discount_selected=bool(discount_category_ids)
-    return {'status':'priced','facility_id':facility_id,'date':use_date,'selection_type':typ,
+    result = {'status':'priced','facility_id':facility_id,'date':use_date,'selection_type':typ,
             'start_time':start_time,'end_time':end_time,'duration_minutes':duration,
             'price_rule_id':p['price_rule_id'],'base_fee_won':p['base_fee_won'],
             'lighting_minutes':light_minutes,'lighting_fee_won':light,
@@ -576,6 +633,13 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'review_items':review_items,
             'booking_availability_verified':False,
             'discount_application_status':'not_calculated' if single_discount_selected else 'not_requested'}
+    if cancellation_date is not None:
+        result.update(user_cancellation_refund(db,facility_id,use_date,cancellation_date,
+                                               result,discount_category_ids))
+    else:
+        result.update(refund_status='not_requested', expected_refund=None,
+                      net_cost_after_refund=None)
+    return result
 
 duration_quote=quote
 if __name__=='__main__':
@@ -591,6 +655,7 @@ if __name__=='__main__':
     parser.add_argument('--end-time')
     parser.add_argument('--optional-lighting-minutes', type=int, default=0)
     parser.add_argument('--discount-categories', help='감면 대상 ID를 쉼표로 구분')
+    parser.add_argument('--cancellation-date', help='사용자 직접 취소일 YYYY-MM-DD (우천·천재지변 제외)')
     parser.add_argument('--holiday-codes', help='이용일에 해당하는 명절 코드. 쉼표로 구분; 빈 문자열은 명절 아님을 뜻함')
     parser.add_argument('--base-fee-won', type=int, help='감면 계산 대상 코트 기본요금')
     parser.add_argument('--participant-count', type=int, help='전체 이용 인원')
@@ -651,5 +716,5 @@ if __name__=='__main__':
                 parser.error('--start-time, --end-time 필요')
             selected = a.discount_categories.split(',') if a.discount_categories else None
             result = quote(a.db, a.facility, a.date, a.start_time, a.end_time,
-                           is_weekend, a.optional_lighting_minutes, selected)
+                           is_weekend, a.optional_lighting_minutes, selected, a.cancellation_date)
     print(json.dumps(result, ensure_ascii=False, indent=2))

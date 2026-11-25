@@ -223,7 +223,18 @@ def validate(d):
         if discount['id'] not in GROUP_TO_CODES: raise ValueError('알 수 없는 감면 분류: '+discount['id'])
         if 'percent' in discount and (type(discount['percent']) is not int or not 0 <= discount['percent'] <= 100):
             raise ValueError('개별 감면율 오류: '+discount['id'])
-        codes.extend(GROUP_TO_CODES[discount['id']])
+        # 여러 감면 유형을 하나로 묶은 서류 문구를 모든 유형에 복사하지 않는다.
+        # 공통 신청 절차는 discount_common에 두고, 개별 서류는 유형별로 저장한다.
+        expanded = GROUP_TO_CODES[discount['id']]
+        by_category = discount.get('documents_by_category')
+        if len(expanded)>1 and discount.get('documents') is not None:
+            raise ValueError('묶음 감면 유형의 증빙서류는 documents_by_category로 분리 필요: '+discount['id'])
+        if by_category is not None and (
+            not isinstance(by_category, dict) or set(by_category)!=set(expanded)
+            or any(v is not None and (not isinstance(v,str) or not v.strip()) for v in by_category.values())
+        ):
+            raise ValueError('감면 유형별 증빙서류 매핑 오류: '+discount['id'])
+        codes.extend(expanded)
     if len(set(codes))!=len(codes): raise ValueError('동일 시설 감면 분류 중복')
     return d
 
@@ -318,14 +329,24 @@ def load_fixed(data_path, db_path):
             insert_options(con,rid,d['options'])
             c=d['discount_common']
             for item in d['discounts']:
+                category_documents = item.get('documents_by_category')
+                if category_documents is not None:
+                    expected_categories = set(GROUP_TO_CODES[item['id']])
+                    if (not isinstance(category_documents, dict)
+                            or set(category_documents) != expected_categories
+                            or any(doc is not None and not isinstance(doc, str)
+                                   for doc in category_documents.values())):
+                        raise ValueError(f'감면 대상 {item["id"]}: 유형별 증빙서류 매핑 오류')
                 for code in GROUP_TO_CODES[item['id']]:
+                    documents = (category_documents[code] if category_documents is not None
+                                 else item.get('documents'))
                     con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
                         (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
                          processing,documents,deadline,note,original_group_label)
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),item.get('guardian_max_count'),item.get('guardian_condition'),item.get('guardian_evidence_note'),c['rounding_policy'],c['basis'],c['applies_to'],c['excluded_from'],
-                         c['processing'],c['documents'],c['deadline'],c['note'],item['category']))
+                         c['processing'],documents,c['deadline'],c['note'],item['category']))
             insert_refunds_and_reservation(con, rid, d)
     finally:
         con.close()
@@ -420,7 +441,7 @@ def insert_duration_discounts(con, rid, d):
           (f'{rid}_{cat}', rid, cat, item['rate_percent'], item.get('guardian_max_count'), item.get('guardian_condition'), item.get('guardian_evidence_note'), common['rounding_policy'],
            item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
            excluded, item.get('processing', common['processing']),
-           item.get('documents', common.get('documents')),
+           item.get('documents'),
            item.get('deadline', common.get('deadline')),
            item.get('note', common.get('note')), item['source_label'], 'official_confirmed'))
 
