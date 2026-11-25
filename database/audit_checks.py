@@ -2,6 +2,12 @@ import json, sqlite3, tempfile, pathlib, hashlib, shutil, os, subprocess, sys
 from contextlib import closing
 from unittest.mock import patch
 import load,query_api as q
+
+# Windows 콘솔의 기본 코드페이지와 무관하게 한국어 테스트 결과를 출력한다.
+if hasattr(sys.stdout, 'reconfigure'):
+ sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+if hasattr(sys.stderr, 'reconfigure'):
+ sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
 R=pathlib.Path(__file__).resolve().parent
 D=json.loads((R/'seed.json').read_text(encoding='utf-8'))
 files=['seed.json','samrak_winter_2026_2027.json','gudeok_winter_2026_2027.json']
@@ -1009,7 +1015,7 @@ with tempfile.TemporaryDirectory() as docs_tmp:
   else:
    for item in src.get('discounts_confirmed',[]):
     all_expected[(facility_id,item['id'])]=item.get('documents')
- with sqlite3.connect(docs_db) as c:
+ with closing(sqlite3.connect(docs_db)) as c:
   actual={(fid,code):docs for fid,code,docs in c.execute("SELECT r.facility_id,d.category_id,d.documents FROM facility_discounts d JOIN rule_sets r ON d.rule_set_id=r.id")}
  assert len(actual)==86 and actual==all_expected,(len(actual),len(all_expected),set(actual.items())^set(all_expected.items()))
  assert sum(value is not None for value in actual.values())==81
@@ -1049,7 +1055,7 @@ with tempfile.TemporaryDirectory() as unknown_tmp:
 with tempfile.TemporaryDirectory() as supplement_tmp:
  supplement_db=pathlib.Path(supplement_tmp)/'supplement.sqlite3'
  load.load_many(DEFAULT_FILES,supplement_db)
- with sqlite3.connect(supplement_db) as con:
+ with closing(sqlite3.connect(supplement_db)) as con:
   records=con.execute("""SELECT f.id,d.category_id,d.documents,s.note
     FROM facility_discounts d JOIN rule_sets r ON d.rule_set_id=r.id
     JOIN facilities f ON f.id=r.facility_id JOIN sources s ON r.source_id=s.id""").fetchall()
@@ -1105,3 +1111,14 @@ with tempfile.TemporaryDirectory() as cross_quote_tmp:
   assert r['refund_status']=='estimated' and r['expected_refund']==refund,(fid,r)
   assert r['net_cost_after_refund']==total-refund,(fid,r)
  print('PASS: 시설 8곳 평일 요금·2일 전 직접 취소 예상액 실계산 전수 확인')
+
+# 반환신청서 작성 및 대상자 이름 기재를 조회 결과에서 유실하지 않는지 확인한다.
+with tempfile.TemporaryDirectory() as instructions_tmp:
+ instructions_db=pathlib.Path(instructions_tmp)/'instructions.sqlite3'
+ load.load_many(DEFAULT_FILES,instructions_db)
+ for fid in ('busan_haeundae_arboretum_tennis', 'busan_haeundae_arboretum_soccer'):
+  rule=q.discounts(instructions_db,fid,'2026-11-25')[0]
+  assert '반환신청서' in rule['note'],(fid,rule)
+  assert '감면 대상 이용자 이름' in rule['note'],(fid,rule)
+  assert '감면 대상 이용자 이름' in rule['application_note'],(fid,rule)
+ print('PASS: 해운대 테니스·축구 반환신청서/대상자 이름 안내 조회 유지')

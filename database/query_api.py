@@ -182,7 +182,7 @@ def discounts(db,facility_id,use_date):
     return fetch(db,'''SELECT category_id,category_name,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,
     CASE WHEN discount_rounding_policy IS NULL THEN 'unverified' ELSE 'confirmed' END AS rounding_status,
     basis,applies_to,excluded_from,
-    processing,deadline,documents,source_url,checked_on
+    processing,deadline,documents,note,note AS application_note,source_url,checked_on
     FROM v_facility_discounts WHERE facility_id=? AND ? BETWEEN effective_from AND effective_to
     ORDER BY category_name''',(facility_id,use_date))
 
@@ -717,4 +717,7 @@ if __name__=='__main__':
             selected = a.discount_categories.split(',') if a.discount_categories else None
             result = quote(a.db, a.facility, a.date, a.start_time, a.end_time,
                            is_weekend, a.optional_lighting_minutes, selected, a.cancellation_date)
+    import sys
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
     print(json.dumps(result, ensure_ascii=False, indent=2))
