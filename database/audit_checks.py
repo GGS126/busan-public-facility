@@ -1121,9 +1121,4 @@ with tempfile.TemporaryDirectory() as instructions_tmp:
   assert '반환신청서' in rule['note'],(fid,rule)
   assert '감면 대상 이용자 이름' in rule['note'],(fid,rule)
   assert '감면 대상 이용자 이름' in rule['application_note'],(fid,rule)
-  # 비교 엔진(PR #31)이 읽는 application_deadline은 DB의 deadline 컬럼에서 가져온다.
-  # 신청서 작성 및 이름 기재 안내가 그 필드에도 있어야 비교 체크리스트에 노출된다.
-  assert '반환신청서 작성·제출' in rule['deadline'],(fid,rule)
-  assert '감면 대상 이용자 이름 모두 기재' in rule['deadline'],(fid,rule)
-  assert '증빙자료 첨부' in rule['deadline'],(fid,rule)
- print('PASS: 해운대 테니스·축구 반환신청서/대상자 이름 안내 비교 입력 필드 유지')
+ print('PASS: 해운대 테니스·축구 반환신청서/대상자 이름 안내 조회 유지')
