@@ -1011,11 +1011,6 @@ with tempfile.TemporaryDirectory() as docs_tmp:
     for code in load.GROUP_TO_CODES[item['id']]:
      by_code=item.get('documents_by_category')
      doc=by_code[code] if by_code is not None else item.get('documents')
-     guidance=src['discount_common'].get('checklist_guidance')
-     if doc is not None and guidance:
-      if code != 'multi_child':
-       guidance=guidance.replace(' 다자녀인 동일 가족은 증빙자료 1부 제출 가능.', '')
-      doc=' / '.join((doc,guidance))
      all_expected[(facility_id,code)]=doc
   else:
    for item in src.get('discounts_confirmed',[]):
@@ -1036,7 +1031,7 @@ with tempfile.TemporaryDirectory() as docs_tmp:
   assert 'documents_by_category' in str(exc),exc
  else:
   raise AssertionError('묶음 감면 유형에 공통 증빙서류가 복사될 위험을 차단하지 못함')
- print('PASS: 시설 8곳 감면 86건 서류·공통 절차 병합 일치, 묶음 서류 오적재 차단')
+ print('PASS: 시설 8곳 감면 86건 원본↔DB 정확히 일치, 기입 81/미확인 5, 묶음 서류 오적재 차단')
 
 # 미확인(verification_status != confirmed) 규정은 숫자 요금이 있어도 계산하지 않는다.
 from unittest.mock import patch as _mock_patch
@@ -1127,25 +1122,3 @@ with tempfile.TemporaryDirectory() as instructions_tmp:
   assert '감면 대상 이용자 이름' in rule['note'],(fid,rule)
   assert '감면 대상 이용자 이름' in rule['application_note'],(fid,rule)
  print('PASS: 해운대 테니스·축구 반환신청서/대상자 이름 안내 조회 유지')
-
-# 기존 비교 API는 facility_discounts.documents만 체크리스트에 사용한다.
-# 유형별 증빙서류와 신청 절차가 함께 나오고, 다른 유형에 다자녀 예외가 섞이지 않는지 검증.
-with tempfile.TemporaryDirectory() as checklist_tmp:
- checklist_db=pathlib.Path(checklist_tmp)/'checklist.sqlite3'
- load.load_many(DEFAULT_FILES,checklist_db)
- with closing(sqlite3.connect(checklist_db)) as c:
-  rows=c.execute("""SELECT r.facility_id,d.category_id,d.documents,d.deadline,d.note
-    FROM facility_discounts d JOIN rule_sets r ON d.rule_set_id=r.id""").fetchall()
-  assert len(rows)==86
-  for fid,category,documents,deadline,note in rows:
-   assert deadline and note
-   if documents is None:
-    continue  # 유형별 증빙서류 미확인 유지
-   if fid.startswith('busan_samrak_ecopark') or fid.startswith('busan_hwamyeong_ecopark'):
-    assert '반환신청 게시판' in documents and '이름을 모두 기재' in documents,(fid,category)
-   if category != 'multi_child':
-    assert '다자녀인 동일 가족' not in documents,(fid,category)
-  samrak=next((doc for fid,cat,doc,_,_ in rows if fid=='busan_samrak_ecopark_tennis' and cat=='disabled'),None)
-  assert samrak and '장애인등록증' in samrak and '반환신청 게시판' in samrak and '이름을 모두 기재' in samrak
-  assert '가족사랑카드' not in samrak
- print('PASS: 기존 비교 checklist에 삼락 장애인 증빙·반환신청·대상자 이름 안내 동시 표시 가능, 다자녀 예외 혼입 방지')

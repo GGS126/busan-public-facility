@@ -216,9 +216,6 @@ def validate(d):
             if type(slot[k]) is not int or slot[k]<0: raise ValueError(f'회차 {slot["no"]}: {k} 요금 오류')
     validate_options(d['options'])
     common=d['discount_common']
-    guidance=common.get('checklist_guidance')
-    if guidance is not None and (not isinstance(guidance,str) or not guidance.strip()):
-        raise ValueError('discount_common.checklist_guidance는 비어 있지 않은 문자열 또는 null')
     validate_discount_rounding(common)
     if type(common.get('percent')) is not int or not 0<=common['percent']<=100: raise ValueError('감면율 오류')
     codes=[]
@@ -343,15 +340,6 @@ def load_fixed(data_path, db_path):
                 for code in GROUP_TO_CODES[item['id']]:
                     documents = (category_documents[code] if category_documents is not None
                                  else item.get('documents'))
-                    # 기존 비교 API는 required_documents만 checklist에 표시하므로
-                    # 감면 유형별 서류와 공통 신청 절차를 조회용 documents에 함께 적재한다.
-                    # 원본 JSON의 documents, deadline, note는 각각의 의미를 유지한다.
-                    if documents is not None and c.get('checklist_guidance'):
-                        guidance = c['checklist_guidance']
-                        # 다자녀 가족의 1부 제출 예외는 다자녀 선택에서만 안내한다.
-                        if code != 'multi_child':
-                            guidance = guidance.replace(' 다자녀인 동일 가족은 증빙자료 1부 제출 가능.', '')
-                        documents = ' / '.join((documents, guidance))
                     con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
                         (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
