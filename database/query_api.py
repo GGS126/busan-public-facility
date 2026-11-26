@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import sqlite3
 from pathlib import Path
+from contextlib import contextmanager
 try:
     from . import load as _load
 except ImportError:
@@ -19,11 +20,77 @@ def normalize_use_date(value, field="이용일"):
     except ValueError as exc:
         raise ValueError(f'{field} 날짜 형식 오류') from exc
 
+@contextmanager
+def read_snapshot(db):
+    con = sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("BEGIN")
+        yield con
+    finally:
+        con.close()
+
+
 def fetch(db,sql,params=()):
-    con=sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True)
-    con.row_factory=sqlite3.Row
-    try: return [dict(x) for x in con.execute(sql,params)]
-    finally: con.close()
+    if isinstance(db, sqlite3.Connection):
+        return [dict(row) for row in db.execute(sql, params)]
+    with read_snapshot(db) as con:
+        return [dict(row) for row in con.execute(sql, params)]
+
+
+def search_time_data(db, use_date, *, include_status=False):
+    """Read policies and slots from the caller's snapshot, or open one snapshot."""
+    day = normalize_use_date(use_date)
+    if not isinstance(db, sqlite3.Connection):
+        with read_snapshot(db) as connection:
+            return search_time_data(connection, day, include_status=include_status)
+    con = db
+    policies = {}
+    states = {}
+    for row in con.execute("""
+        SELECT f.id, f.open_time, f.close_time, t.selection_type,
+               t.available_start_time, t.available_end_time, t.min_minutes,
+               t.max_minutes, t.step_minutes, t.daily_limit_minutes, r.id AS rule_set_id
+        FROM facilities f
+        LEFT JOIN rule_sets r ON r.facility_id=f.id AND ? BETWEEN r.effective_from AND r.effective_to
+        LEFT JOIN time_selection_policies t ON t.rule_set_id=r.id
+    """, (day,)):
+        key = row['id']
+        if key in policies:
+            policies[key] = None
+            states[key] = 'rule_conflict'
+        else:
+            policies[key] = dict(row) if row['selection_type'] is not None else None
+            states[key] = None if policies[key] else ('rule_missing' if row['rule_set_id'] else 'rule_not_in_effect')
+    slots_by_facility = {}
+    for row in con.execute("""
+        SELECT r.facility_id, p.start_time, p.end_time
+        FROM rule_sets r JOIN pricing_rules p ON p.rule_set_id=r.id
+        WHERE ? BETWEEN r.effective_from AND r.effective_to AND p.selection_type='fixed_slot'
+        ORDER BY r.facility_id, p.slot_no
+    """, (day,)):
+        if policies.get(row['facility_id']) is not None:
+            slots_by_facility.setdefault(row['facility_id'], []).append(
+                {'start_time': row['start_time'], 'end_time': row['end_time']})
+    return (policies, slots_by_facility, states) if include_status else (policies, slots_by_facility)
+
+
+def time_policy_allows(policy, start, end):
+    """검색과 견적에서 공통으로 쓰는 자유시간 정책 판정. 시간은 분 단위다."""
+    def minutes(value):
+        hour, minute = value.split(':')
+        return int(hour) * 60 + int(minute)
+    minimum_start = minutes(policy['available_start_time']) if policy['available_start_time'] else 0
+    maximum_end = minutes(policy['available_end_time']) if policy['available_end_time'] else 1440
+    duration = end - start
+    step = policy['step_minutes']
+    return (
+        end > start and start >= minimum_start and end <= maximum_end
+        and (step is None or (start - minimum_start) % step == 0)
+        and (policy['min_minutes'] is None or duration >= policy['min_minutes'])
+        and (policy['max_minutes'] is None or duration <= policy['max_minutes'])
+        and (policy['daily_limit_minutes'] is None or duration <= policy['daily_limit_minutes'])
+    )
 
 def facilities(db):
     return fetch(db,'SELECT id,name,facility_type,district,address,booking_url FROM facilities ORDER BY name')
@@ -64,7 +131,7 @@ def closure_rules(db,facility_id,use_date):
        ORDER BY c.closure_type,c.closure_value''',(facility_id,use_date))
 
 
-def closure_status(db,facility_id,use_date,holiday_codes=None):
+def closure_statuses(db, use_date, holiday_codes=None):
     # 명절 날짜를 변환하지 않는다. holiday_codes는 백엔드의 검증된 날짜 데이터가 공급한다.
     use_date=normalize_use_date(use_date)
     if holiday_codes is not None:
@@ -72,26 +139,59 @@ def closure_status(db,facility_id,use_date,holiday_codes=None):
                 not isinstance(x,str) or x not in _load.CLOSURE_HOLIDAY_CODES
                 for x in holiday_codes):
             raise ValueError('holiday_codes는 지원하는 명절 코드 목록이어야 합니다')
-    active=fetch(db,'''SELECT r.id,s.url AS source_url FROM rule_sets r
-       JOIN sources s ON s.id=r.source_id
-       WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to''',
-       (facility_id,use_date))
-    if not active:
-        return {'status':'no_active_rule_set','facility_id':facility_id,
-                'date':use_date,'is_closed':None,'matched_rules':[]}
-    rules=closure_rules(db,facility_id,use_date)
-    codes=set(holiday_codes or [])
-    matched=[x for x in rules if
-       (x['type']=='annual_date' and x['value']==use_date[5:]) or
-       (x['type']=='exact_date' and x['value']==use_date) or
-       (x['type']=='holiday_code' and x['value'] in codes)]
-    if matched: status,closed='closed',True
-    elif holiday_codes is None and any(x['type']=='holiday_code' for x in rules):
-        status,closed='needs_calendar_resolution',None
-    else: status,closed='no_scheduled_closure',False
-    return {'status':status,'facility_id':facility_id,'date':use_date,
-            'is_closed':closed,'matched_rules':matched,'source_url':active[0]['source_url'],
-            'note':'임시 휴장·행사·별도 공지는 반영되지 않았습니다. 실제 예약 가능 여부는 공식 예약 사이트에서 확인해야 합니다.'}
+    rows = fetch(db, """SELECT r.facility_id, r.effective_from, r.effective_to,
+        s.url AS source_url, s.checked_on,
+        c.closure_type AS type, c.closure_value AS value, c.note
+        FROM rule_sets r JOIN sources s ON s.id=r.source_id
+        LEFT JOIN closure_rules c ON c.rule_set_id=r.id
+        WHERE ? BETWEEN r.effective_from AND r.effective_to
+        ORDER BY r.facility_id, c.closure_type, c.closure_value""", (use_date,))
+    grouped = {}
+    for row in rows:
+        facility_id = row.pop("facility_id")
+        grouped.setdefault(facility_id, []).append(row)
+
+    codes = set(holiday_codes or [])
+    results = {}
+    for facility_id, records in grouped.items():
+        rules = [row for row in records if row["type"] is not None]
+        matched = [
+            row for row in rules
+            if (row["type"] == "annual_date" and row["value"] == use_date[5:])
+            or (row["type"] == "exact_date" and row["value"] == use_date)
+            or (row["type"] == "holiday_code" and row["value"] in codes)
+        ]
+        if matched:
+            status, closed = "closed", True
+        elif holiday_codes is None and any(row["type"] == "holiday_code" for row in rules):
+            status, closed = "needs_calendar_resolution", None
+        else:
+            status, closed = "no_scheduled_closure", False
+        results[facility_id] = {
+            "status": status, "facility_id": facility_id, "date": use_date,
+            "is_closed": closed, "matched_rules": matched, "source_url": records[0]["source_url"],
+            "note": "임시 휴장·행사·별도 공지는 반영되지 않았습니다. 실제 예약 가능 여부는 공식 예약 사이트에서 확인해야 합니다.",
+        }
+    return results
+
+
+def closure_status(db, facility_id, use_date, holiday_codes=None):
+    use_date = normalize_use_date(use_date)
+    return closure_statuses(db, use_date, holiday_codes).get(facility_id, {
+        "status": "no_active_rule_set", "facility_id": facility_id,
+        "date": use_date, "is_closed": None, "matched_rules": [],
+    })
+
+
+def fixed_slots_by_facility(db, use_date):
+    rows = fetch(db, """SELECT r.facility_id, p.start_time, p.end_time
+        FROM pricing_rules p JOIN rule_sets r ON r.id = p.rule_set_id
+        WHERE p.selection_type = 'fixed_slot' AND ? BETWEEN r.effective_from AND r.effective_to
+        ORDER BY r.facility_id, p.slot_no""", (normalize_use_date(use_date),))
+    slots = {}
+    for row in rows:
+        slots.setdefault(row.pop("facility_id"), []).append(row)
+    return slots
 
 
 def backend_time_policy(db, facility_id, use_date):
@@ -502,15 +602,8 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
         # 자유시간형은 시간 정책을 요금 규칙 존재 여부와 독립적으로 확인한다.
         # 요금 규칙이 없을 뿐인 60/90분은 무조건 이용 불가로 처리하지 않는다.
         policy=prices[0]
-        min_start=parse(policy['available_start_time']) if policy['available_start_time'] else 0
-        max_end=parse(policy['available_end_time'],True) if policy['available_end_time'] else 1440
-        step=policy['step_minutes']
-        if (start<min_start or end>max_end
-            or (step is not None and (start-min_start)%step)
-            or (policy['min_minutes'] is not None and duration<policy['min_minutes'])
-            or (policy['max_minutes'] is not None and duration>policy['max_minutes'])
-            or (policy['daily_limit_minutes'] is not None and duration>policy['daily_limit_minutes'])):
-            return {'status':'invalid_time','reason':'해당 시설의 이용시간 정책에 맞지 않는 시간'}
+        if not time_policy_allows(policy, start, end):
+            return {'status':'invalid_time','selection_type':typ,'reason':'해당 시설의 이용시간 정책에 맞지 않는 시간'}
         matches=[r for r in prices if r['duration_minutes']==duration]
         if not matches:
             return {
@@ -529,7 +622,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
                 }],
                 'booking_availability_verified':False
             }
-    if not matches:return {'status':'invalid_time','reason':'해당 시설에서 선택할 수 없는 시간 또는 이용시간'}
+    if not matches:return {'status':'invalid_time','selection_type':typ,'reason':'해당 시설에서 선택할 수 없는 시간 또는 이용시간'}
     if len(matches)!=1:raise ValueError('중복된 요금 규정')
     discount_review=discount_selection_review(db,facility_id,use_date,discount_category_ids)
     if discount_review is not None:
@@ -631,6 +724,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'start_time':start_time,'end_time':end_time,'duration_minutes':duration,
             'price_rule_id':p['price_rule_id'],'base_fee_won':p['base_fee_won'],
             'lighting_minutes':light_minutes,'lighting_fee_won':light,
+            'lighting_rule_id':mandatory_rule['id'] if mandatory_rule else None,
             'total_won':p['base_fee_won']+light+optional_amount,
             'optional_lighting_minutes':optional_lighting_minutes,
             'optional_lighting_on_site_won':optional_lighting_on_site_won,
