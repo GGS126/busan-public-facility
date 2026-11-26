@@ -116,7 +116,8 @@ def test_missing_api_key_is_logged(monkeypatch, caplog):
     assert "code=missing_api_key" in caplog.text
 
 
-def test_api_keeps_partial_conditions_in_response(monkeypatch):
+def test_api_keeps_partial_conditions_in_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "missing.sqlite3")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     tomorrow = (datetime.now(main.KST).date() + timedelta(days=1)).isoformat()
     provider = Mock(return_value=CONDITIONS | {"date": tomorrow, "discount_types": None})
@@ -143,9 +144,9 @@ def test_landline_is_blocked_before_extraction(phone):
     extract.assert_not_called()
 
 
-def test_expanded_normalized_query_is_blocked():
-    extract = Mock()
-    result = parse_query("\ufdfa" * 500, today=TODAY, extract=extract)
+def test_input_limit_checks_normalized_characters():
+    extract = Mock(return_value=CONDITIONS)
+    result = parse_query("㎞" * 500, today=TODAY, extract=extract)
     assert result["status"] == "llm_failed"
     extract.assert_not_called()
 
@@ -262,3 +263,16 @@ def test_catalog_key_is_cached_per_instance_and_not_serialized():
     replacement = OptionsResponse(sports=[], districts=["new"], discount_types=[])
     assert replacement.extraction_key != catalog.extraction_key
     assert "extraction_key" not in catalog.model_dump()
+
+
+def test_known_busan_district_without_facilities_is_preserved():
+    from app.models import Option, OptionsResponse
+    catalog = OptionsResponse(sports=[Option(code="futsal", label="Futsal")],
+                              districts=["해운대구"], discount_types=[])
+    provider = GeminiExtractor("test-key", sport_codes={"futsal": "Futsal"}, discount_codes={},
+                               districts=list(catalog.extraction_key[2]))
+    assert provider.properties["districts"]["items"]["enum"] == list(catalog.extraction_key[2])
+    result = parse_query("test", today=TODAY, extract=Mock(return_value=CONDITIONS | {"districts": ["동구"]}),
+                         catalog=catalog)
+    assert result["status"] == "ok"
+    assert result["conditions"]["districts"] == ["동구"]

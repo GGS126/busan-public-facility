@@ -42,8 +42,9 @@ def parse_query(
     catalog: OptionsResponse | None = None,
 ) -> dict:
     """Normalize extracted fields; `ok` still requires user confirmation in the UI."""
-    if len(query) <= 500:
-        query = unicodedata.normalize("NFKC", query).strip()
+    if len(query) > 500:
+        return {**_result("llm_failed", {}), "message": "이용 조건은 500자 이내로 입력해 주세요."}
+    query = unicodedata.normalize("NFKC", query).strip()
     if len(query) > 500:
         return {**_result("llm_failed", {}), "message": "이용 조건은 500자 이내로 입력해 주세요."}
     if not query:

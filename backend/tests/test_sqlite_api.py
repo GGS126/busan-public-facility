@@ -26,6 +26,7 @@ def sqlite_path(tmp_path_factory):
 @pytest.fixture
 def client(sqlite_path, monkeypatch):
     data = main.load_service_data("sqlite", sqlite_path)
+    monkeypatch.setattr(main, "DB_PATH", sqlite_path)
     monkeypatch.setattr(main, "facilities", {facility.facility_id: facility for facility in data.facilities})
     monkeypatch.setattr(main, "available_options", build_options(data))
     return TestClient(main.app)
@@ -89,6 +90,18 @@ def test_day_after_lunar_new_year_is_not_closed(client):
     result = compare(client, "busan_hwamyeong_ecopark_tennis", "tennis", day, "10:00", "12:00")
 
     assert all(item["code"] != "facility_closed" for item in result["fee"]["review_items"])
+
+
+def test_search_options_compare_and_detail_share_loaded_sqlite(client):
+    assert client.get("/api/facilities/options").json() == client.get("/api/options").json()
+    conditions = {"sport": "tennis", "date": "2026-12-01", "start_time": "10:00", "end_time": "12:00", "source": "direct"}
+    search = client.post("/api/facilities/search", json={"conditions": conditions})
+    assert search.status_code == 200
+    chosen = next(item for item in search.json()["results"] if item["facility_id"] == "busan_gudeok_stadium_tennis")
+    response = client.post("/api/compare", json={"facility_ids": [chosen["facility_id"]], "conditions": conditions})
+    assert response.status_code == 200
+    assert response.json()["results"][0]["fee"]["total"] == 8000
+    assert client.get("/api/facilities/" + chosen["facility_id"], params={"date": conditions["date"]}).status_code == 200
 
 
 def test_terms_list_every_refund_reason(client):

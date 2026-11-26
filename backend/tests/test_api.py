@@ -133,7 +133,10 @@ def test_sport_offered_elsewhere_returns_review_for_this_facility(monkeypatch):
     assert fee["review_items"][0]["source_id"] == "S-01"
 
 
-def test_unknown_facility_returns_404():
+def test_unknown_facility_returns_404(monkeypatch, tmp_path):
+    database = tmp_path / "catalog.sqlite3"
+    database.touch()
+    monkeypatch.setattr(main, "DB_PATH", database)
     body = payload()
     body["facility_ids"] = ["F001", "NOPE"]
     response = client.post("/api/compare", json=body)
@@ -259,6 +262,15 @@ def test_server_error_hides_details_and_input(monkeypatch, caplog):
     assert "secret detail" not in response.text
     assert "multi_child" not in caplog.text
     assert "secret detail" not in caplog.text
+
+
+def test_unknown_facility_returns_404_after_service_is_loaded(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "missing.sqlite3")
+    body = payload()
+    body["facility_ids"] = ["NOPE"]
+    response = client.post("/api/compare", json=body)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "facility_not_found"
 
 
 def test_discount_selection_error_message_returned():

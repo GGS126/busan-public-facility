@@ -8,6 +8,8 @@ from queue import Empty, Queue
 from time import monotonic
 from datetime import date
 
+from app.models import BUSAN_DISTRICTS
+
 REQUEST_TIMEOUT_SECONDS = 30
 _transport_slots = BoundedSemaphore(4)
 
@@ -66,12 +68,11 @@ class GeminiExtractor:
         self.model = model
         self.sport_codes = sport_codes
         self.discount_codes = discount_codes
-        self.districts = districts
+        self.districts = list(dict.fromkeys([*districts, *BUSAN_DISTRICTS]))
         self.properties = {
             **PROPERTIES,
             "sport": {**NULLABLE_TEXT, "enum": [*sport_codes, None]},
-            "districts": {**PROPERTIES["districts"], "items": {"type": "string", "enum": districts}}
-            if districts else {**PROPERTIES["districts"], "maxItems": 0},
+            "districts": {**PROPERTIES["districts"], "items": {"type": "string", "enum": self.districts}},
             "discount_types": {
                 **PROPERTIES["discount_types"],
                 "items": {"type": "string", "enum": list(discount_codes)},

@@ -14,6 +14,15 @@ UNCALCULATED = dict(
 
 
 def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareResult:
+    if rules.terms_by_period:
+        active = [period for period in rules.terms_by_period if period.in_effect(conditions.date)]
+        if len(active) != 1:
+            return CompareResult(
+                facility_id=rules.facility_id, facility_name=rules.name,
+                fee=_not_calculated("needs_review", "rule_conflict" if active else "rule_not_in_effect",
+                                    "적용 기간이 겹치는 요금 규정이 있습니다." if active else "적용기간 내 요금 규정이 없습니다.", None),
+                terms=rules.terms_on(conditions.date), checklist=[], checklist_review_items=[], sources=[],
+            )
     fee = _fee_with_closure(rules, conditions)
     terms = rules.terms_on(conditions.date)
 

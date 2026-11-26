@@ -20,6 +20,8 @@ from pydantic import (
 from pydantic_core import PydanticCustomError
 
 KST = timezone(timedelta(hours=9))
+BUSAN_DISTRICTS = ("중구", "서구", "동구", "영도구", "부산진구", "동래구", "남구", "북구", "해운대구",
+                   "사하구", "금정구", "강서구", "연제구", "수영구", "사상구", "기장군")
 
 
 def _date_only(value):
@@ -442,7 +444,7 @@ class OptionsResponse(BaseModel):
         return (
             tuple((item.code, item.label) for item in self.sports),
             tuple((item.code, item.label) for item in self.discount_types),
-            tuple(self.districts),
+            tuple(dict.fromkeys([*self.districts, *BUSAN_DISTRICTS])),
         )
 
 
@@ -467,6 +469,33 @@ class QueryParseResponse(BaseModel):
     missing_fields: list[str]
     questions: dict[str, str]
     message: str | None = None
+
+
+class FacilitySearchConditions(BaseModel):
+    sport: SportCode
+    districts: list[str] = Field(default_factory=list)
+    date: CalendarDate
+    start_time: ClockTime | None = None
+    end_time: BandTime | None = None
+    source: Literal["direct", "llm"]
+
+    @field_validator("date")
+    @classmethod
+    def not_in_past(cls, value: CalendarDate) -> CalendarDate:
+        validate_not_past(value, datetime.now(KST).date())
+        return value
+
+    @model_validator(mode="after")
+    def check_times(self) -> "FacilitySearchConditions":
+        if (self.start_time is None) != (self.end_time is None):
+            raise PydanticCustomError("invalid_time_range", "시작 시간과 종료 시간을 함께 입력해 주세요.")
+        if self.start_time and self.end_time:
+            validate_time_order(self.start_time, self.end_time)
+        return self
+
+
+class FacilitySearchRequest(BaseModel):
+    conditions: FacilitySearchConditions
 
 
 # 계산 결과
@@ -502,7 +531,7 @@ class ReviewItem(BaseModel):
     ]
     target: Literal["base", "lighting", "discount", "checklist", "time"]
     reason: str
-    source_id: str
+    source_id: str | None
 
 
 class FeeResult(BaseModel):

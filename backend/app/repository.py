@@ -6,7 +6,7 @@
 
 import json
 import sqlite3
-from contextlib import closing
+from contextlib import closing, nullcontext
 from pathlib import Path
 
 from app.models import RuleData
@@ -44,9 +44,14 @@ def load_rule_data(path: Path = SAMPLE_RULES_PATH, holidays_path: Path = HOLIDAY
     return _with_calendar(data, holidays_path)
 
 
-def load_sqlite_rule_data(path: Path = SQLITE_PATH, holidays_path: Path = HOLIDAYS_PATH) -> RuleData:
-    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as con:
+def load_sqlite_rule_data(path: Path = SQLITE_PATH, holidays_path: Path = HOLIDAYS_PATH,
+                          *, connection: sqlite3.Connection | None = None) -> RuleData:
+    context = nullcontext(connection) if connection is not None else closing(
+        sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True))
+    with context as con:
         con.row_factory = sqlite3.Row
+        if not con.in_transaction:
+            con.execute("BEGIN")
 
         def rows(sql: str, *params) -> list[dict]:
             return [dict(row) for row in con.execute(sql, params)]
