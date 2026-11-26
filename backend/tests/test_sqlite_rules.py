@@ -4,7 +4,7 @@ import json
 import sqlite3
 import sys
 from contextlib import closing
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -13,16 +13,20 @@ from app.compare import compare_facility
 from app.detail import facility_detail
 from app.engine import calculate
 from app.models import Conditions
+from app.refund import estimate_cancel_refund
 from app.repository import load_sqlite_rule_data
 
 DATABASE_DIR = Path(__file__).resolve().parents[2] / "database"
 CASE_FILES = ["test_cases.json", "samrak_test_cases.json", "gudeok_test_cases.json"]
 WEEKDAY, WEEKEND = date(2026, 11, 9), date(2026, 11, 7)
 
-# 정답 사례 중 요금 계산 API의 범위가 아닌 것. 사유가 없어지면 이 목록에서 빼고 검증한다.
-NOT_FEE_CASES = {
-    "T09", "T10", "T11", "T12", "S05", "S06", "S07", "gudeok_cancel_d1", "gudeok_rain_d0",
-}  # 취소·환불 금액은 계산하지 않고 terms 문구로만 안내한다.
+# 취소·환불 정답 사례. 요금 대신 cancel_refund로 검증한다. 사례에 시간이 없어 시설의 평일 기본 회차로 예약한다.
+REFUND_CASE_TIMES = {
+    "busan_haeundae_arboretum_tennis": ("07:00", "09:00"),
+    "busan_samrak_ecopark_tennis": ("08:00", "10:00"),
+    "busan_gudeok_stadium_tennis": ("10:00", "12:00"),
+}
+REFUND_CASES = {"T09", "T10", "T11", "T12", "S05", "S06", "S07", "gudeok_cancel_d1", "gudeok_rain_d0"}
 
 # 시간이 적혀 있지 않은 사례는 사례 설명의 요금(기본요금, 조명료 유무, 1시간 요금 미확인)에 맞는 시간으로 계산한다.
 CASE_TIMES = {
@@ -104,8 +108,9 @@ def conditions_for(case, facility) -> Conditions:
 
 @pytest.mark.parametrize("case", load_cases())
 def test_matches_official_case(case, facilities):
-    if case["id"] in NOT_FEE_CASES:
-        pytest.skip("요금 계산 범위 밖")
+    if case["id"] in REFUND_CASES:
+        check_refund_case(case, facilities)
+        return
 
     expected = case["expected"]
     facility = facilities[case["inputs"]["facility_id"]]
@@ -137,9 +142,35 @@ def test_matches_official_case(case, facilities):
             assert actual == expected[key], key
 
 
+def check_refund_case(case, facilities):
+    inputs, expected = case["inputs"], case["expected"]
+    facility = facilities[inputs["facility_id"]]
+    reason = inputs.get("reason", "user_cancel")
+    cancellation = {"reason": reason}
+    if reason == "user_cancel":
+        cancellation["cancel_date"] = WEEKDAY - timedelta(days=inputs["days_before"])
+    start, end = REFUND_CASE_TIMES[facility.facility_id]
+    conditions = Conditions(
+        sport="tennis", date=WEEKDAY, start_time=start, end_time=end, cancellation=cancellation, source="direct"
+    )
+    result = compare_facility(facility, conditions)
+
+    refund = result.cancel_refund
+    assert refund.status == "calculated", refund.review_items
+    assert refund.rate_percent == expected["refund_percent"]
+    if "initial_paid_won" in inputs:
+        assert result.fee.online_prepay == inputs["initial_paid_won"]
+    if "refund_won" in expected:
+        assert refund.refund_amount == expected["refund_won"]
+    if "final_cost_won" in expected:
+        assert refund.cost_after_refund == expected["final_cost_won"]
+    assert refund.note
+    assert refund.source_id in {source.source_id for source in result.sources}
+
+
 def test_every_case_is_checked_or_listed():
     ids = {param.id for param in load_cases()}
-    assert (NOT_FEE_CASES | CASE_TIMES.keys()) <= ids
+    assert (REFUND_CASES | CASE_TIMES.keys()) <= ids
 
 
 def test_slot_mismatch_not_eligible(facilities):
@@ -392,3 +423,119 @@ def test_facility_detail_sports_follow_rule_months(facilities):
 
     assert facility_detail(winter_only, WEEKDAY).sports == ["tennis"]
     assert facility_detail(winter_only, date(2027, 3, 10)).sports == []
+
+
+def cancel_refund(facility, start, end, cancellation, **conditions):
+    conditions = Conditions(
+        sport="tennis", date=WEEKDAY, start_time=start, end_time=end, cancellation=cancellation, source="direct",
+        **conditions,
+    )
+    return compare_facility(facility, conditions).cancel_refund
+
+
+def test_same_day_cancel_without_rule_needs_review(facilities):
+    # 구덕은 당일 사용자 취소의 환불 규정이 없다(당일 온라인 취소 불가). 다른 날의 환불률로 대신하지 않는다.
+    refund = cancel_refund(
+        facilities["busan_gudeok_stadium_tennis"], "10:00", "12:00", {"reason": "user_cancel", "cancel_date": WEEKDAY}
+    )
+
+    assert refund.status == "needs_review"
+    assert (refund.days_before, refund.rate_percent, refund.refund_amount) == (0, None, None)
+    assert refund.review_items[0].code == "rule_missing"
+    assert refund.review_items[0].target == "refund"
+
+
+def test_onsite_payment_refund_needs_review(facilities):
+    # 해운대 선택 조명료는 현장에서 따로 낸다. 취소 시 그 금액을 어떻게 처리하는지는 공식 자료에 없다.
+    refund = cancel_refund(
+        facilities["busan_haeundae_arboretum_tennis"], "18:00", "20:00",
+        {"cancel_date": WEEKDAY - timedelta(days=2)}, optional_lighting_minutes=60,
+    )
+
+    assert refund.status == "needs_review"
+    assert refund.rate_percent == 90
+    assert refund.review_items[0].code == "amount_unverified"
+
+
+def test_unverified_payment_refund_needs_review(facilities):
+    # 구덕 야간 조명료는 결제 방식이 확인되지 않았다.
+    refund = cancel_refund(
+        facilities["busan_gudeok_stadium_tennis"], "18:00", "20:00", {"cancel_date": WEEKDAY - timedelta(days=1)}
+    )
+
+    assert refund.status == "needs_review"
+    assert refund.review_items[0].code == "amount_unverified"
+
+
+def test_discount_refund_with_cancel_needs_review(facilities):
+    refund = cancel_refund(
+        facilities["busan_samrak_ecopark_tennis"], "08:00", "10:00", {"cancel_date": WEEKDAY - timedelta(days=3)},
+        headcount=4, discounts=[{"type": "disabled", "count": 2}],
+    )
+
+    assert refund.status == "needs_review"
+    assert "감면 환급" in refund.review_items[0].reason
+
+
+def test_refund_with_fraction_of_won_needs_review(facilities):
+    # 실제 DB 요금은 모두 100원 단위라 끝전이 생기지 않아, 6,005원을 낸 것으로 바꿔 확인한다.
+    # 6,005원의 90%는 5,404.5원이라 원 미만 처리 기준이 있어야 금액을 정할 수 있다.
+    facility = facilities["busan_samrak_ecopark_tennis"]
+    conditions = Conditions(
+        sport="tennis", date=WEEKDAY, start_time="08:00", end_time="10:00",
+        cancellation={"cancel_date": WEEKDAY - timedelta(days=2)}, source="direct",
+    )
+    fee = calculate(facility, conditions)
+    odd_fee = fee.model_copy(update={"online_prepay": 6005, "payment_due": 6005, "total": 6005})
+
+    refund = estimate_cancel_refund(facility, conditions, conditions.cancellation, odd_fee)
+
+    assert refund.status == "needs_review"
+    assert refund.rate_percent == 90
+    assert refund.review_items[0].code == "amount_unverified"
+
+
+def test_closed_day_refund_is_not_calculated(facilities):
+    closed_day = date(2027, 2, 7)  # 설날: 삼락 정기 휴장
+    conditions = Conditions(
+        sport="tennis", date=closed_day, start_time="08:00", end_time="10:00",
+        cancellation={"cancel_date": closed_day - timedelta(days=3)}, source="direct",
+    )
+    refund = compare_facility(facilities["busan_samrak_ecopark_tennis"], conditions).cancel_refund
+
+    assert refund.status == "needs_review"
+    assert refund.refund_amount is None
+    assert "예약할 수 없어" in refund.review_items[0].reason
+
+
+def test_refund_rules_outside_period_not_in_effect(facilities):
+    facility = facilities["busan_samrak_ecopark_tennis"]
+    # 환불 규정은 있지만 모두 다른 기간의 규정인 경우
+    other_period = facility.model_copy(update={"refund_rules": [
+        rule.model_copy(update={"effective_from": date(2030, 1, 1), "effective_to": date(2030, 12, 31)})
+        for rule in facility.refund_rules
+    ]})
+    refund = cancel_refund(other_period, "08:00", "10:00", {"cancel_date": WEEKDAY})
+
+    assert refund.review_items[0].code == "rule_not_in_effect"
+
+
+def test_facility_without_refund_rules_is_rule_missing(facilities):
+    # 가상 데이터(JSON)처럼 환불 규정을 읽지 않은 시설은 '기간 밖'이 아니라 '규정 없음'이다.
+    facility = facilities["busan_samrak_ecopark_tennis"].model_copy(update={"refund_rules": []})
+    refund = cancel_refund(facility, "08:00", "10:00", {"cancel_date": WEEKDAY})
+
+    assert refund.review_items[0].code == "rule_missing"
+
+
+@pytest.mark.parametrize(("cancellation", "message"), [
+    ({"reason": "user_cancel"}, "취소일을 입력"),
+    ({"reason": "rain_unused", "cancel_date": "2026-11-08"}, "취소일을 받지 않습니다"),
+    ({"cancel_date": "2026-11-10"}, "이용일보다 늦을 수 없습니다"),
+])
+def test_invalid_cancellation_rejected(cancellation, message):
+    with pytest.raises(ValueError, match=message):
+        Conditions(
+            sport="tennis", date=WEEKDAY, start_time="08:00", end_time="10:00", cancellation=cancellation,
+            source="direct",
+        )

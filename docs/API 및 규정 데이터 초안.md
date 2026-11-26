@@ -263,6 +263,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `discounts[].count` | 예 | 1 이상의 정수. 이 유형의 감면 대상 인원 |
 | `discounts[].holder` | 아니요 | 예약 대표자가 이 유형의 대상자이면 `true`, 기본값 `false`. `true`는 한 항목만 가능 |
 | `conditions.optional_lighting_minutes` | 아니요 | 0 이상의 정수, 기본값 0. 이용 시간보다 길 수 없음 |
+| `conditions.cancellation` | 아니요 | 예상 취소 환불을 함께 계산할 때만. [취소 환불](#취소-환불) 참고 |
 
 - `discounts[].count`의 합은 `headcount`를 넘을 수 없습니다. 대표자도 `count`에 포함합니다.
 - `discount_types`는 `discounts`로 대체합니다. 프론트엔드가 옮겨 갈 때까지 `discount_types`도 받지만, 인원을 모르므로 인원 비례 감면 시설에서는 '확인 필요'를 반환합니다.
@@ -313,6 +314,56 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
   예약할 때 온라인으로 낼 금액은 `online_prepay`로 따로 반환합니다.
   예: 구덕 평일 18~20시는 `total` 28,000, `payment_due` null, `online_prepay` 8,000, `payment_unverified` 20,000입니다.
 - 해운대처럼 남은 시간이 추가 단위(10분)로 나눠 떨어지지 않으면 처리 기준이 없어 '확인 필요'입니다.
+
+### 취소 환불
+
+`conditions.cancellation`을 보내면, 이 조건으로 예약한 뒤 취소하거나 이용하지 못했을 때의 예상 환불을 결과의 `cancel_refund`에 함께 반환합니다. 보내지 않으면 `cancel_refund`는 `null`입니다. `fee.expected_refund`(감면 환급)와는 별개입니다.
+
+```json
+"cancellation": { "reason": "user_cancel", "cancel_date": "2026-11-09" }
+```
+
+| 항목 | 필수 | 검증 |
+|---|---|---|
+| `cancellation.reason` | 아니요 | `user_cancel`(기본값), `rain_same_day`, `rain_unused`, `force_majeure_or_city_event` |
+| `cancellation.cancel_date` | `user_cancel`이면 예 | `YYYY-MM-DD`, 오늘보다 앞설 수 없고 이용일보다 늦을 수 없음. 우천·불가항력 사유에는 보내지 않음 |
+
+위반하면 `400 validation_error`와 `code: "invalid_cancellation"`으로 응답합니다. 사용자 취소는 이용일 며칠 전 취소인지(`days_before`, 당일 0)로 환불률을 고르고, 우천·불가항력은 사유로 고릅니다. 사유가 실제로 인정되는지는 시설이 판단하므로 `note`의 신청 방법과 함께 안내합니다.
+
+```json
+"cancel_refund": {
+  "status": "calculated",
+  "reason": "user_cancel",
+  "days_before": 2,
+  "rate_percent": 90,
+  "refund_amount": 5400,
+  "cost_after_refund": 600,
+  "note": "2일 전 취소 90%: 이용료 반환신청서 작성 후 제출(낙동강관리본부 이용료반환신청 게시판).",
+  "source_id": "busan_reserve_395_winter_2026",
+  "review_items": []
+}
+```
+
+| 항목 | 계산 |
+|---|---|
+| `refund_amount` | 온라인 선결제액(`fee.online_prepay`) × `rate_percent` ÷ 100 |
+| `cost_after_refund` | 온라인 선결제액 − `refund_amount`. 환불률 0%(예: 당일 취소 불가)이면 선결제액 전체 |
+
+다음 경우는 금액을 추정하지 않고 `status: "needs_review"`, 금액 `null`로 반환하며 `review_items[].target`은 `"refund"`입니다. 환불 규정을 찾았으면 `rate_percent`와 `note`는 그대로 보여 줍니다.
+
+| 경우 | `review_items[].code` |
+|---|---|
+| 시설에 환불 규정이 아예 없음(가상 데이터 등) | `rule_missing` |
+| 환불 규정은 있으나 이용일에 유효한 규정이 없음 | `rule_not_in_effect` |
+| 그 취소 시점·사유의 규정이 없음(예: 구덕 당일 사용자 취소) 또는 환불률 미확인 | `rule_missing` |
+| 같은 조건의 규정이 여럿 | `rule_conflict` |
+| 이 조건으로 예약할 수 없음(휴장·회차 불일치 등, 이유는 `fee.review_items`) | `amount_unverified` |
+| 이용료가 확정되지 않음(확인 필요) | `amount_unverified` |
+| 현장 결제액·결제 방식 미확인 금액이 있음 | `amount_unverified` |
+| 사후 반환 감면을 함께 받음 | `amount_unverified` |
+| 환불액이 원 단위로 나누어떨어지지 않음(끝전 처리 기준 미확인) | `amount_unverified` |
+
+공식 취소·환불 사례 9건(T09~T12, S05~S07, 구덕 1일 전 취소·당일 우천)을 이 계산으로 검증합니다.
 
 ### 이용할 수 없는 시간
 
@@ -442,7 +493,7 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 
 ### 예약·취소·환불 규정
 
-응답의 `terms`와 `checklist`에 사용합니다. 첫 통합의 계산에는 쓰지 않지만, 시설 조사 때 함께 확인해 두면 다시 조사하지 않아도 됩니다.
+응답의 `terms`와 `checklist`에 사용합니다. 환불 규정은 요청에 `cancellation`이 있으면 `cancel_refund` 계산에도 씁니다.
 
 | 항목 | 설명 |
 |---|---|
@@ -484,7 +535,7 @@ SQLite DB를 새로 만들어 규칙 엔진으로 계산한 뒤 비교합니다.
 | `time_selection_policies` (`fixed_slot`) | 이용시간 규정. 운영시간은 `facilities.open_time`, `close_time` |
 | `time_selection_policies` (`flexible_interval`) | 이용시간 규정(`selection: flexible`, `max_minutes`). 운영시간은 `available_start_time`, `available_end_time`. 허용 이용시간 목록은 확인되지 않아 만들지 않으며, 하루 이용 한도(`daily_limit_minutes`)는 예약 이력이 필요해 확인하지 않음 |
 | `facility_discounts` | 감면 규정. `per_eligible_person_equal_split` → `basis: per_eligible_person` |
-| `reservation_rules`, `refund_rules` | 규정 기간별 `terms` 문구(`terms_by_period`). 응답에는 이용일에 유효한 기간의 문구와 출처를 사용 |
+| `reservation_rules`, `refund_rules` | 규정 기간별 `terms` 문구(`terms_by_period`). 응답에는 이용일에 유효한 기간의 문구와 출처를 사용. `refund_rules`는 시설 규정의 `refund_rules`로도 옮겨 취소 환불 계산에 쓰며, `status`가 `confirmed`가 아닌 규정의 환불률은 계산에 쓰지 않음 |
 | `sources.license`가 `null` | `"이용허락범위 미확인"` |
 
 변환 표에 없는 값(새 감면 계산 방식, 새 조명 계산 방식 등)이 들어오면 추정하지 않고 읽기 단계에서 오류를 냅니다.
