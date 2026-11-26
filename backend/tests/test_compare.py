@@ -170,3 +170,19 @@ def test_malformed_closure_value_is_rejected(type_, value):
 
 def test_leap_day_annual_closure_is_allowed():
     assert closure("annual_date", "02-29").value == "02-29"
+
+
+def test_application_deadline_and_guardian_note_join_checklist():
+    rule = discount_rule(required_documents=["서류"], application_deadline="이용 전 게시판 접수", guardian_note="관계 증빙")
+    result = compare_facility(facility(discount_rules=[rule]), conditions(discounts=["multi_child"]))
+
+    assert result.checklist == ["서류", "감면 신청 기한: 이용 전 게시판 접수", "보호자 동반 시: 관계 증빙"]
+    assert "S-02" in source_ids(result)
+
+
+def test_deadline_without_documents_still_reports_unknown_documents():
+    rule = discount_rule(required_documents=None, application_deadline="이용 전 게시판 접수")
+    result = compare_facility(facility(discount_rules=[rule]), conditions(discounts=["multi_child"]))
+
+    assert result.checklist == ["감면 신청 기한: 이용 전 게시판 접수"]
+    assert [item.target for item in result.checklist_review_items] == ["checklist"]
