@@ -334,7 +334,7 @@ class ClosureRule(EffectivePeriod):
 
 def _is_date(value: str) -> bool:
     try:
-        return date.fromisoformat(value).isoformat() == value
+        return CalendarDate.fromisoformat(value).isoformat() == value
     except ValueError:
         return False
 
