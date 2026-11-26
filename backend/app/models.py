@@ -1,8 +1,10 @@
 """규정 데이터와 요청·응답 형식. 규정의 모르는 값은 추정하지 않고 None으로 둔다."""
 
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from datetime import date as CalendarDate
 from decimal import Decimal
+from functools import cached_property
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -22,17 +24,19 @@ KST = timezone(timedelta(hours=9))
 
 def _date_only(value):
     """날짜는 YYYY-MM-DD만 받는다. 기본 변환은 시각이 붙은 문자열이나 타임스탬프도 날짜로 바꾼다."""
-    if isinstance(value, date) and not isinstance(value, datetime):
+    if isinstance(value, CalendarDate) and not isinstance(value, datetime):
         return value
     if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         return value
     raise PydanticCustomError("date_format", "날짜는 YYYY-MM-DD 형식으로 입력해 주세요.")
 
 
-IsoDate = Annotated[date, BeforeValidator(_date_only)]
+IsoDate = Annotated[CalendarDate, BeforeValidator(_date_only)]
 
 ClockTime = Annotated[str, StringConstraints(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")]
 BandTime = Annotated[str, StringConstraints(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|24:00)$")]
+SportCode = Annotated[str, StringConstraints(min_length=1)]
+Headcount = Annotated[int, Field(ge=1)]
 Rounding = Annotated[str, StringConstraints(pattern=r"^(floor|ceil|round)_(1|10|100|1000)$")]
 DayType = Literal["weekday", "weekend", "holiday"]
 DiscountMethod = Literal["onsite", "prepay_refund"]
@@ -50,6 +54,16 @@ def to_minutes(value: str) -> int:
 # 이용 조건
 
 
+def validate_time_order(start: str | None, end: str) -> None:
+    if start is not None and to_minutes(end) <= to_minutes(start):
+        raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
+
+
+def validate_not_past(value: CalendarDate, today: CalendarDate) -> None:
+    if value < today:
+        raise PydanticCustomError("past_date", "지난 날짜는 선택할 수 없습니다.")
+
+
 class DiscountSelection(BaseModel):
     """감면 대상자 입력. 이름·증빙 번호 같은 개인정보는 받지 않고 인원수만 받는다."""
 
@@ -59,13 +73,12 @@ class DiscountSelection(BaseModel):
 
 
 class Conditions(BaseModel):
-    sport: str = Field(min_length=1)
+    sport: SportCode
     districts: list[str] = []
     date: IsoDate
     start_time: ClockTime
     end_time: BandTime
-    headcount: int | None = Field(default=None, ge=1)
-    # 인원을 모르는 감면 선택. 인원 비례 감면 시설은 discounts로 받아야 계산한다.
+    headcount: Headcount | None = None
     discount_types: list[str] = []
     discounts: list[DiscountSelection] = []
     # 지정 회차 중 사용자가 조명을 켤 시간. 필수 조명은 이용 시간으로 자동 계산한다.
@@ -75,9 +88,7 @@ class Conditions(BaseModel):
     @field_validator("end_time")
     @classmethod
     def end_after_start(cls, value: str, info: ValidationInfo) -> str:
-        start = info.data.get("start_time")
-        if start is not None and to_minutes(value) <= to_minutes(start):
-            raise PydanticCustomError("invalid_time_range", "종료 시간은 시작 시간보다 늦어야 합니다.")
+        validate_time_order(info.data.get("start_time"), value)
         return value
 
     @model_validator(mode="after")
@@ -112,9 +123,8 @@ class RequestConditions(Conditions):
 
     @field_validator("date")
     @classmethod
-    def not_in_past(cls, value: date) -> date:
-        if value < datetime.now(KST).date():
-            raise PydanticCustomError("past_date", "지난 날짜는 선택할 수 없습니다.")
+    def not_in_past(cls, value: CalendarDate) -> CalendarDate:
+        validate_not_past(value, datetime.now(KST).date())
         return value
 
 
@@ -129,15 +139,15 @@ class CompareRequest(BaseModel):
 class Source(BaseModel):
     source_id: str
     url: str
-    checked_at: date
+    checked_at: CalendarDate
     license: str
 
 
 class EffectivePeriod(BaseModel):
-    effective_from: date
-    effective_to: date | None = None
+    effective_from: CalendarDate
+    effective_to: CalendarDate | None = None
 
-    def in_effect(self, day: date) -> bool:
+    def in_effect(self, day: CalendarDate) -> bool:
         return self.effective_from <= day and (self.effective_to is None or day <= self.effective_to)
 
 
@@ -217,22 +227,22 @@ class PeriodTerms(Terms, EffectivePeriod):
 
 
 class Holiday(BaseModel):
-    date: date
+    date: CalendarDate
     name: str
 
 
 class HolidayCalendar(BaseModel):
     """관공서 공휴일 목록. 기간 밖의 날짜는 공휴일인지 알 수 없는 날로 본다."""
 
-    covered_from: date
-    covered_to: date
+    covered_from: CalendarDate
+    covered_to: CalendarDate
     holidays: list[Holiday]
     source: Source
 
-    def covers(self, day: date) -> bool:
+    def covers(self, day: CalendarDate) -> bool:
         return self.covered_from <= day <= self.covered_to
 
-    def is_holiday(self, day: date) -> bool:
+    def is_holiday(self, day: CalendarDate) -> bool:
         return any(holiday.date == day for holiday in self.holidays)
 
     @model_validator(mode="after")
@@ -324,7 +334,7 @@ class ClosureRule(EffectivePeriod):
 
 def _is_date(value: str) -> bool:
     try:
-        return date.fromisoformat(value).isoformat() == value
+        return CalendarDate.fromisoformat(value).isoformat() == value
     except ValueError:
         return False
 
@@ -348,11 +358,11 @@ class FacilityRules(BaseModel):
     terms_by_period: list[PeriodTerms] = []
     sources: list[Source]
 
-    def _period_terms(self, day: date) -> PeriodTerms | None:
+    def _period_terms(self, day: CalendarDate) -> PeriodTerms | None:
         matched = [terms for terms in self.terms_by_period if terms.in_effect(day)]
         return matched[0] if len(matched) == 1 else None
 
-    def terms_on(self, day: date) -> Terms:
+    def terms_on(self, day: CalendarDate) -> Terms:
         """이용일의 예약·취소 조건. 기간별 조건 중 유효한 것이 없으면 모든 값을 모르는 것으로 둔다."""
         if not self.terms_by_period:
             return self.terms
@@ -361,11 +371,11 @@ class FacilityRules(BaseModel):
             return Terms()
         return Terms(**period.model_dump(exclude={"effective_from", "effective_to"}))
 
-    def source_on(self, day: date) -> str:
+    def source_on(self, day: CalendarDate) -> str:
         """근거 규정이 없을 때 안내할 공식 출처. 규정 기간별 출처가 있으면 이용일의 출처를 쓴다."""
         return self.period_source_on(day) or self.source_id
 
-    def period_source_on(self, day: date) -> str | None:
+    def period_source_on(self, day: CalendarDate) -> str | None:
         """이용일에 유효한 규정 기간의 출처. 기간별 규정이 없거나 기간에 출처가 없으면 시설 출처, 유효한 기간이 없으면 None"""
         if not self.terms_by_period:
             return self.source_id
@@ -425,6 +435,38 @@ class OptionsResponse(BaseModel):
     sports: list[Option]
     districts: list[str]
     discount_types: list[Option]
+
+    @cached_property
+    def extraction_key(self) -> tuple:
+        """Read-only catalog snapshot, prepared once for each catalog instance."""
+        return (
+            tuple((item.code, item.label) for item in self.sports),
+            tuple((item.code, item.label) for item in self.discount_types),
+            tuple(self.districts),
+        )
+
+
+class QueryParseRequest(BaseModel):
+    query: str
+
+
+class ExtractedConditions(BaseModel):
+    sport: SportCode | None = None
+    districts: list[str] | None = None
+    date: CalendarDate | None = None
+    start_time: ClockTime | None = None
+    end_time: BandTime | None = None
+    headcount: Headcount | None = None
+    discount_types: list[str] | None = None
+    source: Literal["llm"] | None = None
+
+
+class QueryParseResponse(BaseModel):
+    status: Literal["ok", "need_more", "llm_failed"]
+    conditions: ExtractedConditions
+    missing_fields: list[str]
+    questions: dict[str, str]
+    message: str | None = None
 
 
 # 계산 결과
