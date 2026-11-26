@@ -1,11 +1,20 @@
 """비교 서비스(COMP-07). 규칙 엔진 결과에 예약·취소 조건, 증빙서류, 출처를 묶는다."""
 
-from app.engine import calculate
-from app.models import CompareResult, Conditions, FacilityRules, ReviewItem
+from datetime import date
+
+from app.engine import _not_calculated, calculate
+from app.models import ClosureRule, CompareResult, Conditions, FacilityRules, FeeResult, ReviewItem
+
+# 공휴일 목록의 이름과 DB의 명절 휴장 코드. 전날·다음날은 휴장 규정에 없으므로 당일만 연결한다.
+HOLIDAY_CLOSURE_CODES = {"설날": "lunar_new_year_day", "추석": "chuseok_day"}
+UNCALCULATED = dict(
+    total=None, payment_due=None, online_prepay=None, onsite_payment=None,
+    payment_unverified=None, expected_refund=None, net_cost_after_refund=None,
+)
 
 
 def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareResult:
-    fee = calculate(rules, conditions)
+    fee = _fee_with_closure(rules, conditions)
     terms = rules.terms_on(conditions.date)
 
     used = {item.source_id for item in fee.items} | {item.source_id for item in fee.review_items}
@@ -38,9 +47,9 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
             )
 
     sources = [source for source in rules.sources if source.source_id in used]
-    # 공휴일 요금을 적용했으면 공휴일 판정의 근거도 함께 보여 준다.
+    # 공휴일 요금을 적용했으면 공휴일 판정의 근거도 함께 보여 준다. 이용할 수 없는 날은 요금을 적용하지 않았다.
     calendar = rules.holiday_calendar
-    if calendar is not None and calendar.is_holiday(conditions.date):
+    if fee.status != "not_eligible" and calendar is not None and calendar.is_holiday(conditions.date):
         sources.append(calendar.source)
 
     return CompareResult(
@@ -52,3 +61,45 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
         checklist_review_items=checklist_reviews,
         sources=sources,
     )
+
+
+def _fee_with_closure(rules: FacilityRules, conditions: Conditions) -> FeeResult:
+    """정기 휴장일이면 요금을 계산하지 않는다. 명절 휴장인지 알 수 없으면 계산하되 확인 필요로 둔다."""
+    closed, unresolved = _closures_on(rules, conditions.date)
+    if closed:
+        notes = " / ".join(dict.fromkeys(rule.note for rule in closed))
+        return _not_calculated("not_eligible", "facility_closed", f"정기 휴장일입니다. {notes}", closed[0].source_id)
+
+    fee = calculate(rules, conditions)
+    if not unresolved or fee.status == "not_eligible":
+        return fee
+    review = ReviewItem(
+        code="rule_missing",
+        target="time",
+        reason="이용일이 명절 휴장일인지 확인할 수 없습니다. 공식 안내를 확인해 주세요.",
+        source_id=unresolved[0].source_id,
+    )
+    return fee.model_copy(
+        update={"status": "needs_review", **UNCALCULATED, "review_items": [*fee.review_items, review]}
+    )
+
+
+def _closures_on(rules: FacilityRules, day: date) -> tuple[list[ClosureRule], list[ClosureRule]]:
+    """(이용일에 해당하는 휴장 규정, 공휴일 목록 밖이라 판정하지 못한 명절 휴장 규정)"""
+    active = [rule for rule in rules.closure_rules if rule.in_effect(day)]
+    calendar = rules.holiday_calendar
+    known = calendar is not None and calendar.covers(day)
+    codes = (
+        {HOLIDAY_CLOSURE_CODES[h.name] for h in calendar.holidays if h.date == day and h.name in HOLIDAY_CLOSURE_CODES}
+        if known
+        else set()
+    )
+    closed = [
+        rule
+        for rule in active
+        if (rule.type == "annual_date" and rule.value == day.strftime("%m-%d"))
+        or (rule.type == "exact_date" and rule.value == day.isoformat())
+        or (rule.type == "holiday_code" and rule.value in codes)
+    ]
+    unresolved = [] if known else [rule for rule in active if rule.type == "holiday_code"]
+    return closed, unresolved
