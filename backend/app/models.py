@@ -198,6 +198,10 @@ class DiscountRule(EffectivePeriod):
     stackable: bool | None = None
     rounding: Rounding | None = None
     required_documents: list[str] | None = None
+    # 감면을 받기 위한 신청 기한·방법. 사후 반환 감면은 이 기한을 놓치면 반환받지 못한다.
+    application_deadline: str | None = None
+    # 보호자 동반 감면의 증빙 안내
+    guardian_note: str | None = None
     source_id: str
 
     @model_validator(mode="after")
@@ -213,6 +217,8 @@ class Terms(BaseModel):
     booking_open: str | None = None
     cancel_deadline: str | None = None
     refund: str | None = None
+    # 환불 사유별 안내. 사용자 취소의 신청 방법·환급 시기와 우천·불가항력 환불을 함께 적는다.
+    refund_notes: list[str] = []
     source_id: str | None = None
 
 
@@ -304,6 +310,35 @@ class PeriodNote(EffectivePeriod):
     source_id: str
 
 
+class ClosureRule(EffectivePeriod):
+    """정기 휴장일. annual_date는 MM-DD, exact_date는 YYYY-MM-DD, holiday_code는 명절 코드다."""
+
+    type: Literal["annual_date", "exact_date", "holiday_code"]
+    value: str
+    note: str
+    source_id: str
+
+    @model_validator(mode="after")
+    def check_value(self) -> "ClosureRule":
+        # 형식이 틀린 값은 어떤 날짜와도 일치하지 않아 휴장일이 조용히 빠지므로 읽을 때 막는다.
+        if self.type == "annual_date":
+            valid = len(self.value) == 5 and _is_date(f"2024-{self.value}")  # 2월 29일을 허용하는 해
+        elif self.type == "exact_date":
+            valid = _is_date(self.value)
+        else:
+            valid = self.value in ("lunar_new_year_day", "chuseok_day")
+        if not valid:
+            raise ValueError(f"휴장 규정 값 형식 오류: {self.type}={self.value}")
+        return self
+
+
+def _is_date(value: str) -> bool:
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
 class FacilityRules(BaseModel):
     facility_id: str
     name: str
@@ -311,6 +346,7 @@ class FacilityRules(BaseModel):
     source_id: str
     info: FacilityInfo = FacilityInfo()
     closure_notes: list[PeriodNote] = []
+    closure_rules: list[ClosureRule] = []
     # 공통 공휴일 목록을 저장소에서 붙인다. 없으면 모든 날짜의 공휴일 여부를 알 수 없다.
     holiday_calendar: HolidayCalendar | None = None
     fee_rules: list[FeeRule] = []
@@ -356,7 +392,7 @@ class FacilityRules(BaseModel):
     @model_validator(mode="after")
     def check_sources(self) -> "FacilityRules":
         known = {source.source_id for source in self.sources}
-        rules = [*self.fee_rules, *self.discount_rules, *self.time_policies, *self.closure_notes]
+        rules = [*self.fee_rules, *self.discount_rules, *self.time_policies, *self.closure_notes, *self.closure_rules]
         used = {self.source_id, *(rule.source_id for rule in rules)}
         used |= {terms.source_id for terms in [self.terms, *self.terms_by_period] if terms.source_id is not None}
         if used - known:
@@ -462,6 +498,7 @@ class ReviewItem(BaseModel):
         "slot_mismatch",
         "duration_not_allowed",
         "outside_hours",
+        "facility_closed",
     ]
     target: Literal["base", "lighting", "discount", "checklist", "time"]
     reason: str
