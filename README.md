@@ -22,9 +22,14 @@ Issue는 담당자와 할 일을 공유하는 작업 카드이고, PR은 개발�
 
 `develop`은 개발 통합 브랜치, `main`은 검증된 최종 안정 브랜치입니다.
 
-## 개발 전 확인
+## 실행과 검사
 
-기술 스택, 대상 시설, 개발 환경은 아직 확정하지 않았습니다.
-[확정 사항과 논의할 항목](docs/decisions.md)을 확인하고 팀 합의 후 진행합니다.
+React·Vite 프론트엔드, FastAPI 백엔드, SQLite 시설 규정과 Gemini 조건 추출로 구성됩니다. 현재 테니스장 4곳·축구장 4곳을 비교하며, 직접 예약·결제·실시간 잔여석 확인은 제공하지 않습니다.
 
-팀 논의와 역할별 준비 작업은 [개발 준비 및 논의 초안](docs/%EA%B0%9C%EB%B0%9C%20%EC%A4%80%EB%B9%84%20%EB%B0%8F%20%EB%85%BC%EC%9D%98%20%EC%B4%88%EC%95%88.md)을 확인해 주세요.
+**처음 실행할 때는 [공통 실행 및 검사 안내](docs/공통%20실행%20및%20검사%20안내.md)를 따라 주세요.** DB 생성, 백엔드·프론트 실행, 환경변수와 오류 해결 방법을 정리했습니다. Gemini 키 없이도 직접 입력·검색·비교와 자동 검사를 할 수 있습니다.
+
+- 백엔드 검사: 저장소 루트에서 `./.venv/Scripts/python scripts/check_backend.py` (macOS·Linux: `.venv/bin/python scripts/check_backend.py`)
+- 프론트 검사: `frontend`에서 `npm ci`, `npm test`, `npm run lint`, `npm run build`
+- `develop`·`main` 대상 PR과 두 브랜치 push에서 GitHub Actions `CI`가 같은 검사를 실행합니다. 실제 Gemini 호출은 자동 검사에 포함하지 않습니다.
+
+[최신 개발 현황 및 남은 작업](https://github.com/GGS126/busan-public-facility/issues/29)을 확인해 주세요. [결정 기록](docs/decisions.md)과 [개발 준비 초안](docs/개발%20준비%20및%20논의%20초안.md)은 초기 논의 기록이며 실제 구현에 맞춘 최종 문서 갱신이 필요합니다.
