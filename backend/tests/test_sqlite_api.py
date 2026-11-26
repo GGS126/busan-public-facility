@@ -17,6 +17,7 @@ def next_weekday() -> str:
     today = datetime.now(KST).date()
     return (today + timedelta(days=7 - today.weekday())).isoformat()  # 다음 주 월요일
 
+
 @pytest.fixture(scope="module")
 def sqlite_path(tmp_path_factory):
     return build_database(tmp_path_factory.mktemp("db"))
@@ -53,6 +54,7 @@ def test_unknown_data_source_is_rejected():
 
 def test_options_come_from_database(client):
     body = client.get("/api/options").json()
+
     assert {sport["code"] for sport in body["sports"]} == {"tennis", "soccer"}
     # 가상 데이터의 시설은 섞이지 않는다.
     assert client.get("/api/facilities/F001").status_code == 404
@@ -75,6 +77,7 @@ def test_compare_calculates_database_facility(client):
 
 def test_compare_blocks_regular_closure_before_fee(client):
     result = compare(client, "busan_hwamyeong_ecopark_tennis", "tennis", LUNAR_NEW_YEAR, "10:00", "12:00")
+
     fee = result["fee"]
     assert fee["status"] == "not_eligible"
     assert fee["items"] == [] and fee["total"] is None
@@ -104,6 +107,7 @@ def test_search_options_compare_and_detail_share_loaded_sqlite(client):
 def test_terms_list_every_refund_reason(client):
     result = compare(client, "busan_samrak_ecopark_tennis", "tennis", next_weekday(), "08:00", "10:00")
     terms = result["terms"]
+
     assert terms["refund"].startswith("3일 전까지 취소 100%")
     notes = terms["refund_notes"]
     # 사용자 취소 4단계 다음에 우천·불가항력 환불이 온다.
@@ -121,11 +125,8 @@ def test_discount_checklist_includes_application_deadline(client):
         },
     }
     checklist = client.post("/api/compare", json=body).json()["results"][0]["checklist"]
-    deadline = [
-        item for item in checklist
-        if item.startswith("감면 신청 기한: 경기장 이용시간 전 반환신청 게시판 접수")
-    ]
-    assert len(deadline) == 1
+
+    assert "감면 신청 기한: 경기장 이용시간 전 반환신청 게시판 접수" in checklist
 
 
 def test_unknown_refund_reason_is_rejected_on_load():
