@@ -1,4 +1,3 @@
-
 function formatWon(value) {
   return typeof value === 'number' && Number.isFinite(value)
     ? `${value.toLocaleString('ko-KR')}원`
@@ -120,6 +119,7 @@ function FeeResult({ results, facilities = [] }) {
 
         <div>
           <h2>시설 비교 결과</h2>
+
           <p>
             시설별 이용시간, 예상요금, 예약·취소 조건과
             준비사항을 확인하세요.
@@ -130,7 +130,9 @@ function FeeResult({ results, facilities = [] }) {
       {results.length === 0 ? (
         <div className="result-empty">
           <div className="result-empty-icon">₩</div>
+
           <h3>아직 조회된 결과가 없습니다</h3>
+
           <p>
             시설을 검색하고 비교할 대상을 선택해 주세요.
           </p>
@@ -139,9 +141,15 @@ function FeeResult({ results, facilities = [] }) {
         <div className="comparison-grid">
           {results.map((result) => {
             const fee = result.fee || {}
-            const calculated = fee.status === 'calculated'
-            const needsReview = fee.status === 'needs_review'
-            const notEligible = fee.status === 'not_eligible'
+
+            const calculated =
+              fee.status === 'calculated'
+
+            const needsReview =
+              fee.status === 'needs_review'
+
+            const notEligible =
+              fee.status === 'not_eligible'
 
             const feeItems = Array.isArray(fee.items)
               ? fee.items
@@ -189,7 +197,7 @@ function FeeResult({ results, facilities = [] }) {
             const statusLabel = calculated
               ? '계산 완료'
               : notEligible
-                ? '이용조건 확인 필요'
+                ? '이용조건 불충족'
                 : '확인 필요'
 
             return (
@@ -230,6 +238,7 @@ function FeeResult({ results, facilities = [] }) {
 
                   <p>
                     이용 날짜:{' '}
+
                     <strong>
                       {displayText(result.selected_date)}
                     </strong>
@@ -237,11 +246,14 @@ function FeeResult({ results, facilities = [] }) {
 
                   <p>
                     이용시간:{' '}
+
                     <strong>
                       {displayText(
                         result.selected_start_time
                       )}
+
                       {' ~ '}
+
                       {displayText(
                         result.selected_end_time
                       )}
@@ -255,7 +267,8 @@ function FeeResult({ results, facilities = [] }) {
 
                   {notEligible && (
                     <div className="review-box">
-                      <h4>이용조건 확인 필요</h4>
+                      <h4>이용조건 불충족</h4>
+
                       <p>
                         선택한 이용조건으로는 해당 시설을
                         이용할 수 없거나 이용 가능 여부를
@@ -267,6 +280,7 @@ function FeeResult({ results, facilities = [] }) {
                   {needsReview && (
                     <div className="review-box">
                       <h4>요금 확인 필요</h4>
+
                       <p>
                         일부 요금이나 결제 조건을 확정할 수
                         없습니다. 확인된 금액이 있다면
@@ -377,6 +391,7 @@ function FeeResult({ results, facilities = [] }) {
                     !notEligible && (
                       <div className="review-box">
                         <h4>요금 상태 확인 필요</h4>
+
                         <p>
                           서버에서 반환한 요금 상태를
                           확인할 수 없습니다.
@@ -405,6 +420,7 @@ function FeeResult({ results, facilities = [] }) {
 
                   <p>
                     예약 시작:{' '}
+
                     {displayText(
                       result.terms?.booking_open
                     )}
@@ -412,6 +428,7 @@ function FeeResult({ results, facilities = [] }) {
 
                   <p>
                     취소 기한:{' '}
+
                     {displayText(
                       result.terms?.cancel_deadline
                     )}
@@ -419,6 +436,7 @@ function FeeResult({ results, facilities = [] }) {
 
                   <p>
                     환불 규정:{' '}
+
                     {displayText(result.terms?.refund)}
                   </p>
                 </div>
@@ -467,6 +485,7 @@ function FeeResult({ results, facilities = [] }) {
                             {testSource ? (
                               <p>
                                 테스트용 가상 출처
+
                                 {source.source_id
                                   ? ` (${source.source_id})`
                                   : ''}
@@ -489,6 +508,7 @@ function FeeResult({ results, facilities = [] }) {
 
                             <p>
                               자료 확인일:{' '}
+
                               {displayText(
                                 source.checked_at
                               )}

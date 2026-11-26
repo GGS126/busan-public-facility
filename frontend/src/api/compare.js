@@ -1,9 +1,10 @@
+import { facilities } from '../data/mockFacilities'
 
 const USE_MOCK_API = import.meta.env.VITE_USE_MOCK_API === 'true'
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 const REQUEST_TIMEOUT = 10000
-const NATURAL_LANGUAGE_TIMEOUT = 35000
+const NATURAL_LANGUAGE_TIMEOUT = 45000
 
 function formatFieldErrors(fields) {
   if (!fields || typeof fields !== 'object') return ''
@@ -125,6 +126,7 @@ function createAPIError(response, data) {
   return error
 }
 
+// API 요청 공통 처리
 async function requestAPI(path, options = {}) {
   const {
     timeout = REQUEST_TIMEOUT,
@@ -193,6 +195,7 @@ async function requestAPI(path, options = {}) {
   }
 }
 
+// 개발용 Mock 비교 결과
 function createMockResult(facilityId) {
   const names = {
     busan_haeundae_arboretum_tennis:
@@ -209,6 +212,7 @@ function createMockResult(facilityId) {
     fee: {
       status: 'needs_review',
       items: [],
+      total: null,
       payment_due: null,
       online_prepay: null,
       onsite_payment: null,
@@ -223,10 +227,12 @@ function createMockResult(facilityId) {
     },
     terms: null,
     checklist: [],
+    checklist_review_items: [],
     sources: [],
   }
 }
 
+// 시설 요금 비교 API
 export async function compareFacilities(request) {
   if (USE_MOCK_API) {
     return {
@@ -240,10 +246,43 @@ export async function compareFacilities(request) {
   })
 }
 
-export async function getOptions() {
-  return requestAPI('/api/options')
+// 시설 검색 조건 선택지 API
+export async function getSearchOptions() {
+  if (USE_MOCK_API) {
+    return {
+      sports: [
+        {
+          code: 'tennis',
+          label: '테니스',
+        },
+      ],
+      districts: [
+        ...new Set(
+          facilities.map((facility) => facility.district)
+        ),
+      ],
+      discount_types: [
+        {
+          code: 'disabled',
+          label: '장애인',
+        },
+        {
+          code: 'multi_child',
+          label: '다자녀 가정',
+        },
+      ],
+    }
+  }
+
+  return requestAPI('/api/facilities/options')
 }
 
+// 기존 선택지 조회 함수 호환
+export async function getOptions() {
+  return getSearchOptions()
+}
+
+// 시설 상세정보 API
 export async function getFacilityDetail(facilityId, date) {
   if (!facilityId) {
     throw new Error('시설 ID가 필요합니다.')
@@ -265,6 +304,7 @@ export async function getFacilityDetail(facilityId, date) {
   return requestAPI(path)
 }
 
+// 자연어 이용조건 추출 API
 export async function parseNaturalLanguage(sentence) {
   if (
     typeof sentence !== 'string' ||
@@ -281,6 +321,13 @@ export async function parseNaturalLanguage(sentence) {
     )
   }
 
+  if (USE_MOCK_API) {
+    return {
+      status: 'llm_failed',
+      message: '모의 모드에서는 직접 입력해 주세요.',
+    }
+  }
+
   return requestAPI('/api/query/parse', {
     method: 'POST',
     body: JSON.stringify({
@@ -288,4 +335,102 @@ export async function parseNaturalLanguage(sentence) {
     }),
     timeout: NATURAL_LANGUAGE_TIMEOUT,
   })
+}
+
+// 실제 시설 검색 API
+export async function searchFacilities(conditions) {
+  if (USE_MOCK_API) {
+    const districts = Array.isArray(conditions.districts)
+      ? conditions.districts
+      : []
+
+    const candidates = facilities.filter(
+      (facility) => facility.sport === conditions.sport
+    )
+
+    const results = candidates
+      .filter(
+        (facility) =>
+          !districts.length ||
+          districts.includes(facility.district)
+      )
+      .map((facility) => {
+        if (facility.district !== '사상구') {
+          return facility
+        }
+
+        const slots = [
+          '08:00|10:00',
+          '10:00|12:00',
+          '13:00|15:00',
+          '15:00|17:00',
+        ].map((slot) => {
+          const [start_time, end_time] = slot.split('|')
+
+          return {
+            start_time,
+            end_time,
+          }
+        })
+
+        const requested =
+          conditions.start_time && conditions.end_time
+
+        const matches = slots.some(
+          (slot) =>
+            slot.start_time === conditions.start_time &&
+            slot.end_time === conditions.end_time
+        )
+
+        return {
+          ...facility,
+          time_options: {
+            selection: 'fixed_slot',
+            slots,
+          },
+          time_check: {
+            status: requested
+              ? matches
+                ? 'eligible'
+                : 'not_eligible'
+              : 'unknown',
+          },
+        }
+      })
+
+    return {
+      results,
+      alternatives: results.length
+        ? null
+        : {
+            districts: [
+              ...new Set(
+                candidates.map(
+                  (facility) => facility.district
+                )
+              ),
+            ].sort(),
+          },
+    }
+  }
+
+  const result = await requestAPI('/api/facilities/search', {
+    method: 'POST',
+    body: JSON.stringify({ conditions }),
+  })
+
+  if (!Array.isArray(result.results)) {
+    throw new Error(
+      '서버에서 올바른 시설 검색 결과를 받지 못했습니다.'
+    )
+  }
+
+  return {
+    ...result,
+    results: result.results.map((facility) => ({
+      ...facility,
+      id: facility.facility_id,
+      bookingUrl: facility.booking_url,
+    })),
+  }
 }

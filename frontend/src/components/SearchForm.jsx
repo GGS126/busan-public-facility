@@ -1,16 +1,25 @@
-
 // 30분 단위 이용시간 목록 생성
 const timeOptions = Array.from({ length: 48 }, (_, index) => {
   const hour = String(Math.floor(index / 2)).padStart(2, '0')
   const minute = index % 2 === 0 ? '00' : '30'
+
   return `${hour}:${minute}`
 })
+
+function withSelectedTime(time) {
+  if (!time || time === '24:00' || timeOptions.includes(time)) {
+    return timeOptions
+  }
+
+  return [...timeOptions, time].sort()
+}
 
 function SearchForm({
   sport,
   setSport,
   district,
   setDistrict,
+  selectedDistricts = [],
   date,
   setDate,
   startTime,
@@ -21,10 +30,13 @@ function SearchForm({
   setPeople,
   discountType,
   setDiscountType,
+  selectedDiscounts = [],
   eligibleCount,
   setEligibleCount,
   representativeEligible,
   setRepresentativeEligible,
+  discountDetails = {},
+  setDiscountDetails,
   optionalLightingMinutes,
   setOptionalLightingMinutes,
   onSearch,
@@ -70,8 +82,42 @@ function SearchForm({
     ) : null
   }
 
+  function getDiscountLabel(code) {
+    return (
+      options?.discount_types?.find(
+        (item) => item.code === code
+      )?.label ?? code
+    )
+  }
+
+  function updateDiscountDetail(code, key, value) {
+    if (typeof setDiscountDetails !== 'function') {
+      return
+    }
+
+    setDiscountDetails((previous) => ({
+      ...previous,
+      [code]: {
+        count: '1',
+        holder: false,
+        ...previous[code],
+        [key]: value,
+      },
+    }))
+
+    clearResult()
+  }
+
+  const sports = options?.sports ?? []
+  const districts = options?.districts ?? []
+  const discountOptions = options?.discount_types ?? []
+
   const unavailable =
     optionsLoading || Boolean(optionsError)
+
+  const multipleDiscounts =
+    discountType === 'multiple' &&
+    selectedDiscounts.length > 1
 
   return (
     <section className="search-card" id="search">
@@ -80,7 +126,9 @@ function SearchForm({
 
         <div>
           <h2>이용 조건 입력</h2>
+
           <p>종목, 지역, 날짜와 이용 인원을 입력하세요.</p>
+
           <p>
             희망 이용시간과 일치하는 시설 회차가 있으면
             자동으로 선택됩니다.
@@ -118,12 +166,8 @@ function SearchForm({
           <select
             id="sport"
             value={sport}
-            disabled={
-              unavailable || options.sports.length === 0
-            }
-            aria-invalid={Boolean(
-              getFieldError('sport')
-            )}
+            disabled={unavailable || sports.length === 0}
+            aria-invalid={Boolean(getFieldError('sport'))}
             aria-describedby={
               getFieldError('sport')
                 ? 'sport-error'
@@ -133,13 +177,16 @@ function SearchForm({
               update(setSport, e.target.value)
             }
           >
-            {options.sports.length === 0 && (
-              <option value="">
-                선택 가능한 종목 없음
+            {!sports.some(({ code }) => code === sport) && (
+              <option value={sport}>
+                {sport ||
+                  (sports.length === 0
+                    ? '선택 가능한 종목 없음'
+                    : '이용 종목 선택')}
               </option>
             )}
 
-            {options.sports.map((item) => (
+            {sports.map((item) => (
               <option key={item.code} value={item.code}>
                 {item.label}
               </option>
@@ -170,7 +217,13 @@ function SearchForm({
           >
             <option value="전체">부산 전체</option>
 
-            {options.districts.map((item) => (
+            {selectedDistricts.length > 1 && (
+              <option value="multiple">
+                {selectedDistricts.join(', ')}
+              </option>
+            )}
+
+            {districts.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
@@ -191,9 +244,7 @@ function SearchForm({
             id="date"
             type="date"
             value={date}
-            aria-invalid={Boolean(
-              getFieldError('date')
-            )}
+            aria-invalid={Boolean(getFieldError('date'))}
             aria-describedby={
               getFieldError('date')
                 ? 'date-error'
@@ -229,7 +280,7 @@ function SearchForm({
           >
             <option value="">시작시간 선택</option>
 
-            {timeOptions.map((time) => (
+            {withSelectedTime(startTime).map((time) => (
               <option key={time} value={time}>
                 {time}
               </option>
@@ -265,7 +316,7 @@ function SearchForm({
           >
             <option value="">종료시간 선택</option>
 
-            {timeOptions
+            {withSelectedTime(endTime)
               .filter(
                 (time) => !startTime || time > startTime
               )
@@ -341,20 +392,33 @@ function SearchForm({
                 : undefined
             }
             onChange={(e) => {
-              setDiscountType(e.target.value)
-              setEligibleCount(
-                e.target.value === 'none' ? '0' : '1'
-              )
-              setRepresentativeEligible(false)
+              const value = e.target.value
+
+              setDiscountType(value)
+
+              if (value !== 'multiple') {
+                setEligibleCount(
+                  value === 'none' ? '0' : '1'
+                )
+
+                setRepresentativeEligible(false)
+              }
+
               clearResult()
             }}
           >
             <option value="none">감면 없음</option>
 
-            {options.discount_types
-              .filter(
-                (item) => item.code !== 'none'
-              )
+            {selectedDiscounts.length > 1 && (
+              <option value="multiple">
+                {selectedDiscounts
+                  .map(getDiscountLabel)
+                  .join(', ')}
+              </option>
+            )}
+
+            {discountOptions
+              .filter((item) => item.code !== 'none')
               .map((item) => (
                 <option
                   key={item.code}
@@ -373,102 +437,206 @@ function SearchForm({
           )}
         </div>
 
-        {discountType !== 'none' && (
-          <>
-            <div className="field">
-              <label htmlFor="eligible">
-                감면 대상 인원
-              </label>
+        {discountType !== 'none' &&
+          discountType !== 'multiple' && (
+            <>
+              <div className="field">
+                <label htmlFor="eligible">
+                  감면 대상 인원
+                </label>
 
-              <input
-                id="eligible"
-                type="number"
-                min="1"
-                step="1"
-                max={people}
-                value={eligibleCount}
-                aria-invalid={Boolean(
-                  getFieldError(
-                    'count',
-                    'eligibleCount',
-                    'eligible_count'
-                  )
+                <input
+                  id="eligible"
+                  type="number"
+                  min="1"
+                  step="1"
+                  max={people}
+                  value={eligibleCount}
+                  aria-invalid={Boolean(
+                    getFieldError(
+                      'count',
+                      'eligibleCount',
+                      'eligible_count'
+                    )
+                  )}
+                  aria-describedby={
+                    getFieldError(
+                      'count',
+                      'eligibleCount',
+                      'eligible_count'
+                    )
+                      ? 'eligible-error'
+                      : undefined
+                  }
+                  onChange={(e) =>
+                    update(
+                      setEligibleCount,
+                      e.target.value
+                    )
+                  }
+                />
+
+                {fieldErrorMessage(
+                  'eligible',
+                  'count',
+                  'eligibleCount',
+                  'eligible_count'
                 )}
-                aria-describedby={
-                  getFieldError(
-                    'count',
-                    'eligibleCount',
-                    'eligible_count'
-                  )
-                    ? 'eligible-error'
-                    : undefined
-                }
-                onChange={(e) =>
-                  update(
-                    setEligibleCount,
-                    e.target.value
-                  )
-                }
-              />
+              </div>
 
-              {fieldErrorMessage(
-                'eligible',
-                'count',
-                'eligibleCount',
-                'eligible_count'
-              )}
-            </div>
+              <div className="field">
+                <label htmlFor="representative-eligible">
+                  예약 대표자 감면 대상 여부
+                </label>
 
-            <div className="field">
-              <label htmlFor="representative-eligible">
-                예약 대표자 감면 대상 여부
-              </label>
+                <select
+                  id="representative-eligible"
+                  value={
+                    representativeEligible
+                      ? 'yes'
+                      : 'no'
+                  }
+                  aria-invalid={Boolean(
+                    getFieldError(
+                      'holder',
+                      'representativeEligible',
+                      'representative_eligible'
+                    )
+                  )}
+                  aria-describedby={
+                    getFieldError(
+                      'holder',
+                      'representativeEligible',
+                      'representative_eligible'
+                    )
+                      ? 'representative-eligible-error'
+                      : undefined
+                  }
+                  onChange={(e) =>
+                    update(
+                      setRepresentativeEligible,
+                      e.target.value === 'yes'
+                    )
+                  }
+                >
+                  <option value="no">아니요</option>
 
-              <select
-                id="representative-eligible"
-                value={
-                  representativeEligible
-                    ? 'yes'
-                    : 'no'
-                }
-                aria-invalid={Boolean(
-                  getFieldError(
-                    'holder',
-                    'representativeEligible',
-                    'representative_eligible'
-                  )
+                  <option value="yes">
+                    예 (대표자를 감면 대상 인원에 포함)
+                  </option>
+                </select>
+
+                {fieldErrorMessage(
+                  'representative-eligible',
+                  'holder',
+                  'representativeEligible',
+                  'representative_eligible'
                 )}
-                aria-describedby={
-                  getFieldError(
-                    'holder',
-                    'representativeEligible',
-                    'representative_eligible'
-                  )
-                    ? 'representative-eligible-error'
-                    : undefined
-                }
-                onChange={(e) =>
-                  update(
-                    setRepresentativeEligible,
-                    e.target.value === 'yes'
-                  )
-                }
+              </div>
+            </>
+          )}
+
+        {multipleDiscounts &&
+          selectedDiscounts.map((code, index) => {
+            const detail = discountDetails[code] ?? {
+              count: '',
+              holder: false,
+            }
+
+            const countId = `eligible-${code}`
+            const holderId = `representative-${code}`
+
+            const countErrors = [
+              `discounts.${index}.count`,
+              `discounts.${code}.count`,
+              'count',
+            ]
+
+            const holderErrors = [
+              `discounts.${index}.holder`,
+              `discounts.${code}.holder`,
+              'holder',
+            ]
+
+            return (
+              <div
+                key={code}
+                style={{ display: 'contents' }}
               >
-                <option value="no">아니요</option>
-                <option value="yes">
-                  예 (대표자를 감면 대상 인원에 포함)
-                </option>
-              </select>
+                <div className="field">
+                  <label htmlFor={countId}>
+                    {getDiscountLabel(code)} 대상 인원
+                  </label>
 
-              {fieldErrorMessage(
-                'representative-eligible',
-                'holder',
-                'representativeEligible',
-                'representative_eligible'
-              )}
-            </div>
-          </>
-        )}
+                  <input
+                    id={countId}
+                    type="number"
+                    min="1"
+                    step="1"
+                    max={people}
+                    value={detail.count}
+                    aria-invalid={Boolean(
+                      getFieldError(...countErrors)
+                    )}
+                    aria-describedby={
+                      getFieldError(...countErrors)
+                        ? `${countId}-error`
+                        : undefined
+                    }
+                    onChange={(e) =>
+                      updateDiscountDetail(
+                        code,
+                        'count',
+                        e.target.value
+                      )
+                    }
+                  />
+
+                  {fieldErrorMessage(
+                    countId,
+                    ...countErrors
+                  )}
+                </div>
+
+                <div className="field">
+                  <label htmlFor={holderId}>
+                    {getDiscountLabel(code)} 대표자 해당 여부
+                  </label>
+
+                  <select
+                    id={holderId}
+                    value={detail.holder ? 'yes' : 'no'}
+                    aria-invalid={Boolean(
+                      getFieldError(...holderErrors)
+                    )}
+                    aria-describedby={
+                      getFieldError(...holderErrors)
+                        ? `${holderId}-error`
+                        : undefined
+                    }
+                    onChange={(e) =>
+                      updateDiscountDetail(
+                        code,
+                        'holder',
+                        e.target.value === 'yes'
+                      )
+                    }
+                  >
+                    <option value="no">아니요</option>
+
+                    <option value="yes">
+                      예 (대표자를 감면 대상 인원에 포함)
+                    </option>
+                  </select>
+
+                  {fieldErrorMessage(
+                    holderId,
+                    ...holderErrors
+                  )}
+                </div>
+              </div>
+            )
+          })}
 
         <div className="field">
           <label htmlFor="optional-lighting-minutes">
@@ -529,7 +697,7 @@ function SearchForm({
         disabled={
           loading ||
           unavailable ||
-          options.sports.length === 0
+          sports.length === 0
         }
       >
         {loading
