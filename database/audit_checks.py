@@ -9,6 +9,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
  sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
 R=pathlib.Path(__file__).resolve().parent
+# 하위 프로세스의 stderr 인코딩도 UTF-8로 고정(Windows cp949 대응).
+UTF8_ENV={**os.environ,'PYTHONIOENCODING':'utf-8'}
 D=json.loads((R/'seed.json').read_text(encoding='utf-8'))
 files=['seed.json','samrak_winter_2026_2027.json','gudeok_winter_2026_2027.json']
 from copy import deepcopy
@@ -84,7 +86,7 @@ with tempfile.TemporaryDirectory() as tmp:
  # 새 조회 함수 네 가지를 실제 CLI 경로로 실행해 README의 명령과 일치시키는 회귀 테스트.
  def cli(resource, *args):
   proc=subprocess.run([sys.executable,str(R/'query_api.py'),resource,'--db',str(db),*args],
-                      text=True,encoding='utf-8',capture_output=True)
+                      text=True,encoding='utf-8',capture_output=True,env=UTF8_ENV)
   assert proc.returncode==0,(resource,proc.stderr)
   return json.loads(proc.stdout)
  f='busan_samrak_ecopark_tennis'
@@ -101,11 +103,11 @@ with tempfile.TemporaryDirectory() as tmp:
           '--participant-count','4','--eligible-count','2','--category-id','multi_child')
  assert calc['status']=='confirmed' and calc['discount_refund_won']==1500,calc
  invalid=subprocess.run([sys.executable,str(R/'query_api.py'),'discount_proration_check',
-                         '--db',str(db),*common],capture_output=True,text=True,encoding='utf-8')
+                         '--db',str(db),*common],capture_output=True,text=True,encoding='utf-8',env=UTF8_ENV)
  assert invalid.returncode!=0 and '--base-fee-won' in invalid.stderr,invalid.stderr
  invalid_code=subprocess.run([sys.executable,str(R/'query_api.py'),'closure_status',
                               '--db',str(db),*common,'--holiday-codes','unknown_holiday'],
-                              capture_output=True,text=True,encoding='utf-8')
+                              capture_output=True,text=True,encoding='utf-8',env=UTF8_ENV)
  assert invalid_code.returncode!=0 and 'holiday_codes' in invalid_code.stderr,invalid_code.stderr
  print('PASS: 신규 CLI sources/closure_rules/closure_status/discount_proration_check 및 필수 인자 검증')
  # 공통 테스트 사례 스키마: 같은 항목은 같은 이름, 선택적 항목은 의미를 보존.
@@ -1011,10 +1013,11 @@ with tempfile.TemporaryDirectory() as docs_tmp:
     for code in load.GROUP_TO_CODES[item['id']]:
      by_code=item.get('documents_by_category')
      doc=by_code[code] if by_code is not None else item.get('documents')
+     doc=load.checklist_documents(doc,src['discount_common'],code)
      all_expected[(facility_id,code)]=doc
   else:
    for item in src.get('discounts_confirmed',[]):
-    all_expected[(facility_id,item['id'])]=item.get('documents')
+    all_expected[(facility_id,item['id'])]=load.checklist_documents(item.get('documents'),src['discount_common'],item['id'])
  with closing(sqlite3.connect(docs_db)) as c:
   actual={(fid,code):docs for fid,code,docs in c.execute("SELECT r.facility_id,d.category_id,d.documents FROM facility_discounts d JOIN rule_sets r ON d.rule_set_id=r.id")}
  assert len(actual)==86 and actual==all_expected,(len(actual),len(all_expected),set(actual.items())^set(all_expected.items()))
@@ -1122,3 +1125,21 @@ with tempfile.TemporaryDirectory() as instructions_tmp:
   assert '감면 대상 이용자 이름' in rule['note'],(fid,rule)
   assert '감면 대상 이용자 이름' in rule['application_note'],(fid,rule)
  print('PASS: 해운대 테니스·축구 반환신청서/대상자 이름 안내 조회 유지')
+
+# 비교 API 입력용 SQLite 문서 필드에 신청서 및 이름 기재가 포함되는지 확인.
+with tempfile.TemporaryDirectory() as checklist_tmp:
+ checklist_db=pathlib.Path(checklist_tmp)/'checklist.sqlite3'
+ load.load_many(DEFAULT_FILES,checklist_db)
+ with closing(sqlite3.connect(checklist_db)) as c:
+  rows=c.execute("""SELECT r.facility_id,d.category_id,d.documents
+    FROM facility_discounts d JOIN rule_sets r ON d.rule_set_id=r.id""").fetchall()
+  assert len(rows)==86
+  for fid,cat,docs in rows:
+   if docs is None: continue  # 증빙서류 미확인 상태 보존
+   if fid.startswith(('busan_samrak_ecopark','busan_hwamyeong_ecopark')):
+    assert '반환신청 게시판' in docs and '이름을 모두 기재' in docs,(fid,cat,docs)
+   if fid.startswith('busan_haeundae_arboretum'):
+    assert '반환신청서' in docs and '이름을 모두 기재' in docs,(fid,cat,docs)
+   if cat!='multi_child':
+    assert '다자녀인 동일 가족' not in docs,(fid,cat,docs)
+ print('PASS: 비교 API가 읽는 DB 서류 필드에서 유형별 증빙·신청서·대상자 이름 안내 동시 확인')

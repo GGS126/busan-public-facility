@@ -40,6 +40,20 @@ GROUP_TO_CODES = {
     'war_veteran': ('war_veteran',),
 }
 
+def checklist_documents(documents, common, category):
+    """기존 비교 API의 required_documents에 유형별 서류와 공통 신청 절차 제공.
+
+    원본 JSON에서 서류/신청절차를 구분하며, 증빙서류 미확인은 NULL로 보존한다.
+    """
+    if documents is None:
+        return None
+    guidance = common.get('checklist_guidance')
+    if not guidance:
+        return documents
+    if category != 'multi_child':
+        guidance = guidance.replace(' 다자녀인 동일 가족은 증빙자료 1부 제출 가능.', '')
+    return f'{documents} / {guidance}'
+
 def validate_options(options):
     if not isinstance(options,list): raise ValueError('options는 목록이어야 함')
     if len({(o['id'],o['application_type']) for o in options})!=len(options): raise ValueError('동일 적용 방식 옵션 중복')
@@ -216,6 +230,9 @@ def validate(d):
             if type(slot[k]) is not int or slot[k]<0: raise ValueError(f'회차 {slot["no"]}: {k} 요금 오류')
     validate_options(d['options'])
     common=d['discount_common']
+    guidance=common.get('checklist_guidance')
+    if guidance is not None and (not isinstance(guidance,str) or not guidance.strip()):
+        raise ValueError('discount_common.checklist_guidance는 비어 있지 않은 문자열 또는 null')
     validate_discount_rounding(common)
     if type(common.get('percent')) is not int or not 0<=common['percent']<=100: raise ValueError('감면율 오류')
     codes=[]
@@ -340,6 +357,7 @@ def load_fixed(data_path, db_path):
                 for code in GROUP_TO_CODES[item['id']]:
                     documents = (category_documents[code] if category_documents is not None
                                  else item.get('documents'))
+                    documents = checklist_documents(documents, c, code)
                     con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
                         (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
@@ -398,6 +416,9 @@ def validate_duration_discounts(d):
     if not isinstance(common, dict):
         raise ValueError('discount_common: 감면 규정 데이터 누락')
     validate_discount_rounding(common)
+    guidance=common.get('checklist_guidance')
+    if guidance is not None and (not isinstance(guidance,str) or not guidance.strip()):
+        raise ValueError('discount_common.checklist_guidance는 비어 있지 않은 문자열 또는 null')
     for field in ('basis', 'applies_to', 'processing'):
         if not isinstance(common.get(field), str) or not common[field].strip():
             raise ValueError(f'discount_common.{field} 누락')
@@ -441,7 +462,7 @@ def insert_duration_discounts(con, rid, d):
           (f'{rid}_{cat}', rid, cat, item['rate_percent'], item.get('guardian_max_count'), item.get('guardian_condition'), item.get('guardian_evidence_note'), common['rounding_policy'],
            item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
            excluded, item.get('processing', common['processing']),
-           item.get('documents'),
+           checklist_documents(item.get('documents'), common, cat),
            item.get('deadline', common.get('deadline')),
            item.get('note', common.get('note')), item['source_label'], 'official_confirmed'))
 
