@@ -14,6 +14,26 @@ import FacilityList from './components/FacilityList'
 import FeeResult from './components/FeeResult'
 import './App.css'
 
+// 자연어 입력 및 지역 유효성 검증에 사용하는 부산 전체 행정구역
+const BUSAN_DISTRICTS = [
+  '중구',
+  '서구',
+  '동구',
+  '영도구',
+  '부산진구',
+  '동래구',
+  '남구',
+  '북구',
+  '해운대구',
+  '사하구',
+  '금정구',
+  '강서구',
+  '연제구',
+  '수영구',
+  '사상구',
+  '기장군',
+]
+
 // 오늘 날짜 반환
 function getToday() {
   const now = new Date()
@@ -424,10 +444,11 @@ function App() {
           )
         })
 
+        // 시설 등록 여부와 관계없이 유효한 부산 지역 유지
         setDistricts((previous) =>
           previous.filter(
             (district) =>
-              response.districts.includes(district)
+              BUSAN_DISTRICTS.includes(district)
           )
         )
 
@@ -550,10 +571,11 @@ function App() {
       return '이용 종목을 올바르게 선택해 주세요.'
     }
 
+    // DB에 시설이 없는 지역도 부산 행정구역이면 검색 허용
     if (
       districts.some(
         (district) =>
-          !options.districts.includes(district)
+          !BUSAN_DISTRICTS.includes(district)
       )
     ) {
       return '이용 지역을 올바르게 선택해 주세요.'
@@ -858,6 +880,7 @@ function App() {
       setCompareError(
         '선택한 시설을 찾을 수 없습니다.'
       )
+
       return
     }
 
@@ -870,6 +893,7 @@ function App() {
       setCompareError(
         '휴장 또는 이용시간 규정 충돌로 비교할 수 없는 시설입니다.'
       )
+
       return
     }
 
@@ -1103,6 +1127,7 @@ function App() {
       setCompareError(
         '비교할 시설을 하나 이상 선택해 주세요.'
       )
+
       return
     }
 
@@ -1145,6 +1170,7 @@ function App() {
       setCompareError(
         '선택한 모든 시설의 이용시간을 지정해 주세요.'
       )
+
       return
     }
 
@@ -1164,6 +1190,7 @@ function App() {
         setCompareError(
           '시설 상세정보를 확인한 뒤 비교해 주세요.'
         )
+
         return
       }
 
@@ -1173,6 +1200,7 @@ function App() {
         setCompareError(
           `${facility.name}은 휴장 또는 이용시간 규정 충돌로 비교할 수 없습니다.`
         )
+
         return
       }
 
@@ -1191,6 +1219,7 @@ function App() {
         setCompareError(
           `${facility.name}의 이용시간을 다시 선택해 주세요.`
         )
+
         return
       }
 
@@ -1205,6 +1234,7 @@ function App() {
         setCompareError(
           `${facility.name}의 선택 조명 사용 시간이 이용시간보다 깁니다.`
         )
+
         return
       }
     }
@@ -1330,7 +1360,10 @@ function App() {
 
       <main className="main-container">
         <NaturalLanguageInput
-          options={options}
+          options={{
+            ...options,
+            districts: BUSAN_DISTRICTS,
+          }}
           onApply={handleApplyAI}
           onDirectInput={handleDirectInput}
           optionsLoading={optionsLoading}
