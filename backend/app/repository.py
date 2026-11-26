@@ -30,6 +30,12 @@ DISCOUNT_ROUNDING = {
 }
 LIGHTING_PARTIAL_UNIT = {"exact_units": None, "round_up": "round_up", "proportional_if_exact": "prorate"}
 OPTION_PAYMENT = {"online_prepay": "prepay", "onsite": "onsite", None: None}
+# 사용자 취소가 아닌 환불 사유의 표시 이름. 모르는 사유는 다른 값처럼 추정하지 않고 읽을 때 알린다.
+REFUND_REASONS = {
+    "rain_same_day": "당일 우천",
+    "rain_unused": "우천으로 이용하지 못한 경우",
+    "force_majeure_or_city_event": "천재지변·부산시 행사 등으로 이용할 수 없는 경우",
+}
 ALL_DAYS = ["weekday", "weekend", "holiday"]
 
 
@@ -116,6 +122,8 @@ def _sqlite_facility(rows, facility: dict) -> dict:
                     if discount["discount_rounding_policy"] is not None
                     else None,
                     "required_documents": [discount["documents"]] if discount["documents"] else None,
+                    "application_deadline": discount["deadline"],
+                    "guardian_note": discount["guardian_evidence_note"],
                     "source_id": source_id,
                     **period,
                 }
@@ -311,11 +319,12 @@ def _optional_lighting_rule(option: dict, common: dict) -> dict:
 
 def _terms(rows, rule_set: dict) -> dict:
     reservation = next(iter(rows("SELECT * FROM reservation_rules WHERE rule_set_id = ?", rule_set["id"])), None)
-    refunds = rows(
-        "SELECT * FROM refund_rules WHERE rule_set_id = ? AND reason = 'user_cancel' ORDER BY days_before_min DESC",
+    every_refund = rows(
+        "SELECT * FROM refund_rules WHERE rule_set_id = ? ORDER BY reason != 'user_cancel', days_before_min DESC, id",
         rule_set["id"],
     )
-    terms = {"source_id": rule_set["source_id"]}
+    refunds = [refund for refund in every_refund if refund["reason"] == "user_cancel"]
+    terms = {"source_id": rule_set["source_id"], "refund_notes": [_refund_note(refund) for refund in every_refund]}
     if reservation is not None:
         terms["booking_open"] = (
             f"이용일 {reservation['online_open_days_before']}일 전부터 "
@@ -323,8 +332,22 @@ def _terms(rows, rule_set: dict) -> dict:
         )
         terms["cancel_deadline"] = f"이용일 {reservation['normal_cancel_online_min_days_before']}일 전까지 온라인 취소"
     if refunds:
-        terms["refund"] = ", ".join(f"{_refund_when(refund)} {refund['rate_percent']}%" for refund in refunds)
+        terms["refund"] = ", ".join(_refund_label(refund) for refund in refunds)
     return terms
+
+
+def _refund_label(refund: dict) -> str:
+    """환불 요약(terms.refund)과 사유별 안내(terms.refund_notes)가 같은 문구를 쓰도록 한 곳에서 만든다."""
+    if refund["reason"] == "user_cancel":
+        when = _refund_when(refund)
+    else:
+        when = _mapped(REFUND_REASONS, refund["reason"], "환불 사유")
+    return f"{when} {refund['rate_percent']}%"
+
+
+def _refund_note(refund: dict) -> str:
+    label = _refund_label(refund)
+    return f"{label}: {refund['condition']}" if refund["condition"] else label
 
 
 def _refund_when(refund: dict) -> str:
