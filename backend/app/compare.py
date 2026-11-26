@@ -30,8 +30,14 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
             if rule.discount_type == discount_type and rule.in_effect(conditions.date)
         ]
         for rule in matched:
-            if rule.required_documents is not None:
-                checklist.extend(doc for doc in rule.required_documents if doc not in checklist)
+            items = list(rule.required_documents or [])
+            # 사후 반환 감면은 신청 기한을 놓치면 반환받지 못하므로 서류와 함께 준비사항으로 안내한다.
+            if rule.application_deadline:
+                items.append(f"감면 신청 기한: {rule.application_deadline}")
+            if rule.guardian_note:
+                items.append(f"보호자 동반 시: {rule.guardian_note}")
+            if items:
+                checklist.extend(item for item in items if item not in checklist)
                 used.add(rule.source_id)
         # 증빙서류를 모르는 것과 필요 없는 것을 구분해, 빈 목록이 '서류 불필요'로 보이지 않게 한다.
         if not matched or any(rule.required_documents is None for rule in matched):
