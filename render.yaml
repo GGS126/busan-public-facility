@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: busan-public-facility
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: develop
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: "off"
+    healthCheckPath: /api/health
+    envVars:
+      - key: RULE_DATA_SOURCE
+        value: sqlite

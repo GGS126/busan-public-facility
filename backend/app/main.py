@@ -23,6 +23,7 @@ from app.models import (
 from app.options import build_options
 from app.query_parser import parse_query
 from app.repository import SQLITE_PATH, load_rule_data, load_sqlite_rule_data
+from app.static_site import mount_frontend
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,12 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     # 감면 유형 같은 입력값이 남지 않도록 요청 내용은 기록하지 않는다.
     logger.error("unexpected error: %s %s (%s)", request.method, request.url.path, type(exc).__name__)
     return error_response(500, "internal_error", "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
+
+
+@app.get("/api/health")
+def health() -> dict:
+    # Loading the application already validates the database. Do not call Gemini here.
+    return {"status": "ok", "facility_count": len(facilities)}
 
 
 @app.get("/api/options", response_model=OptionsResponse)
@@ -311,3 +318,8 @@ def facility(
             [{"type": "past_date", "loc": ("query", "date"), "msg": "지난 날짜는 선택할 수 없습니다."}]
         )
     return facility_detail(rules, day or today)
+
+
+# Production only: the start script supplies a built frontend directory.
+# API-only development and tests leave FRONTEND_DIST_PATH unset.
+mount_frontend(app)

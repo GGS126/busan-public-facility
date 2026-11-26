@@ -2,6 +2,8 @@
 
 요금 규칙 엔진(COMP-06)과 요금 계산·비교 API(API-06)입니다.
 
+배포 시에는 [배포 및 시연 안내](../docs/배포%20및%20시연%20안내.md)의 Docker 구성을 사용합니다. `scripts/start_service.py`가 DB를 재생성하고 프론트 빌드를 같은 주소에서 제공합니다. `/api/health`는 Gemini 호출 없이 서버 준비 상태를 확인합니다.
+
 서비스는 기본으로 팀 DB(`database/facilities.sqlite3`)의 실제 시설 규정을 읽습니다. 비교·선택지·시설 상세 API가 모두 같은 DB를 씁니다.
 
 `data/sample_rules.json`은 형식 확인용 **가상 데이터**입니다. 실제 시설 규정이 아니므로 시연이나 검증에 사용하지 않습니다. 기존 API 테스트는 이 데이터를 씁니다(`tests/conftest.py`).
