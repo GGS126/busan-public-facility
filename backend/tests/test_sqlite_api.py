@@ -126,7 +126,12 @@ def test_discount_checklist_includes_application_deadline(client):
     }
     checklist = client.post("/api/compare", json=body).json()["results"][0]["checklist"]
 
-    assert "감면 신청 기한: 경기장 이용시간 전 반환신청 게시판 접수" in checklist
+    
+    deadline = [
+        item for item in checklist
+        if item.startswith("감면 신청 기한: 경기장 이용시간 전 반환신청 게시판 접수")
+    ]
+    assert len(deadline) == 1
 
 
 def test_unknown_refund_reason_is_rejected_on_load():
