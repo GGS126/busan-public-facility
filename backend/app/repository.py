@@ -139,6 +139,7 @@ def _sqlite_facility(rows, facility: dict) -> dict:
                     "days_before_max": refund["days_before_max"],
                     "rate_percent": refund["rate_percent"],
                     "confirmed": refund["status"] == "confirmed",
+                    "cancel_allowed": refund["channel"] != "not_allowed",
                     "note": _refund_note(refund),
                     "source_id": source_id,
                     **period,

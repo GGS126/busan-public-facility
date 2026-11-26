@@ -156,16 +156,27 @@ def check_refund_case(case, facilities):
     result = compare_facility(facility, conditions)
 
     refund = result.cancel_refund
-    assert refund.status == "calculated", refund.review_items
+    # 환불률과 신청 방법은 모든 사례에서 공식 사례와 같아야 한다.
     assert refund.rate_percent == expected["refund_percent"]
+    assert refund.note
+    assert refund.source_id in {source.source_id for source in result.sources}
+    # 금액은 #32와 같은 기준으로만 확정한다. 우천·불가항력은 시설 확인, 당일 일반 취소는 취소 불가로 안내한다.
+    blocked = "facility_check_required" if reason != "user_cancel" else (
+        "cancel_not_allowed" if inputs["days_before"] == 0 else None
+    )
+    if blocked:
+        assert refund.status == "needs_review"
+        assert (refund.refund_amount, refund.cost_after_refund) == (None, None)
+        assert [item.code for item in refund.review_items] == [blocked]
+        return
+
+    assert refund.status == "calculated", refund.review_items
     if "initial_paid_won" in inputs:
         assert result.fee.online_prepay == inputs["initial_paid_won"]
     if "refund_won" in expected:
         assert refund.refund_amount == expected["refund_won"]
     if "final_cost_won" in expected:
         assert refund.cost_after_refund == expected["final_cost_won"]
-    assert refund.note
-    assert refund.source_id in {source.source_id for source in result.sources}
 
 
 def test_every_case_is_checked_or_listed():
@@ -474,7 +485,27 @@ def test_discount_refund_with_cancel_needs_review(facilities):
     )
 
     assert refund.status == "needs_review"
-    assert "감면 환급" in refund.review_items[0].reason
+    assert "감면" in refund.review_items[0].reason
+
+
+def test_discount_without_count_also_blocks_refund(facilities):
+    # 인원을 모르는 감면 선택(discount_types)도 #32처럼 감면이 있는 예약으로 보고 금액을 확정하지 않는다.
+    refund = cancel_refund(
+        facilities["busan_haeundae_arboretum_tennis"], "07:00", "09:00", {"cancel_date": WEEKDAY - timedelta(days=3)},
+        discount_types=["disabled"],
+    )
+
+    assert refund.status == "needs_review"
+    assert refund.refund_amount is None
+
+
+def test_weather_refund_needs_facility_check(facilities):
+    refund = cancel_refund(facilities["busan_samrak_ecopark_tennis"], "08:00", "10:00", {"reason": "rain_unused"})
+
+    assert refund.status == "needs_review"
+    assert (refund.rate_percent, refund.refund_amount, refund.days_before) == (100, None, None)
+    assert refund.review_items[0].code == "facility_check_required"
+    assert "시설" in refund.review_items[0].reason and "이용료반환신청 게시판" in refund.note
 
 
 def test_refund_with_fraction_of_won_needs_review(facilities):

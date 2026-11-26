@@ -328,7 +328,9 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | `cancellation.reason` | 아니요 | `user_cancel`(기본값), `rain_same_day`, `rain_unused`, `force_majeure_or_city_event` |
 | `cancellation.cancel_date` | `user_cancel`이면 예 | `YYYY-MM-DD`, 오늘보다 앞설 수 없고 이용일보다 늦을 수 없음. 우천·불가항력 사유에는 보내지 않음 |
 
-위반하면 `400 validation_error`와 `code: "invalid_cancellation"`으로 응답합니다. 사용자 취소는 이용일 며칠 전 취소인지(`days_before`, 당일 0)로 환불률을 고르고, 우천·불가항력은 사유로 고릅니다. 사유가 실제로 인정되는지는 시설이 판단하므로 `note`의 신청 방법과 함께 안내합니다.
+위반하면 `400 validation_error`와 `code: "invalid_cancellation"`으로 응답합니다. 사용자 취소는 이용일 며칠 전 취소인지(`days_before`, 당일 0)로 환불률을 고르고, 우천·불가항력은 사유로 고릅니다.
+
+금액을 확정하는 기준은 DB 조회 API의 `user_cancellation_refund`(#32)와 같습니다. 금액은 **일반 취소가 가능한 시점의 사용자 취소**이고, **감면 없이 온라인 선결제액만 있을 때**만 계산합니다. 우천·불가항력은 시설이 실제 사유를 확인해야 환불이 정해지므로 금액 없이 환불률과 `note`의 신청 방법만 안내합니다.
 
 ```json
 "cancel_refund": {
@@ -347,12 +349,14 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 항목 | 계산 |
 |---|---|
 | `refund_amount` | 온라인 선결제액(`fee.online_prepay`) × `rate_percent` ÷ 100 |
-| `cost_after_refund` | 온라인 선결제액 − `refund_amount`. 환불률 0%(예: 당일 취소 불가)이면 선결제액 전체 |
+| `cost_after_refund` | 온라인 선결제액 − `refund_amount` |
 
 다음 경우는 금액을 추정하지 않고 `status: "needs_review"`, 금액 `null`로 반환하며 `review_items[].target`은 `"refund"`입니다. 환불 규정을 찾았으면 `rate_percent`와 `note`는 그대로 보여 줍니다.
 
 | 경우 | `review_items[].code` |
 |---|---|
+| 우천·불가항력 사유. 시설이 사유를 확인해야 함 | `facility_check_required` |
+| 일반 취소를 받지 않는 시점(예: 해운대·삼락·화명 당일 취소, 환불률 0%) | `cancel_not_allowed` |
 | 시설에 환불 규정이 아예 없음(가상 데이터 등) | `rule_missing` |
 | 환불 규정은 있으나 이용일에 유효한 규정이 없음 | `rule_not_in_effect` |
 | 그 취소 시점·사유의 규정이 없음(예: 구덕 당일 사용자 취소) 또는 환불률 미확인 | `rule_missing` |
@@ -360,10 +364,10 @@ PR #12의 실제 테니스장 3곳 규정을 대조한 결과, 위 요청 형식
 | 이 조건으로 예약할 수 없음(휴장·회차 불일치 등, 이유는 `fee.review_items`) | `amount_unverified` |
 | 이용료가 확정되지 않음(확인 필요) | `amount_unverified` |
 | 현장 결제액·결제 방식 미확인 금액이 있음 | `amount_unverified` |
-| 사후 반환 감면을 함께 받음 | `amount_unverified` |
+| 감면을 선택함(`discounts`·`discount_types`) | `amount_unverified` |
 | 환불액이 원 단위로 나누어떨어지지 않음(끝전 처리 기준 미확인) | `amount_unverified` |
 
-공식 취소·환불 사례 9건(T09~T12, S05~S07, 구덕 1일 전 취소·당일 우천)을 이 계산으로 검증합니다.
+공식 취소·환불 사례 9건(T09~T12, S05~S07, 구덕 1일 전 취소·당일 우천)을 검증합니다. 사용자 취소 6건은 환불률·환불액·최종 부담액을, 당일 취소 불가 1건(T12)과 우천 2건(S07, 구덕 당일 우천)은 환불률·신청 방법과 금액 미확정을 확인합니다.
 
 ### 이용할 수 없는 시간
 

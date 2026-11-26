@@ -64,7 +64,7 @@ class Cancellation(BaseModel):
     """예약을 취소하거나 이용하지 못했을 때의 예상 환불을 묻는 입력.
 
     사용자 취소는 취소일로 환불률이 정해지므로 취소일이 필요하다. 우천·불가항력은 사유로 환불률이 정해지고,
-    실제로 그 사유가 인정되는지는 시설이 판단하므로 취소일을 받지 않는다.
+    실제로 그 사유가 인정되는지는 시설이 판단하므로 취소일을 받지 않고 금액도 확정하지 않는다.
     """
 
     reason: RefundReason = "user_cancel"
@@ -254,6 +254,8 @@ class RefundRule(EffectivePeriod):
     days_before_max: int | None = Field(default=None, ge=0)
     rate_percent: int | None = Field(default=None, ge=0, le=100)
     confirmed: bool
+    # False면 그 시점에는 일반 취소를 받지 않는다(예: 당일 취소 불가). 환불액을 확정하지 않는다.
+    cancel_allowed: bool = True
     # 신청 방법·환급 시기 안내(terms.refund_notes와 같은 문구)
     note: str
     source_id: str
@@ -522,6 +524,10 @@ class ReviewItem(BaseModel):
         "facility_closed",
         # 금액 계산에 필요한 결제액·끝전 처리 등이 확인되지 않음
         "amount_unverified",
+        # 우천·불가항력처럼 시설이 사유를 확인해야 환불이 정해짐
+        "facility_check_required",
+        # 그 시점에는 일반 취소를 받지 않음(예: 당일 취소 불가)
+        "cancel_not_allowed",
     ]
     target: Literal["base", "lighting", "discount", "checklist", "time", "refund"]
     reason: str
@@ -547,8 +553,9 @@ class FeeResult(BaseModel):
 class CancelRefund(BaseModel):
     """취소·미이용 시 예상 환불. fee.expected_refund(감면 환급)와는 별개다.
 
-    환불 대상은 온라인으로 먼저 낸 금액(fee.online_prepay)이다. 현장 결제·결제 방식 미확인 금액이나 감면 환급이
-    섞이면 실제로 돌려받는 범위를 확인할 수 없어 금액을 내지 않는다.
+    환불 대상은 온라인으로 먼저 낸 금액(fee.online_prepay)이다. 현장 결제·결제 방식 미확인 금액이나 감면이
+    섞이면 실제로 돌려받는 범위를 확인할 수 없어 금액을 내지 않는다. 우천·불가항력(시설 확인 필요)과 일반 취소를
+    받지 않는 시점도 금액을 내지 않고 환불률과 신청 방법(note)만 안내한다.
     """
 
     status: Literal["calculated", "needs_review"]
