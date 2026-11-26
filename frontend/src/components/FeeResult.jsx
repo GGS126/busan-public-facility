@@ -92,7 +92,7 @@ function FeeResult({ results, facilities = [] }) {
               >
                 <div className="comparison-header">
                   <span className="result-tag">
-                    {calculated ? '계산 완료' : '확인 필요'}
+                    {calculated ? '계산 완료' : fee.status === 'not_eligible' ? '이용조건 불충족' : '확인 필요'}
                   </span>
 
                   <h3>{result.facility_name}</h3>

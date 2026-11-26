@@ -254,6 +254,27 @@ def test_search_keeps_original_snapshot_during_db_update(sqlite_db, tmp_path, mo
         assert connection.execute("SELECT max_minutes FROM time_selection_policies LIMIT 1").fetchone()[0] == 1
 
 
+@pytest.mark.parametrize(("start", "end", "expected"), [
+    ("10:00", "11:30", "eligible"),
+    ("10:10", "11:40", "not_eligible"),
+    ("10:00", "12:00", "not_eligible"),
+])
+def test_flexible_search_checks_step_and_daily_limit(sqlite_db, tmp_path, monkeypatch, start, end, expected):
+    path = tmp_path / "time-policy.sqlite3"
+    path.write_bytes(sqlite_db.read_bytes())
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("""UPDATE time_selection_policies SET step_minutes=30, daily_limit_minutes=90
+            WHERE rule_set_id IN (SELECT id FROM rule_sets WHERE facility_id='busan_gudeok_stadium_tennis')""")
+    monkeypatch.setattr(main, "DB_PATH", path)
+    response = TestClient(main.app).post("/api/facilities/search", json={"conditions": {
+        "sport": "tennis", "districts": ["서구"], "date": "2026-11-30", "source": "direct",
+        "start_time": start, "end_time": end,
+    }})
+    assert response.status_code == 200
+    facility, = response.json()["results"]
+    assert facility["time_check"]["status"] == expected
+
+
 def test_sqlite_comparison_uses_only_common_engine(sqlite_db, gudeok, monkeypatch):
     from app.compare import compare_facility
     from app.repository import load_sqlite_rule_data
