@@ -921,32 +921,32 @@ with tempfile.TemporaryDirectory() as refund_tmp:
  from build_db import DEFAULT_FILES
  load.load_many(DEFAULT_FILES, refund_db)
  fid = 'busan_samrak_ecopark_soccer'
- expected = [('2026-11-07', 100, 20000), ('2026-11-08', 90, 18000),
-             ('2026-11-09', 80, 16000)]
+ expected = [('2026-12-07', 100, 20000), ('2026-12-08', 90, 18000),
+             ('2026-12-09', 80, 16000)]
  for cancel_date, rate, amount in expected:
-  result = q.quote(refund_db, fid, '2026-11-10', '08:00', '11:00', False,
+  result = q.quote(refund_db, fid, '2026-12-10', '08:00', '11:00', False,
                    cancellation_date=cancel_date)
   assert result['status'] == 'priced', result
-  assert result['refund_status'] == 'estimated', result
-  assert result['refund_rate_percent'] == rate, result
-  assert result['expected_refund'] == amount, result
-  assert result['net_cost_after_refund'] == 20000-amount, result
+  assert result['user_cancel_refund_status'] == 'estimated', result
+  assert result['user_cancel_refund_rate_percent'] == rate, result
+  assert result['user_cancel_refund_won'] == amount, result
+  assert result['user_cancel_net_cost_won'] == 20000-amount, result
  # 당일 취소 불가: 0원 환불 확정값으로 오해하지 않도록 계산하지 않는다.
- same_day = q.quote(refund_db, fid, '2026-11-10', '08:00', '11:00', False,
-                    cancellation_date='2026-11-10')
- assert same_day['refund_status']=='needs_review' and same_day['expected_refund'] is None, same_day
+ same_day = q.quote(refund_db, fid, '2026-12-10', '08:00', '11:00', False,
+                    cancellation_date='2026-12-10')
+ assert same_day['user_cancel_refund_status']=='needs_review' and same_day['user_cancel_refund_won'] is None, same_day
  # 취소일이 없으면 기존 요금 계산만 제공한다.
- no_cancel = q.quote(refund_db, fid, '2026-11-10', '08:00', '11:00', False)
- assert no_cancel['refund_status']=='not_requested' and no_cancel['expected_refund'] is None
+ no_cancel = q.quote(refund_db, fid, '2026-12-10', '08:00', '11:00', False)
+ assert no_cancel['user_cancel_refund_status']=='not_requested' and no_cancel['user_cancel_refund_won'] is None
  # 현장 옵션 결제액이 있으면 전체 환불액을 확정하지 않는다.
- on_site = q.quote(refund_db, 'busan_haeundae_arboretum_soccer', '2026-11-10',
-                   '19:00', '22:00', False, 60, cancellation_date='2026-11-07')
+ on_site = q.quote(refund_db, 'busan_haeundae_arboretum_soccer', '2026-12-10',
+                   '19:00', '22:00', False, 60, cancellation_date='2026-12-07')
  assert on_site['status']=='priced' and on_site['onsite_payment']==10000, on_site
- assert on_site['refund_status']=='needs_review' and on_site['expected_refund'] is None, on_site
+ assert on_site['user_cancel_refund_status']=='needs_review' and on_site['user_cancel_refund_won'] is None, on_site
  # 결제 방식이 확인되지 않은 시설도 예상 환불액 산정 중단.
- unverified = q.quote(refund_db, 'busan_gudeok_stadium_tennis', '2026-11-10',
-                      '18:00','20:00',False,cancellation_date='2026-11-09')
- assert unverified['refund_status']=='needs_review' and unverified['expected_refund'] is None, unverified
+ unverified = q.quote(refund_db, 'busan_gudeok_stadium_tennis', '2026-12-10',
+                      '18:00','20:00',False,cancellation_date='2026-12-09')
+ assert unverified['user_cancel_refund_status']=='needs_review' and unverified['user_cancel_refund_won'] is None, unverified
  print('PASS: 직접 취소 100/90/80% 환불, 당일 취소 불가·미입력·현장결제·미확인 요금 보호')
 
 
@@ -956,7 +956,7 @@ with tempfile.TemporaryDirectory() as refund_tmp:
 with tempfile.TemporaryDirectory() as official_refund_tmp:
  official_db = pathlib.Path(official_refund_tmp) / 'official_refund.sqlite3'
  load.load_many(DEFAULT_FILES, official_db)
- use_day='2026-11-10'
+ use_day='2026-12-10'
  from datetime import date as _date, timedelta as _timedelta
  counts={'cancel_amount':0, 'cancel_forbidden':0, 'cancel_rule_only':0, 'weather_rule_only':0}
  for filename in ('test_cases.json','samrak_test_cases.json','gudeok_test_cases.json'):
@@ -992,9 +992,9 @@ with tempfile.TemporaryDirectory() as official_refund_tmp:
                'onsite_payment':0,'payment_unverified_won':0,
                'online_prepay_won':paid}
    res=q.user_cancellation_refund(official_db,fid,use_day,canceled.isoformat(),given_paid)
-   assert res['refund_status']=='estimated' and res['refund_rate_percent']==exp['refund_percent'],(case['id'],res)
-   assert res['expected_refund']==exp['refund_won'],(case['id'],res)
-   assert res['net_cost_after_refund']==exp['final_cost_won'],(case['id'],res)
+   assert res['user_cancel_refund_status']=='estimated' and res['user_cancel_refund_rate_percent']==exp['refund_percent'],(case['id'],res)
+   assert res['user_cancel_refund_won']==exp['refund_won'],(case['id'],res)
+   assert res['user_cancel_net_cost_won']==exp['final_cost_won'],(case['id'],res)
    counts['cancel_amount']+=1
  assert counts=={'cancel_amount':5,'cancel_forbidden':1,'cancel_rule_only':1,'weather_rule_only':2},counts
  print('PASS: 공식 환불 사례 9건(직접 취소 금액 5건·당일 불가 1건·구덕 규정 1건·우천 규정 2건)')
@@ -1041,7 +1041,7 @@ from unittest.mock import patch as _mock_patch
 with tempfile.TemporaryDirectory() as unknown_tmp:
  unknown_db=pathlib.Path(unknown_tmp)/'unknown.sqlite3'
  load.load_many(DEFAULT_FILES, unknown_db)
- original_rules=q.refund_rules(unknown_db,'busan_samrak_ecopark_soccer','2026-11-10')
+ original_rules=q.refund_rules(unknown_db,'busan_samrak_ecopark_soccer','2026-12-10')
  altered=[dict(r) for r in original_rules]
  for r in altered:
   if r['reason']=='user_cancel' and r['days_before_min']==2:
@@ -1050,11 +1050,11 @@ with tempfile.TemporaryDirectory() as unknown_tmp:
   sample={'status':'priced','payment_status':'confirmed','onsite_payment':0,
           'payment_unverified_won':0,'online_prepay_won':20000}
   res=q.user_cancellation_refund(unknown_db,'busan_samrak_ecopark_soccer',
-                                 '2026-11-10','2026-11-08',sample)
-  assert res['refund_status']=='needs_review' and res['expected_refund'] is None,res
+                                 '2026-12-10','2026-12-08',sample)
+  assert res['user_cancel_refund_status']=='needs_review' and res['user_cancel_refund_won'] is None,res
  print('PASS: 미확인 환불 규정으로는 금액을 산정하지 않음')
 
-# 2026-11-25 정부 공식 안내에서 추가로 확인한 감면 서류 18건의 재적재/출처/결제 분리 검증.
+# 2026-12-25 정부 공식 안내에서 추가로 확인한 감면 서류 18건의 재적재/출처/결제 분리 검증.
 with tempfile.TemporaryDirectory() as supplement_tmp:
  supplement_db=pathlib.Path(supplement_tmp)/'supplement.sqlite3'
  load.load_many(DEFAULT_FILES,supplement_db)
@@ -1076,6 +1076,16 @@ with tempfile.TemporaryDirectory() as supplement_tmp:
    elif cat=='children_group':
     assert docs is None,(fid,cat,docs)
   assert con.execute("SELECT COUNT(*) FROM facility_discounts WHERE documents IS NULL").fetchone()[0]==5
+  # 미확인 증빙 5건은 계속 NULL이어야 하며 비교 API에서 신청 안내는 보여야 한다.
+  for fid, category, docs, deadline in con.execute('''
+      SELECT f.id, d.category_id, d.documents, d.deadline
+      FROM facility_discounts d JOIN rule_sets r ON d.rule_set_id=r.id
+      JOIN facilities f ON f.id=r.facility_id
+      WHERE d.category_id='children_group'
+  '''):
+   assert docs is None, (fid, category, docs)
+   assert deadline and '신청 절차:' in deadline and '이름을 모두 기재' in deadline, (fid, deadline)
+
   assert con.execute("SELECT COUNT(*) FROM facility_options WHERE payment_type IS NULL").fetchone()[0]==2
   assert con.execute("SELECT COUNT(*) FROM sources WHERE license IS NULL").fetchone()[0]==8
   # 낙동강관리본부 공개 요금표와 이용취소 환불률 전수 비교.
@@ -1094,7 +1104,7 @@ with tempfile.TemporaryDirectory() as supplement_tmp:
  print('PASS: 공식 법령 근거 추가 서류 18건, 감면 81/미확인 5건·예약/환불 4시설 요금·취소율·옵션 결제 미확인 2건 유지')
 
 # 8개 시설을 동일 이용일로 실제 견적·취소 예상액까지 한 번 더 계산한다.
-# 주중 2026-11-25, 이틀 전 일반 취소(규정이 확정된 결제만)를 기준으로 비교.
+# 주중 2026-12-25, 이틀 전 일반 취소(규정이 확정된 결제만)를 기준으로 비교.
 with tempfile.TemporaryDirectory() as cross_quote_tmp:
  cross_db = pathlib.Path(cross_quote_tmp) / 'quotes.sqlite3'
  load.load_many(DEFAULT_FILES, cross_db)
@@ -1109,10 +1119,10 @@ with tempfile.TemporaryDirectory() as cross_quote_tmp:
   ('busan_hwamyeong_ecopark_night_soccer','18:00','21:00',50000,45000),
  ]
  for fid,start,end,total,refund in cross_cases:
-  r=q.quote(cross_db,fid,'2026-11-25',start,end,False,cancellation_date='2026-11-23')
+  r=q.quote(cross_db,fid,'2026-12-25',start,end,False,cancellation_date='2026-12-23')
   assert r['status']=='priced' and r['total_won']==total,(fid,r)
-  assert r['refund_status']=='estimated' and r['expected_refund']==refund,(fid,r)
-  assert r['net_cost_after_refund']==total-refund,(fid,r)
+  assert r['user_cancel_refund_status']=='estimated' and r['user_cancel_refund_won']==refund,(fid,r)
+  assert r['user_cancel_net_cost_won']==total-refund,(fid,r)
  print('PASS: 시설 8곳 평일 요금·2일 전 직접 취소 예상액 실계산 전수 확인')
 
 # 반환신청서 작성 및 대상자 이름 기재를 조회 결과에서 유실하지 않는지 확인한다.
@@ -1123,23 +1133,28 @@ with tempfile.TemporaryDirectory() as instructions_tmp:
   rule=q.discounts(instructions_db,fid,'2026-11-25')[0]
   assert '반환신청서' in rule['note'],(fid,rule)
   assert '감면 대상 이용자 이름' in rule['note'],(fid,rule)
-  assert '감면 대상 이용자 이름' in rule['application_note'],(fid,rule)
+  assert '감면 대상 이용자 이름' in rule['note'],(fid,rule)
  print('PASS: 해운대 테니스·축구 반환신청서/대상자 이름 안내 조회 유지')
 
-# 비교 API 입력용 SQLite 문서 필드에 신청서 및 이름 기재가 포함되는지 확인.
+# 유형별 서류를 유지하고 공통 신청 안내는 같은 시설에서 단일 체크리스트 항목으로 병합한다.
 with tempfile.TemporaryDirectory() as checklist_tmp:
  checklist_db=pathlib.Path(checklist_tmp)/'checklist.sqlite3'
  load.load_many(DEFAULT_FILES,checklist_db)
  with closing(sqlite3.connect(checklist_db)) as c:
-  rows=c.execute("""SELECT r.facility_id,d.category_id,d.documents
+  rows=c.execute("""SELECT r.facility_id,d.category_id,d.documents,d.deadline
     FROM facility_discounts d JOIN rule_sets r ON d.rule_set_id=r.id""").fetchall()
   assert len(rows)==86
-  for fid,cat,docs in rows:
-   if docs is None: continue  # 증빙서류 미확인 상태 보존
+  deadlines_by_facility={}
+  for fid,cat,docs,deadline in rows:
    if fid.startswith(('busan_samrak_ecopark','busan_hwamyeong_ecopark')):
-    assert '반환신청 게시판' in docs and '이름을 모두 기재' in docs,(fid,cat,docs)
+    assert '반환신청 게시판' in deadline and '이름을 모두 기재' in deadline,(fid,cat,deadline)
    if fid.startswith('busan_haeundae_arboretum'):
-    assert '반환신청서' in docs and '이름을 모두 기재' in docs,(fid,cat,docs)
+    assert '반환신청서' in deadline and '이름을 모두 기재' in deadline,(fid,cat,deadline)
+   if fid.startswith(('busan_samrak_ecopark','busan_hwamyeong_ecopark','busan_haeundae_arboretum')):
+    deadlines_by_facility.setdefault(fid,set()).add(deadline)
+   if docs is None: continue  # 증빙서류 미확인 상태 보존
    if cat!='multi_child':
     assert '다자녀인 동일 가족' not in docs,(fid,cat,docs)
- print('PASS: 비교 API가 읽는 DB 서류 필드에서 유형별 증빙·신청서·대상자 이름 안내 동시 확인')
+   assert '이름을 모두 기재' not in docs,(fid,cat,docs)
+  assert all(len(deadlines)==1 for deadlines in deadlines_by_facility.values()), deadlines_by_facility
+ print('PASS: 공통 신청 절차는 시설별 동일한 기한 안내로 1회 표시 가능, 증빙서류는 유형별 유지')

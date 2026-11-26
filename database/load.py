@@ -41,18 +41,43 @@ GROUP_TO_CODES = {
 }
 
 def checklist_documents(documents, common, category):
-    """기존 비교 API의 required_documents에 유형별 서류와 공통 신청 절차 제공.
+    """유형별 확인된 증빙과 다자녀 전용 안내만 결합한다.
 
-    원본 JSON에서 서류/신청절차를 구분하며, 증빙서류 미확인은 NULL로 보존한다.
+    공통 신청 절차는 유형별 documents에 반복해서 붙이지 않는다.
+    미확인 자료는 계속 NULL로 저장해 비교 API의 확인 필요 경고를 유지한다.
     """
     if documents is None:
         return None
-    guidance = common.get('checklist_guidance')
-    if not guidance:
-        return documents
-    if category != 'multi_child':
-        guidance = guidance.replace(' 다자녀인 동일 가족은 증빙자료 1부 제출 가능.', '')
-    return f'{documents} / {guidance}'
+    parts = [documents]
+    if category == 'multi_child' and common.get('multi_child_guidance'):
+        parts.append(common['multi_child_guidance'])
+    return ' / '.join(parts)
+
+
+def checklist_deadline(deadline, documents, common):
+    """기존 비교 API와 호환되는 공통 신청 절차 표시.
+
+    백엔드는 note를 읽지 않고 deadline을 체크리스트에 추가하며, 동일한
+    체크리스트 문자열은 한 번만 남긴다. 동일 시설·기간의 모든 감면 유형에
+    같은 안내를 제공해 다중 유형 선택 시 공통 절차의 중복을 피한다.
+    단, deadline에 절차가 함께 들어가는 호환 처리라는 한계가 있다.
+    """
+    guide = common.get('checklist_guidance')
+    if not guide:
+        return deadline
+    if deadline and guide in deadline:
+        return deadline
+    return ' / '.join(part for part in (deadline, f'신청 절차: {guide}') if part)
+
+
+def validate_checklist_guidance(common):
+    for key in ('checklist_guidance', 'multi_child_guidance'):
+        value = common.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f'discount_common.{key}는 비어 있지 않은 문자열 또는 null')
+    if common.get('checklist_guidance') and '다자녀인 동일 가족은 증빙자료 1부 제출 가능' in common['checklist_guidance']:
+        raise ValueError('다자녀 전용 안내는 multi_child_guidance로 분리해야 합니다')
+
 
 def validate_options(options):
     if not isinstance(options,list): raise ValueError('options는 목록이어야 함')
@@ -230,9 +255,7 @@ def validate(d):
             if type(slot[k]) is not int or slot[k]<0: raise ValueError(f'회차 {slot["no"]}: {k} 요금 오류')
     validate_options(d['options'])
     common=d['discount_common']
-    guidance=common.get('checklist_guidance')
-    if guidance is not None and (not isinstance(guidance,str) or not guidance.strip()):
-        raise ValueError('discount_common.checklist_guidance는 비어 있지 않은 문자열 또는 null')
+    validate_checklist_guidance(common)
     validate_discount_rounding(common)
     if type(common.get('percent')) is not int or not 0<=common['percent']<=100: raise ValueError('감면율 오류')
     codes=[]
@@ -347,16 +370,10 @@ def load_fixed(data_path, db_path):
             c=d['discount_common']
             for item in d['discounts']:
                 category_documents = item.get('documents_by_category')
-                if category_documents is not None:
-                    expected_categories = set(GROUP_TO_CODES[item['id']])
-                    if (not isinstance(category_documents, dict)
-                            or set(category_documents) != expected_categories
-                            or any(doc is not None and not isinstance(doc, str)
-                                   for doc in category_documents.values())):
-                        raise ValueError(f'감면 대상 {item["id"]}: 유형별 증빙서류 매핑 오류')
                 for code in GROUP_TO_CODES[item['id']]:
                     documents = (category_documents[code] if category_documents is not None
                                  else item.get('documents'))
+                    deadline = checklist_deadline(c['deadline'], documents, c)
                     documents = checklist_documents(documents, c, code)
                     con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
@@ -364,7 +381,7 @@ def load_fixed(data_path, db_path):
                          processing,documents,deadline,note,original_group_label)
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),item.get('guardian_max_count'),item.get('guardian_condition'),item.get('guardian_evidence_note'),c['rounding_policy'],c['basis'],c['applies_to'],c['excluded_from'],
-                         c['processing'],documents,c['deadline'],c['note'],item['category']))
+                         c['processing'],documents,deadline,c['note'],item['category']))
             insert_refunds_and_reservation(con, rid, d)
     finally:
         con.close()
@@ -416,9 +433,7 @@ def validate_duration_discounts(d):
     if not isinstance(common, dict):
         raise ValueError('discount_common: 감면 규정 데이터 누락')
     validate_discount_rounding(common)
-    guidance=common.get('checklist_guidance')
-    if guidance is not None and (not isinstance(guidance,str) or not guidance.strip()):
-        raise ValueError('discount_common.checklist_guidance는 비어 있지 않은 문자열 또는 null')
+    validate_checklist_guidance(common)
     for field in ('basis', 'applies_to', 'processing'):
         if not isinstance(common.get(field), str) or not common[field].strip():
             raise ValueError(f'discount_common.{field} 누락')
@@ -463,7 +478,8 @@ def insert_duration_discounts(con, rid, d):
            item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
            excluded, item.get('processing', common['processing']),
            checklist_documents(item.get('documents'), common, cat),
-           item.get('deadline', common.get('deadline')),
+           checklist_deadline(item.get('deadline', common.get('deadline')),
+                              item.get('documents'), common),
            item.get('note', common.get('note')), item['source_label'], 'official_confirmed'))
 
 

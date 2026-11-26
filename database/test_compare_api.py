@@ -89,3 +89,79 @@ def test_discount_guidance_in_compare_response(
     if category != "multi_child":
         assert "가족사랑카드" not in checklist, checklist
         assert "다자녀인 동일 가족" not in checklist, checklist
+
+
+@pytest.mark.parametrize(
+    'facility_id,start,end',
+    [
+        ('busan_samrak_ecopark_tennis', '08:00', '10:00'),
+        ('busan_hwamyeong_ecopark_tennis', '08:00', '10:00'),
+        ('busan_samrak_ecopark_soccer', '08:00', '11:00'),
+        ('busan_hwamyeong_ecopark_soccer', '08:00', '11:00'),
+        ('busan_hwamyeong_ecopark_night_soccer', '08:00', '11:00'),
+    ],
+)
+def test_children_group_unknown_documents_keep_warning_and_show_guidance(client, facility_id, start, end):
+    sport = 'soccer' if 'soccer' in facility_id else 'tennis'
+    response = client.post(
+        '/api/compare',
+        json={
+            'facility_ids': [facility_id],
+            'conditions': {
+                'sport': sport,
+                'date': '2026-12-05',
+                'start_time': start,
+                'end_time': end,
+                'discount_types': ['children_group'],
+                'headcount': 10,
+                'source': 'direct',
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    [result] = response.json()['results']
+    checklist = ' '.join(result['checklist'])
+    assert '감면 대상 이용자 이름을 모두 기재' in checklist, checklist
+    assert '신청 절차:' in checklist, checklist
+    reviews = result['checklist_review_items']
+    assert any(item['code'] == 'rule_missing' and '증빙서류' in item['reason'] for item in reviews), reviews
+
+
+def test_multiple_discounts_show_common_guidance_only_once(client):
+    """같은 시설의 유형별 서류는 보존하며 공통 신청 안내는 단 1회 노출."""
+    response = client.post(
+        '/api/compare',
+        json={
+            'facility_ids': ['busan_haeundae_arboretum_tennis'],
+            'conditions': {
+                'sport': 'tennis', 'date': '2026-12-05',
+                'start_time': '07:00', 'end_time': '09:00',
+                'discount_types': ['disabled', 'low_income'],
+                'headcount': 2, 'source': 'direct',
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    checklist = response.json()['results'][0]['checklist']
+    assert sum('감면 대상 이용자 이름을 모두 기재' in item for item in checklist) == 1, checklist
+    assert any('장애인등록증' in item for item in checklist), checklist
+    assert any('수급자' in item for item in checklist), checklist
+
+
+def test_multiple_discounts_keep_child_group_warning_and_dedupe(client):
+    response = client.post(
+        '/api/compare',
+        json={
+            'facility_ids': ['busan_samrak_ecopark_soccer'],
+            'conditions': {
+                'sport': 'soccer', 'date': '2026-12-05',
+                'start_time': '08:00', 'end_time': '11:00',
+                'discount_types': ['children_group', 'disabled'],
+                'headcount': 10, 'source': 'direct',
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()['results'][0]
+    assert sum('감면 대상 이용자 이름을 모두 기재' in item for item in result['checklist']) == 1, result
+    assert any('children_group' in item['reason'] for item in result['checklist_review_items']), result
