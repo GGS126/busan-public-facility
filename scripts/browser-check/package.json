@@ -1,0 +1,7 @@
+{
+  "name": "facility-browser-check",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Real browser comparison timing and failure recovery checks",
+  "dependencies": { "playwright": "1.65.1" }
+}
