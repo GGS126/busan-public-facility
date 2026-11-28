@@ -11,14 +11,14 @@ except ImportError:
     import load as _load
 ROOT=Path(__file__).resolve().parent
 
-def normalize_use_date(value):
+def normalize_use_date(value, field="이용일"):
     """허용되는 날짜 입력을 SQLite 비교용 YYYY-MM-DD 형식으로 통일한다."""
     if not isinstance(value, str):
-        raise ValueError('이용일은 날짜 문자열이어야 합니다')
+        raise ValueError(f'{field}은 날짜 문자열이어야 합니다')
     try:
         return dt.date.fromisoformat(value).isoformat()
     except ValueError as exc:
-        raise ValueError('이용일 날짜 형식 오류') from exc
+        raise ValueError(f'{field} 날짜 형식 오류') from exc
 
 @contextmanager
 def read_snapshot(db):
@@ -282,7 +282,7 @@ def discounts(db,facility_id,use_date):
     return fetch(db,'''SELECT category_id,category_name,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,
     CASE WHEN discount_rounding_policy IS NULL THEN 'unverified' ELSE 'confirmed' END AS rounding_status,
     basis,applies_to,excluded_from,
-    processing,deadline,documents,source_url,checked_on
+    processing,deadline,documents,note,source_url,checked_on
     FROM v_facility_discounts WHERE facility_id=? AND ? BETWEEN effective_from AND effective_to
     ORDER BY category_name''',(facility_id,use_date))
 
@@ -410,8 +410,8 @@ def discount_selection_review(db, facility_id, use_date, category_ids):
         'discount_won': None,
         'total_won': None,
         'payment_due': None,
-        'expected_refund': None,
-        'net_cost_after_refund': None,
+        'user_cancel_refund_won': None,
+        'user_cancel_net_cost_won': None,
         'review_items': [{
             'code': 'discount_stacking_unverified',
             'target': 'discount',
@@ -426,6 +426,71 @@ def refund_rules(db,facility_id,use_date):
     return fetch(db,'''SELECT rr.reason,rr.days_before_min,rr.days_before_max,rr.rate_percent,
     rr.channel,rr.condition,rr.status FROM refund_rules rr JOIN rule_sets r ON r.id=rr.rule_set_id
     WHERE r.facility_id=? AND ? BETWEEN r.effective_from AND r.effective_to''',(facility_id,use_date))
+
+def validate_cancellation_date(use_date, cancellation_date):
+    """#33과 동일하게 지난 취소일 및 이용일 이후 취소일을 거부한다."""
+    used = dt.date.fromisoformat(normalize_use_date(use_date))
+    canceled = dt.date.fromisoformat(normalize_use_date(cancellation_date, '취소일'))
+    if canceled < dt.date.today():
+        raise ValueError('취소일은 오늘보다 이전일 수 없습니다')
+    if canceled > used:
+        raise ValueError('취소일은 이용일 이후일 수 없습니다')
+    return used, canceled
+
+
+def user_cancellation_refund(db, facility_id, use_date, cancellation_date, quote_result,
+                             discount_category_ids=None):
+    """DB 단독 검증용 직접 취소 계산. 비교 API 환불 금액의 기준은 백엔드 #33.
+
+    /api/compare는 backend/app/refund.py의 cancel_refund를 사용하므로
+    이 함수 결과를 API의 fee.expected_refund(감면 환급)에 병합하지 않는다.
+    우천·불가항력은 이 함수의 대상이 아니며, 확정 금액을 내지 않는다.
+    """
+    used, canceled = validate_cancellation_date(use_date, cancellation_date)
+    result = {'user_cancel_refund_status': 'needs_review', 'user_cancel_refund_won': None,
+              'user_cancel_net_cost_won': None, 'user_cancel_refund_rate_percent': None,
+              'user_cancel_refund_condition': None, 'user_cancel_refund_channel': None,
+              'user_cancel_refund_reason': None}
+    if quote_result.get('status') != 'priced':
+        result['user_cancel_refund_reason'] = '이용료가 확정되지 않아 환불액을 계산할 수 없습니다.'
+        return result
+    if discount_category_ids:
+        result['user_cancel_refund_reason'] = '감면 금액의 실제 결제·반환 기준이 확인되지 않았습니다.'
+        return result
+    if (quote_result.get('payment_status') != 'confirmed'
+        or quote_result.get('onsite_payment') != 0
+        or quote_result.get('payment_unverified_won') != 0):
+        result['user_cancel_refund_reason'] = '현장 결제액 또는 결제 방식 미확인 금액의 환불 기준이 확인되지 않았습니다.'
+        return result
+    rules = [r for r in refund_rules(db,facility_id,use_date) if r['reason']=='user_cancel']
+    days = (used-canceled).days
+    matches = [r for r in rules
+               if (r['days_before_min'] is None or days >= r['days_before_min'])
+               and (r['days_before_max'] is None or days <= r['days_before_max'])]
+    if (len(matches)!=1 or matches[0]['rate_percent'] is None
+        or matches[0]['status'] != 'confirmed'):
+        result['user_cancel_refund_reason'] = '취소 시점에 적용되는 확정 환불 규정이 없습니다.'
+        return result
+    rule=matches[0]
+    result['user_cancel_refund_rate_percent']=rule['rate_percent']
+    result['user_cancel_refund_condition']=rule['condition']
+    result['user_cancel_refund_channel']=rule['channel']
+    if rule['channel']=='not_allowed':
+        result['user_cancel_refund_reason']='해당 날짜의 일반 취소는 허용되지 않습니다.'
+        return result
+    paid=quote_result['online_prepay_won']
+    if paid is None or type(paid) is not int or paid < 0:
+        result['user_cancel_refund_reason']='실제 선결제 금액이 확인되지 않았습니다.'
+        return result
+    numerator=paid*rule['rate_percent']
+    if numerator % 100:
+        result['user_cancel_refund_reason']='원 미만 금액 처리 기준이 확인되지 않았습니다.'
+        return result
+    expected=numerator//100
+    result.update(user_cancel_refund_status='estimated',user_cancel_refund_won=expected,
+                  user_cancel_net_cost_won=paid-expected,user_cancel_refund_reason=None)
+    return result
+
 
 def facility_options(db,facility_id,use_date):
     use_date=normalize_use_date(use_date)
@@ -516,9 +581,12 @@ def _included_lighting_matches(start, end, rule):
     return _overlap_minutes(start, end, rule_start, rule_end)
 
 
-def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0,discount_category_ids=None):
+def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,optional_lighting_minutes=0,discount_category_ids=None,cancellation_date=None):
     # 동일 요청 형식으로 고정 회차와 자유 선택의 기본요금 및 조명료를 계산.
     use_date=normalize_use_date(use_date)
+    # #33은 요금/예약 가능성 계산에 앞서 취소일 입력을 검사한다.
+    if cancellation_date is not None:
+        validate_cancellation_date(use_date, cancellation_date)
     if type(is_weekend_or_holiday) is not bool: raise ValueError('주말·공휴일 판정은 bool이어야 합니다')
     if type(optional_lighting_minutes) is not int or optional_lighting_minutes<0: raise ValueError('선택 조명 이용시간 오류')
     parse = _clock_minutes
@@ -544,7 +612,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
                 'start_time':start_time,'end_time':end_time,
                 'duration_minutes':duration,
                 'base_fee_won':None,'lighting_fee_won':None,'total_won':None,
-                'payment_due':None,'expected_refund':None,'net_cost_after_refund':None,
+                'payment_due':None,'user_cancel_refund_won':None,'user_cancel_net_cost_won':None,
                 'review_items':[{
                     'code':'rule_missing','target':'base',
                     'reason':'해당 이용시간의 공식 기본요금 규정이 확인되지 않아 요금을 계산할 수 없습니다. 이용 가능 여부도 공식 예약 규정으로 확인해야 합니다.',
@@ -652,7 +720,7 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
 
     # 단일 감면은 이 함수에서 적용하지 않는다: 반환 금액은 감면 전 금액이다.
     single_discount_selected=bool(discount_category_ids)
-    return {'status':'priced','facility_id':facility_id,'date':use_date,'selection_type':typ,
+    result = {'status':'priced','facility_id':facility_id,'date':use_date,'selection_type':typ,
             'start_time':start_time,'end_time':end_time,'duration_minutes':duration,
             'price_rule_id':p['price_rule_id'],'base_fee_won':p['base_fee_won'],
             'lighting_minutes':light_minutes,'lighting_fee_won':light,
@@ -670,6 +738,13 @@ def quote(db,facility_id,use_date,start_time,end_time,is_weekend_or_holiday,opti
             'review_items':review_items,
             'booking_availability_verified':False,
             'discount_application_status':'not_calculated' if single_discount_selected else 'not_requested'}
+    if cancellation_date is not None:
+        result.update(user_cancellation_refund(db,facility_id,use_date,cancellation_date,
+                                               result,discount_category_ids))
+    else:
+        result.update(user_cancel_refund_status='not_requested', user_cancel_refund_won=None,
+                      user_cancel_net_cost_won=None)
+    return result
 
 duration_quote=quote
 if __name__=='__main__':
@@ -685,6 +760,7 @@ if __name__=='__main__':
     parser.add_argument('--end-time')
     parser.add_argument('--optional-lighting-minutes', type=int, default=0)
     parser.add_argument('--discount-categories', help='감면 대상 ID를 쉼표로 구분')
+    parser.add_argument('--cancellation-date', help='사용자 직접 취소일 YYYY-MM-DD (우천·천재지변 제외)')
     parser.add_argument('--holiday-codes', help='이용일에 해당하는 명절 코드. 쉼표로 구분; 빈 문자열은 명절 아님을 뜻함')
     parser.add_argument('--base-fee-won', type=int, help='감면 계산 대상 코트 기본요금')
     parser.add_argument('--participant-count', type=int, help='전체 이용 인원')
@@ -745,5 +821,5 @@ if __name__=='__main__':
                 parser.error('--start-time, --end-time 필요')
             selected = a.discount_categories.split(',') if a.discount_categories else None
             result = quote(a.db, a.facility, a.date, a.start_time, a.end_time,
-                           is_weekend, a.optional_lighting_minutes, selected)
+                           is_weekend, a.optional_lighting_minutes, selected, a.cancellation_date)
     print(json.dumps(result, ensure_ascii=False, indent=2))
