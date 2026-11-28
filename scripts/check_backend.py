@@ -23,13 +23,14 @@ def main() -> int:
         (ROOT, ["database/audit_checks.py"]),
         (ROOT / "backend", ["-m", "pytest", "-q"]),
     ]
-    # PR #32 adds database/test_*.py. Include these once present in the checked-out code.
+    # Include database regression tests present in this checkout.
     database_tests = sorted((ROOT / "database").glob("test_*.py"))
     if database_tests:
         checks.append((ROOT, ["-m", "pytest", "-q", *[str(path.relative_to(ROOT)) for path in database_tests]]))
 
+    print("검사 전 백엔드·SQLite 뷰어를 종료하세요. 실제 규정 DB를 재생성합니다.", flush=True)
     for cwd, args in checks:
-        print(f"\n[{cwd.relative_to(ROOT) or '.'}] python {' '.join(args)}", flush=True)
+        print(f"\n[{cwd.relative_to(ROOT)}] python {' '.join(args)}", flush=True)
         result = subprocess.run([sys.executable, *args], cwd=cwd, env=env, check=False)
         if result.returncode:
             return result.returncode
