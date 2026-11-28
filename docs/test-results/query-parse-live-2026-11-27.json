@@ -1,0 +1,348 @@
+{
+  "mode": "live_gemini",
+  "created_at": "2026-11-27T00:20:33.542859+09:00",
+  "commit": "5bc9bc6893634c72afa7bc661b76a247a9e98628",
+  "working_tree_dirty": false,
+  "python": "3.13.17",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "model": "gemini-3.5-flash-lite",
+  "planned": 18,
+  "executed": 18,
+  "passed": 18,
+  "complete": true,
+  "field_scores": {
+    "sport": {
+      "matched": 16,
+      "total": 16,
+      "rate": 1.0
+    },
+    "districts": {
+      "matched": 16,
+      "total": 16,
+      "rate": 1.0
+    },
+    "date": {
+      "matched": 16,
+      "total": 16,
+      "rate": 1.0
+    },
+    "start_time": {
+      "matched": 16,
+      "total": 16,
+      "rate": 1.0
+    },
+    "end_time": {
+      "matched": 16,
+      "total": 16,
+      "rate": 1.0
+    },
+    "headcount": {
+      "matched": 16,
+      "total": 16,
+      "rate": 1.0
+    },
+    "discount_types": {
+      "matched": 16,
+      "total": 16,
+      "rate": 1.0
+    }
+  },
+  "latency_ms": {
+    "median": 2693.98,
+    "p95": 5795.67,
+    "max": 5795.67
+  },
+  "acceptance": "not_determined: team target and browser checks remain separate",
+  "results": [
+    {
+      "id": "explicit",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 3737.14
+    },
+    {
+      "id": "relative",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 5795.67
+    },
+    {
+      "id": "two_days",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 1267.8
+    },
+    {
+      "id": "compact",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 3086.63
+    },
+    {
+      "id": "afternoon",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 1833.12
+    },
+    {
+      "id": "multiple_regions",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 2278.54
+    },
+    {
+      "id": "unregistered_region",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 1698.06
+    },
+    {
+      "id": "disabled",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 5118.06
+    },
+    {
+      "id": "multi_child",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 2980.73
+    },
+    {
+      "id": "missing_headcount",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 2693.98
+    },
+    {
+      "id": "missing_date",
+      "status": "need_more",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 2669.7
+    },
+    {
+      "id": "ambiguous_date",
+      "status": "need_more",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 3435.43
+    },
+    {
+      "id": "missing_end",
+      "status": "need_more",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 4357.67
+    },
+    {
+      "id": "missing_start",
+      "status": "need_more",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 3096.82
+    },
+    {
+      "id": "missing_sport",
+      "status": "need_more",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 2054.22
+    },
+    {
+      "id": "midnight",
+      "status": "ok",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {
+        "sport": true,
+        "districts": true,
+        "date": true,
+        "start_time": true,
+        "end_time": true,
+        "headcount": true,
+        "discount_types": true
+      },
+      "passed": true,
+      "elapsed_ms": 2880.06
+    },
+    {
+      "id": "phone",
+      "status": "llm_failed",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {},
+      "passed": true,
+      "elapsed_ms": 3.25
+    },
+    {
+      "id": "email",
+      "status": "llm_failed",
+      "status_match": true,
+      "missing_fields_match": true,
+      "field_matches": {},
+      "passed": true,
+      "elapsed_ms": 4.14
+    }
+  ]
+}

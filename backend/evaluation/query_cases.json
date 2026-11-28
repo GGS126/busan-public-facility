@@ -1,0 +1,468 @@
+[
+  {
+    "id": "explicit",
+    "query": "{tomorrow} 테니스 오전 10시부터 낮 12시까지 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "relative",
+    "query": "내일 사상구에서 테니스 10시부터 12시까지 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [
+        "사상구"
+      ],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [
+          "사상구"
+        ],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "two_days",
+    "query": "모레 서구 테니스 오전 10시부터 12시 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [
+        "서구"
+      ],
+      "date": "{day_after}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [
+          "서구"
+        ],
+        "date": "{day_after}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "compact",
+    "query": "내일 1000-1200 테니스 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "afternoon",
+    "query": "내일 테니스 오후 2시부터 4시까지 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "14:00",
+      "end_time": "16:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "14:00",
+        "end_time": "16:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "multiple_regions",
+    "query": "내일 동래구나 사상구 테니스 오전 10시부터 12시 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [
+        "동래구",
+        "사상구"
+      ],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [
+          "동래구",
+          "사상구"
+        ],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "unregistered_region",
+    "query": "내일 동래구 테니스 오전 10시부터 12시 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [
+        "동래구"
+      ],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [
+          "동래구"
+        ],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "disabled",
+    "query": "내일 테니스 오전 10시부터 12시 4명, 장애인 감면",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": [
+        "disabled"
+      ]
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": [
+          "disabled"
+        ]
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "multi_child",
+    "query": "내일 테니스 오전 10시부터 12시 4명, 다자녀 감면",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": [
+        "multi_child"
+      ]
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": [
+          "multi_child"
+        ]
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "missing_headcount",
+    "query": "내일 테니스 오전 10시부터 12시",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": null,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "missing_date",
+    "query": "테니스 오전 10시부터 12시 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": null,
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "need_more",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": [
+        "date"
+      ]
+    }
+  },
+  {
+    "id": "ambiguous_date",
+    "query": "이번 주말 테니스 오전 10시부터 12시 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": null,
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "need_more",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": [
+        "date"
+      ]
+    }
+  },
+  {
+    "id": "missing_end",
+    "query": "내일 테니스 오전 10시부터 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": null,
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "need_more",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": [
+        "end_time"
+      ]
+    }
+  },
+  {
+    "id": "missing_start",
+    "query": "내일 테니스 낮 12시 종료 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": null,
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "need_more",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": [
+        "start_time"
+      ]
+    }
+  },
+  {
+    "id": "missing_sport",
+    "query": "내일 오전 10시부터 12시 4명",
+    "raw": {
+      "sport": null,
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "10:00",
+      "end_time": "12:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "need_more",
+      "conditions": {
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "10:00",
+        "end_time": "12:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": [
+        "sport"
+      ]
+    }
+  },
+  {
+    "id": "midnight",
+    "query": "내일 테니스 밤 10시부터 자정까지 4명",
+    "raw": {
+      "sport": "tennis",
+      "districts": [],
+      "date": "{tomorrow}",
+      "start_time": "22:00",
+      "end_time": "24:00",
+      "headcount": 4,
+      "discount_types": []
+    },
+    "expected": {
+      "status": "ok",
+      "conditions": {
+        "sport": "tennis",
+        "districts": [],
+        "date": "{tomorrow}",
+        "start_time": "22:00",
+        "end_time": "24:00",
+        "headcount": 4,
+        "discount_types": []
+      },
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "phone",
+    "query": "내일 테니스 문의 010-0000-0000",
+    "expected": {
+      "block_reason": "personal_information",
+      "status": "llm_failed",
+      "conditions": {},
+      "missing_fields": []
+    }
+  },
+  {
+    "id": "email",
+    "query": "내일 테니스 test@example.invalid",
+    "expected": {
+      "block_reason": "personal_information",
+      "status": "llm_failed",
+      "conditions": {},
+      "missing_fields": []
+    }
+  }
+]
