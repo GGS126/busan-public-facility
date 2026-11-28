@@ -10,6 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    # The runner itself also prints Korean messages before spawning UTF-8 children.
+    # Hosted Windows defaults to cp1252, unlike Korean developers' local consoles.
+    for stream in (sys.stdout, sys.stderr):
+        configure = getattr(stream, "reconfigure", None)
+        if configure is not None:
+            configure(encoding="utf-8")
     env = os.environ.copy()
     env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1", RULE_DATA_SOURCE="sample")
     # Automated checks inject fake extractors. Never pass a developer's live key to tests.
