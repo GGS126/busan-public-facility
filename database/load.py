@@ -40,6 +40,45 @@ GROUP_TO_CODES = {
     'war_veteran': ('war_veteran',),
 }
 
+def checklist_documents(documents, common, category):
+    """유형별 확인된 증빙과 다자녀 전용 안내만 결합한다.
+
+    공통 신청 절차는 유형별 documents에 반복해서 붙이지 않는다.
+    미확인 자료는 계속 NULL로 저장해 비교 API의 확인 필요 경고를 유지한다.
+    """
+    if documents is None:
+        return None
+    parts = [documents]
+    if category == 'multi_child' and common.get('multi_child_guidance'):
+        parts.append(common['multi_child_guidance'])
+    return ' / '.join(parts)
+
+
+def checklist_deadline(deadline, documents, common):
+    """기존 비교 API와 호환되는 공통 신청 절차 표시.
+
+    백엔드는 note를 읽지 않고 deadline을 체크리스트에 추가하며, 동일한
+    체크리스트 문자열은 한 번만 남긴다. 동일 시설·기간의 모든 감면 유형에
+    같은 안내를 제공해 다중 유형 선택 시 공통 절차의 중복을 피한다.
+    단, deadline에 절차가 함께 들어가는 호환 처리라는 한계가 있다.
+    """
+    guide = common.get('checklist_guidance')
+    if not guide:
+        return deadline
+    if deadline and guide in deadline:
+        return deadline
+    return ' / '.join(part for part in (deadline, f'신청 절차: {guide}') if part)
+
+
+def validate_checklist_guidance(common):
+    for key in ('checklist_guidance', 'multi_child_guidance'):
+        value = common.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f'discount_common.{key}는 비어 있지 않은 문자열 또는 null')
+    if common.get('checklist_guidance') and '다자녀인 동일 가족은 증빙자료 1부 제출 가능' in common['checklist_guidance']:
+        raise ValueError('다자녀 전용 안내는 multi_child_guidance로 분리해야 합니다')
+
+
 def validate_options(options):
     if not isinstance(options,list): raise ValueError('options는 목록이어야 함')
     if len({(o['id'],o['application_type']) for o in options})!=len(options): raise ValueError('동일 적용 방식 옵션 중복')
@@ -216,6 +255,7 @@ def validate(d):
             if type(slot[k]) is not int or slot[k]<0: raise ValueError(f'회차 {slot["no"]}: {k} 요금 오류')
     validate_options(d['options'])
     common=d['discount_common']
+    validate_checklist_guidance(common)
     validate_discount_rounding(common)
     if type(common.get('percent')) is not int or not 0<=common['percent']<=100: raise ValueError('감면율 오류')
     codes=[]
@@ -223,7 +263,18 @@ def validate(d):
         if discount['id'] not in GROUP_TO_CODES: raise ValueError('알 수 없는 감면 분류: '+discount['id'])
         if 'percent' in discount and (type(discount['percent']) is not int or not 0 <= discount['percent'] <= 100):
             raise ValueError('개별 감면율 오류: '+discount['id'])
-        codes.extend(GROUP_TO_CODES[discount['id']])
+        # 여러 감면 유형을 하나로 묶은 서류 문구를 모든 유형에 복사하지 않는다.
+        # 공통 신청 절차는 discount_common에 두고, 개별 서류는 유형별로 저장한다.
+        expanded = GROUP_TO_CODES[discount['id']]
+        by_category = discount.get('documents_by_category')
+        if len(expanded)>1 and discount.get('documents') is not None:
+            raise ValueError('묶음 감면 유형의 증빙서류는 documents_by_category로 분리 필요: '+discount['id'])
+        if by_category is not None and (
+            not isinstance(by_category, dict) or set(by_category)!=set(expanded)
+            or any(v is not None and (not isinstance(v,str) or not v.strip()) for v in by_category.values())
+        ):
+            raise ValueError('감면 유형별 증빙서류 매핑 오류: '+discount['id'])
+        codes.extend(expanded)
     if len(set(codes))!=len(codes): raise ValueError('동일 시설 감면 분류 중복')
     return d
 
@@ -318,14 +369,19 @@ def load_fixed(data_path, db_path):
             insert_options(con,rid,d['options'])
             c=d['discount_common']
             for item in d['discounts']:
+                category_documents = item.get('documents_by_category')
                 for code in GROUP_TO_CODES[item['id']]:
+                    documents = (category_documents[code] if category_documents is not None
+                                 else item.get('documents'))
+                    deadline = checklist_deadline(c['deadline'], documents, c)
+                    documents = checklist_documents(documents, c, code)
                     con.execute('INSERT INTO discount_categories(id,name) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name',(code,CATEGORY_NAMES[code]))
                     con.execute('''INSERT INTO facility_discounts
                         (id,rule_set_id,category_id,percent,guardian_max_count,guardian_condition,guardian_evidence_note,discount_rounding_policy,basis,applies_to,excluded_from,
                          processing,documents,deadline,note,original_group_label)
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (f'{rid}_{code}',rid,code,item.get('percent',c['percent']),item.get('guardian_max_count'),item.get('guardian_condition'),item.get('guardian_evidence_note'),c['rounding_policy'],c['basis'],c['applies_to'],c['excluded_from'],
-                         c['processing'],c['documents'],c['deadline'],c['note'],item['category']))
+                         c['processing'],documents,deadline,c['note'],item['category']))
             insert_refunds_and_reservation(con, rid, d)
     finally:
         con.close()
@@ -377,6 +433,7 @@ def validate_duration_discounts(d):
     if not isinstance(common, dict):
         raise ValueError('discount_common: 감면 규정 데이터 누락')
     validate_discount_rounding(common)
+    validate_checklist_guidance(common)
     for field in ('basis', 'applies_to', 'processing'):
         if not isinstance(common.get(field), str) or not common[field].strip():
             raise ValueError(f'discount_common.{field} 누락')
@@ -420,8 +477,9 @@ def insert_duration_discounts(con, rid, d):
           (f'{rid}_{cat}', rid, cat, item['rate_percent'], item.get('guardian_max_count'), item.get('guardian_condition'), item.get('guardian_evidence_note'), common['rounding_policy'],
            item.get('basis', common['basis']), item.get('applies_to', common['applies_to']),
            excluded, item.get('processing', common['processing']),
-           item.get('documents', common.get('documents')),
-           item.get('deadline', common.get('deadline')),
+           checklist_documents(item.get('documents'), common, cat),
+           checklist_deadline(item.get('deadline', common.get('deadline')),
+                              item.get('documents'), common),
            item.get('note', common.get('note')), item['source_label'], 'official_confirmed'))
 
 
