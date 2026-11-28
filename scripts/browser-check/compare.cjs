@@ -50,9 +50,13 @@ function percentile(data, p) { return [...data].sort((a,b)=>a-b)[Math.ceil(data.
     for (const name of ['삼락생태공원 테니스장','구덕운동장 테니스장']) {
       const card=page.locator('.facility-card').filter({has:page.getByRole('heading',{name,exact:true})});
       await card.getByRole('checkbox').check();
-      const time=card.locator('select[id^="time-"]');
-      await time.waitFor();
-      await page.waitForFunction(id=>document.getElementById(id)?.value==='08:00|10:00',await time.getAttribute('id'));
+      await page.waitForFunction(card=>{
+        const slot=card.querySelector('select[id^="time-"]');
+        const inputs=card.querySelectorAll('input[type="time"]');
+        return slot?.value==='08:00|10:00' || (
+          inputs.length>=2 && inputs[0].value==='08:00' && inputs[1].value==='10:00'
+        );
+      },await card.elementHandle());
     }
     const button=page.getByRole('button',{name:'선택한 시설 2곳 비교하기',exact:true});
     async function measure(){
