@@ -37,8 +37,9 @@ def evaluate(case, result):
         matches[field] = wanted == found
     status_match = result.get("status") == expected["status"]
     missing_match = set(result.get("missing_fields", [])) == set(expected["missing_fields"])
+    message = result.get("message")
     privacy_match = (expected.get("block_reason") != "personal_information"
-                     or "개인정보를 빼고" in result.get("message", ""))
+                     or (isinstance(message, str) and "개인정보를 빼고" in message))
     return {"id": case["id"], "status": result.get("status"),
             "status_match": status_match, "missing_fields_match": missing_match,
             "privacy_block_match": privacy_match,
