@@ -126,7 +126,12 @@ def test_discount_checklist_includes_application_deadline(client):
     }
     checklist = client.post("/api/compare", json=body).json()["results"][0]["checklist"]
 
-    assert "감면 신청 기한: 경기장 이용시간 전 반환신청 게시판 접수" in checklist
+    
+    deadline = [
+        item for item in checklist
+        if item.startswith("감면 신청 기한: 경기장 이용시간 전 반환신청 게시판 접수")
+    ]
+    assert len(deadline) == 1
 
 
 def test_unknown_refund_reason_is_rejected_on_load():
@@ -134,3 +139,60 @@ def test_unknown_refund_reason_is_rejected_on_load():
 
     with pytest.raises(ValueError, match="환불 사유"):
         _refund_label({"reason": "rain_during_use", "rate_percent": 100, "days_before_min": None, "days_before_max": None})
+
+
+def test_compare_returns_cancel_refund(client):
+    # 2일 전 취소일이 오늘보다 앞서지 않도록 다음 주가 아니라 그다음 주 월요일에 이용한다.
+    day = date.fromisoformat(next_weekday()) + timedelta(days=7)
+    body = {
+        "facility_ids": ["busan_samrak_ecopark_tennis"],
+        "conditions": {
+            "sport": "tennis", "date": day.isoformat(), "start_time": "08:00", "end_time": "10:00", "source": "direct",
+            "cancellation": {"reason": "user_cancel", "cancel_date": (day - timedelta(days=2)).isoformat()},
+        },
+    }
+    response = client.post("/api/compare", json=body)
+
+    assert response.status_code == 200, response.json()
+    refund = response.json()["results"][0]["cancel_refund"]
+    assert {key: refund[key] for key in ("status", "reason", "days_before", "rate_percent", "refund_amount", "cost_after_refund")} == {
+        "status": "calculated", "reason": "user_cancel", "days_before": 2, "rate_percent": 90,
+        "refund_amount": 5400, "cost_after_refund": 600,
+    }
+    assert "반환신청서" in refund["note"]
+
+
+def test_compare_without_cancellation_has_no_refund(client):
+    assert compare(client, "busan_samrak_ecopark_tennis", "tennis", next_weekday(), "08:00", "10:00")["cancel_refund"] is None
+
+
+def test_cancel_date_after_use_date_is_rejected(client):
+    day = date.fromisoformat(next_weekday())
+    body = {
+        "facility_ids": ["busan_samrak_ecopark_tennis"],
+        "conditions": {
+            "sport": "tennis", "date": day.isoformat(), "start_time": "08:00", "end_time": "10:00", "source": "direct",
+            "cancellation": {"cancel_date": (day + timedelta(days=1)).isoformat()},
+        },
+    }
+    response = client.post("/api/compare", json=body)
+
+    assert response.status_code == 400
+    field = response.json()["error"]["fields"][0]
+    assert (field["code"], field["message"]) == ("invalid_cancellation", "취소일은 이용일보다 늦을 수 없습니다.")
+
+
+def test_past_cancel_date_is_rejected(client):
+    today = datetime.now(KST).date()
+    body = {
+        "facility_ids": ["busan_samrak_ecopark_tennis"],
+        "conditions": {
+            "sport": "tennis", "date": next_weekday(), "start_time": "08:00", "end_time": "10:00", "source": "direct",
+            "cancellation": {"cancel_date": (today - timedelta(days=1)).isoformat()},
+        },
+    }
+    response = client.post("/api/compare", json=body)
+
+    assert response.status_code == 400
+    field = response.json()["error"]["fields"][0]
+    assert (field["field"], field["code"]) == ("conditions.cancellation", "invalid_cancellation")

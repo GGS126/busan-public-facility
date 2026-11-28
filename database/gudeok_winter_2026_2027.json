@@ -78,27 +78,32 @@
     {
       "id": "national_merit",
       "rate_percent": 50,
-      "source_label": "국가유공자 및 해당 유족"
+      "source_label": "국가유공자 및 해당 유족",
+      "documents": "국가유공자증(또는 국가보훈등록증, 확인서). 배우자·선순위 유족은 유족증 및 가족관계증명서(또는 등본) 추가 제출."
     },
     {
       "id": "independence_merit",
       "rate_percent": 50,
-      "source_label": "독립유공자 및 해당 유족"
+      "source_label": "독립유공자 및 해당 유족",
+      "documents": "독립유공자증(또는 국가보훈등록증, 독립유공자 유족증). 유족은 유족증·가족관계증명서 지참."
     },
     {
       "id": "may18_merit",
       "rate_percent": 50,
-      "source_label": "5·18민주유공자 및 해당 유족"
+      "source_label": "5·18민주유공자 및 해당 유족",
+      "documents": "5·18민주유공자증(또는 국가보훈등록증, 확인서). 유족은 유족증·가족관계증명서 지참."
     },
     {
       "id": "special_mission_merit",
       "rate_percent": 50,
-      "source_label": "특수임무유공자 및 해당 유족"
+      "source_label": "특수임무유공자 및 해당 유족",
+      "documents": "특수임무유공자증(또는 국가보훈등록증, 확인서). 유족은 유족증·가족관계증명서 지참."
     },
     {
       "id": "war_veteran",
       "rate_percent": 50,
-      "source_label": "참전유공자 및 해당 유족"
+      "source_label": "참전유공자 및 해당 유족",
+      "documents": "참전유공자증(또는 국가보훈등록증, 참전유공자 확인서). 본인 한정 적용 여부는 조례 기준 확인 필요."
     },
     {
       "id": "disabled",
@@ -106,17 +111,20 @@
       "source_label": "장애인(중증 장애인 보호자 1인 포함)",
       "guardian_max_count": 1,
       "guardian_condition": "장애의 정도가 심한 등록장애인과 함께 해당 시설을 실제로 이용하는 보호자 1명에 한하여 감면 대상 인원에 포함",
-      "guardian_evidence_note": "장애인등록증 등 감면 자격 증빙 및 시설별 감면신청 절차 필요. 보호자 관계 증빙의 구체적인 서류 종류는 미확인."
+      "guardian_evidence_note": "장애인등록증 등 감면 자격 증빙 및 시설별 감면신청 절차 필요. 보호자 관계 증빙의 구체적인 서류 종류는 미확인.",
+      "documents": "장애인등록증(또는 장애인증명서). 본인 신분증 지참. 장애의 정도가 심한 장애인은 보호자 1명 포함."
     },
     {
       "id": "multi_child",
       "rate_percent": 50,
-      "source_label": "부산광역시 거주 다자녀 가정"
+      "source_label": "부산광역시 거주 다자녀 가정",
+      "documents": "부산 가족사랑카드(모바일 동백전 앱 포함) 또는 주민등록등본. 등본 제출 시 신분증 지참."
     },
     {
       "id": "low_income",
       "rate_percent": 50,
-      "source_label": "국민기초생활 수급자"
+      "source_label": "국민기초생활 수급자",
+      "documents": "국민기초생활수급자 증명서. 본인 신분증 지참."
     }
   ],
   "discount_excluded_fee_types": [
@@ -144,9 +152,9 @@
     "rounding_policy": null,
     "applies_to": "base_court_fee_only",
     "processing": "pay_full_then_refund",
-    "documents": "사용일 당일 구장 이용 전 또는 후 관제실에서 감면 대상 이용자별 증빙자료 확인 및 감경대상자 확인서 제출. 감면액은 대표 예약자에게 반환.",
-    "deadline": null,
-    "note": "코트 기본요금을 실제 이용 인원으로 균등 배분하고 감면 대상자로 확인된 이용자의 몫에만 해당 감면율을 적용. 예약자에게 감면액을 반환하며 조명료는 제외. 공식 안내에서 감면 대상 이용자별 적용 및 대표자 환급을 확인했고, 인원별 비례 계산 방식은 이용자 확인에 따라 반영. 원 미만 끝전 처리 기준은 미확인으로 유지."
+    "documents": null,
+    "deadline": "사용일 당일 구장 이용 전 또는 후 관제실 방문하여 증빙자료 확인 및 감경대상자 확인서 작성·제출",
+    "note": "코트 기본요금을 실제 이용 인원으로 균등 배분하고 감면 대상자로 확인된 이용자의 몫에만 해당 감면율을 적용. 예약자에게 감면액을 반환하며 조명료는 제외. 공식 안내에서 감면 대상 이용자별 적용 및 대표자 환급을 확인했고, 인원별 비례 계산 방식은 이용자 확인에 따라 반영. 원 미만 끝전 처리 기준은 미확인으로 유지. 감면 대상 이용자는 사용일 당일 구장 이용 전 또는 후 관제실에서 증빙자료 확인을 받고 감경대상자 확인서를 제출. 감면액은 예약자에게 반환."
   },
   "closure_rules": []
 }

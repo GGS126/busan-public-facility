@@ -4,6 +4,7 @@ from datetime import date
 
 from app.engine import _not_calculated, calculate
 from app.models import ClosureRule, CompareResult, Conditions, FacilityRules, FeeResult, ReviewItem
+from app.refund import estimate_cancel_refund
 
 # 공휴일 목록의 이름과 DB의 명절 휴장 코드. 전날·다음날은 휴장 규정에 없으므로 당일만 연결한다.
 HOLIDAY_CLOSURE_CODES = {"설날": "lunar_new_year_day", "추석": "chuseok_day"}
@@ -29,6 +30,13 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
     used = {item.source_id for item in fee.items} | {item.source_id for item in fee.review_items}
     if terms.source_id is not None:
         used.add(terms.source_id)
+
+    cancel_refund = None
+    if conditions.cancellation is not None:
+        cancel_refund = estimate_cancel_refund(rules, conditions, conditions.cancellation, fee)
+        used |= {item.source_id for item in cancel_refund.review_items}
+        if cancel_refund.source_id is not None:
+            used.add(cancel_refund.source_id)
 
     checklist: list[str] = []
     checklist_reviews: list[ReviewItem] = []
@@ -75,6 +83,7 @@ def compare_facility(rules: FacilityRules, conditions: Conditions) -> CompareRes
         checklist=checklist,
         checklist_review_items=checklist_reviews,
         sources=sources,
+        cancel_refund=cancel_refund,
     )
 
 

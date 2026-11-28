@@ -79,7 +79,8 @@ def _sqlite_facility(rows, facility: dict) -> dict:
     if not rule_sets:
         raise ValueError(f"규정 기간이 없는 시설: {facility['id']}")
 
-    fee_rules, discount_rules, time_policies, source_ids = [], [], [], []
+    fee_rules, discount_rules, refund_rules, time_policies, source_ids = [], [], [], [], []
+    refund_rows: dict[str, list[dict]] = {}
     for rule_set in rule_sets:
         period = {"effective_from": rule_set["effective_from"], "effective_to": rule_set["effective_to"]}
         source_id = rule_set["source_id"]
@@ -124,6 +125,27 @@ def _sqlite_facility(rows, facility: dict) -> dict:
                     "required_documents": [discount["documents"]] if discount["documents"] else None,
                     "application_deadline": discount["deadline"],
                     "guardian_note": discount["guardian_evidence_note"],
+                    "source_id": source_id,
+                    **period,
+                }
+            )
+
+        # 계산용 규정과 terms 안내 문구가 같은 행·같은 문구를 쓰도록 한 번만 읽는다.
+        refund_rows[rule_set_id] = rows(
+            "SELECT * FROM refund_rules WHERE rule_set_id = ? ORDER BY reason != 'user_cancel', days_before_min DESC, id",
+            rule_set_id,
+        )
+        for refund in refund_rows[rule_set_id]:
+            refund_rules.append(
+                {
+                    "rule_id": refund["id"],
+                    "reason": refund["reason"],
+                    "days_before_min": refund["days_before_min"],
+                    "days_before_max": refund["days_before_max"],
+                    "rate_percent": refund["rate_percent"],
+                    "confirmed": refund["status"] == "confirmed",
+                    "cancel_allowed": refund["channel"] != "not_allowed",
+                    "note": _refund_note(refund),
                     "source_id": source_id,
                     **period,
                 }
@@ -174,10 +196,11 @@ def _sqlite_facility(rows, facility: dict) -> dict:
         ],
         "fee_rules": fee_rules,
         "discount_rules": discount_rules,
+        "refund_rules": refund_rules,
         "time_policies": time_policies,
         # 예약·취소 조건은 규정 기간마다 달라질 수 있어 기간별로 두고, 이용일에 맞는 것을 고른다.
         "terms_by_period": [
-            _terms(rows, rule_set)
+            _terms(rows, rule_set, refund_rows[rule_set["id"]])
             | {"effective_from": rule_set["effective_from"], "effective_to": rule_set["effective_to"]}
             for rule_set in rule_sets
         ],
@@ -317,12 +340,9 @@ def _optional_lighting_rule(option: dict, common: dict) -> dict:
     }
 
 
-def _terms(rows, rule_set: dict) -> dict:
+def _terms(rows, rule_set: dict, every_refund: list[dict]) -> dict:
+    """every_refund: 이 규정 기간의 환불 규정. 사용자 취소를 먼저, 취소 시점이 이른 순으로 둔다."""
     reservation = next(iter(rows("SELECT * FROM reservation_rules WHERE rule_set_id = ?", rule_set["id"])), None)
-    every_refund = rows(
-        "SELECT * FROM refund_rules WHERE rule_set_id = ? ORDER BY reason != 'user_cancel', days_before_min DESC, id",
-        rule_set["id"],
-    )
     refunds = [refund for refund in every_refund if refund["reason"] == "user_cancel"]
     terms = {"source_id": rule_set["source_id"], "refund_notes": [_refund_note(refund) for refund in every_refund]}
     if reservation is not None:

@@ -77,6 +77,7 @@ def test_calculated_response_matches_api_draft():
                 "checklist": ["다자녀 가정 확인 서류"],
                 "checklist_review_items": [],
                 "sources": SOURCES,
+                "cancel_refund": None,
             }
         ]
     }
