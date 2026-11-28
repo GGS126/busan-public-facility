@@ -60,3 +60,12 @@ def test_real_health_does_not_need_a_gemini_key(monkeypatch):
     response = TestClient(main.app).get("/api/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "facility_count": len(main.facilities)}
+
+
+def test_search_method_does_not_become_a_facility_id():
+    from app import main
+
+    response = TestClient(main.app).get("/api/facilities/search")
+    assert response.status_code == 405
+    assert response.headers["allow"] == "POST"
+    assert response.json()["error"]["code"] == "method_not_allowed"

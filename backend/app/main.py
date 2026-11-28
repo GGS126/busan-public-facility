@@ -178,6 +178,12 @@ def parse_natural_language(request: QueryParseRequest) -> dict:
     return parse_with_options(request, available_options)
 
 
+@app.get("/api/facilities/search", include_in_schema=False)
+def reject_search_get():
+    # Reserve "search": otherwise the later GET /facilities/{facility_id} captures it.
+    raise HTTPException(status_code=405, headers={"Allow": "POST"})
+
+
 gemini_slots = BoundedSemaphore(4)
 gemini_call_lock = Lock()
 gemini_calls: deque[float] = deque()

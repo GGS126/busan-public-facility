@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r backend/requirements.txt \
 COPY --chown=app:app backend/ ./backend/
 COPY --chown=app:app database/ ./database/
 COPY --chown=app:app scripts/start_service.py ./scripts/start_service.py
+COPY --chown=app:app scripts/check_deployment.py ./scripts/check_deployment.py
 COPY --from=frontend --chown=app:app /frontend/dist/ ./frontend/dist/
 USER app
 EXPOSE 8000
