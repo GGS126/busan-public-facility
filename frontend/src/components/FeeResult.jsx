@@ -130,7 +130,11 @@ function getRefundSources(refund, sources) {
   )
 }
 
-function FeeAmountRow({ label, amount, className = '' }) {
+function FeeAmountRow({
+  label,
+  amount,
+  className = '',
+}) {
   return (
     <div className={`fee-row ${className}`.trim()}>
       <span>{label}</span>
@@ -139,7 +143,10 @@ function FeeAmountRow({ label, amount, className = '' }) {
   )
 }
 
-function ReviewItems({ items, title = '추가 확인사항' }) {
+function ReviewItems({
+  items,
+  title = '추가 확인사항',
+}) {
   if (!Array.isArray(items) || items.length === 0) {
     return null
   }
@@ -180,7 +187,7 @@ function CancelRefundResult({
     refund.rate_percent >= 0 &&
     refund.rate_percent <= 100
 
-  // 백엔드에서 확정한 금액만 표시
+  // 백엔드에서 계산 완료한 금액만 표시
   const hasCalculatedAmounts =
     calculated &&
     hasValidAmount(refund.refund_amount) &&
@@ -443,9 +450,20 @@ function FeeResult({ results, facilities = [] }) {
 
             const facility = getFacility(result, facilities)
 
-            const isTestData =
-              facility?.isTestData === true ||
+            // 백엔드 테스트용 가상 시설
+            const isVirtualFacility =
               result.facility_id === 'F001'
+
+            // 개발용 Mock 데이터
+            const isMockData =
+              !isVirtualFacility &&
+              (
+                facility?.isTestData === true ||
+                result.isTestData === true
+              )
+
+            const isTestData =
+              isVirtualFacility || isMockData
 
             const bookingUrl =
               !isTestData
@@ -464,6 +482,7 @@ function FeeResult({ results, facilities = [] }) {
               hasValidAmount(fee.onsite_payment) ||
               hasValidAmount(fee.payment_unverified)
 
+            // 일부 요금 항목이라도 존재하는지 확인
             const hasAnyFeeAmount =
               feeItems.some((item) =>
                 hasValidAmount(item.amount)
@@ -475,6 +494,10 @@ function FeeResult({ results, facilities = [] }) {
               hasValidAmount(fee.payment_unverified) ||
               hasValidAmount(fee.expected_refund) ||
               hasValidAmount(fee.net_cost_after_refund)
+
+            // 계산 완료 상태에서만 총액 표시
+            const canShowFeeTotal =
+              calculated && hasAnyFeeAmount
 
             const statusLabel = calculated
               ? '계산 완료'
@@ -497,7 +520,8 @@ function FeeResult({ results, facilities = [] }) {
                   </h3>
                 </div>
 
-                {isTestData && (
+                {/* 백엔드 테스트용 가상 시설 안내 */}
+                {isVirtualFacility && (
                   <div
                     className="review-box"
                     style={{ marginTop: '12px' }}
@@ -510,6 +534,25 @@ function FeeResult({ results, facilities = [] }) {
                       이 시설의 요금과 예약 규정은
                       실제 부산 공공체육시설 정보가
                       아닌 테스트 데이터입니다.
+                    </p>
+                  </div>
+                )}
+
+                {/* 개발용 Mock 데이터 안내 */}
+                {isMockData && (
+                  <div
+                    className="review-box"
+                    style={{ marginTop: '12px' }}
+                  >
+                    <strong>
+                      개발용 Mock 데이터
+                    </strong>
+
+                    <p>
+                      실제 시설 정보를 바탕으로 구성한
+                      기능 검증용 데이터입니다.
+                      표시된 이용시간, 요금 및 예약 규정은
+                      실제 정보와 다를 수 있습니다.
                     </p>
                   </div>
                 )}
@@ -555,6 +598,8 @@ function FeeResult({ results, facilities = [] }) {
                         선택한 이용조건으로는 해당 시설을
                         이용할 수 없거나 이용 가능 여부를
                         확인해야 합니다.
+                        총 이용요금과 최종 부담액은
+                        제공하지 않습니다.
                       </p>
                     </div>
                   )}
@@ -565,14 +610,25 @@ function FeeResult({ results, facilities = [] }) {
 
                       <p>
                         일부 요금이나 결제 조건을 확정할 수
-                        없습니다. 확인된 금액이 있다면
-                        아래에 표시합니다.
+                        없습니다. 확인된 요금 항목은
+                        참고용으로만 표시하며,
+                        총 이용요금과 최종 부담액은
+                        미확정 상태입니다.
                       </p>
                     </div>
                   )}
 
+                  {/* 세부 요금 항목 */}
                   {feeItems.length > 0 ? (
                     <div className="fee-list">
+                      {!calculated && (
+                        <p className="result-disclaimer">
+                          아래 금액은 일부 요금에 대한
+                          참고 정보이며 최종 이용요금이
+                          아닙니다.
+                        </p>
+                      )}
+
                       {feeItems.map((item, index) => (
                         <div
                           className="fee-row"
@@ -596,7 +652,8 @@ function FeeResult({ results, facilities = [] }) {
                     </p>
                   )}
 
-                  {hasAnyFeeAmount && (
+                  {/* calculated 상태에서만 총액 표시 */}
+                  {canShowFeeTotal && (
                     <div className="fee-total">
                       <FeeAmountRow
                         label="예상 총 이용요금"
@@ -626,10 +683,69 @@ function FeeResult({ results, facilities = [] }) {
                     </div>
                   )}
 
+                  {/* 계산 완료가 아닌 경우 금액 대신 미확정 안내 */}
+                  {!calculated && (
+                    <div className="review-box">
+                      <h4>최종 예상요금 미확정</h4>
+
+                      <div className="fee-row">
+                        <span>예상 총 이용요금</span>
+                        <strong>미확정</strong>
+                      </div>
+
+                      <div className="fee-row">
+                        <span>최초 결제 예상액</span>
+                        <strong>미확정</strong>
+                      </div>
+
+                      <div className="fee-row">
+                        <span>예상 감면 환급액</span>
+                        <strong>미확정</strong>
+                      </div>
+
+                      <div className="fee-row">
+                        <span>감면 적용 후 예상 부담액</span>
+                        <strong>미확정</strong>
+                      </div>
+
+                      <p>
+                        실제 이용 가능 여부와 최종 금액은
+                        해당 시설의 공식 안내를
+                        확인해 주세요.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* 계산 완료 상태이지만 금액 정보가 없는 경우 */}
+                  {calculated && !hasAnyFeeAmount && (
+                    <div className="review-box">
+                      <h4>요금 금액 확인 필요</h4>
+
+                      <p>
+                        서버에서 계산 완료 상태를 반환했지만
+                        확인 가능한 요금 정보가 없습니다.
+                        시설의 공식 안내를 확인해 주세요.
+                      </p>
+                    </div>
+                  )}
+
                   {/* 결제 방식별 금액 */}
                   {hasPaymentBreakdown && (
                     <div className="result-details">
-                      <h4>결제 방식별 금액</h4>
+                      <h4>
+                        {calculated
+                          ? '결제 방식별 금액'
+                          : '결제 방식별 참고 금액 (미확정)'}
+                      </h4>
+
+                      {!calculated && (
+                        <p className="result-disclaimer">
+                          아래 금액은 일부 요금에 대한
+                          참고 정보입니다.
+                          실제 결제 금액으로 확정된
+                          정보가 아닙니다.
+                        </p>
+                      )}
 
                       <FeeAmountRow
                         label="온라인 선결제 예상액"
@@ -842,10 +958,15 @@ function FeeResult({ results, facilities = [] }) {
                     >
                       공식 예약 사이트 이동 ↗
                     </a>
-                  ) : isTestData ? (
+                  ) : isVirtualFacility ? (
                     <p>
                       테스트용 시설로 공식 예약
                       링크가 없습니다.
+                    </p>
+                  ) : isMockData ? (
+                    <p>
+                      개발용 Mock 모드에서는
+                      공식 예약 링크를 제공하지 않습니다.
                     </p>
                   ) : (
                     <p>
@@ -863,8 +984,8 @@ function FeeResult({ results, facilities = [] }) {
         본 서비스는 참고용 정보를 제공합니다.
         실제 예약 가능 여부와 최종 요금 및 환불 금액은
         각 시설의 공식 안내에서 확인해야 합니다.
-        테스트용 시설의 정보는 실제 예약에
-        사용할 수 없습니다.
+        테스트용 시설과 개발용 Mock 데이터의 정보는
+        실제 예약에 사용할 수 없습니다.
       </p>
     </section>
   )

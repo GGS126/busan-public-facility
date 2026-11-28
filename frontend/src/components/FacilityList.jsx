@@ -1,3 +1,8 @@
+import {
+  getTimeOptions,
+  isBlockedFacility,
+} from '../data/facilityTimeOptions'
+
 function getSportLabel(sport) {
   const labels = {
     tennis: '테니스',
@@ -14,37 +19,6 @@ function getSportIcon(sport) {
   }
 
   return icons[sport] || '🏟️'
-}
-
-// 시설 상세조회 및 검색 API의 이용시간 규정 통합
-function getTimeOptions(detail, facility, sport) {
-  if (Array.isArray(detail?.time_options)) {
-    return detail.time_options.filter(
-      (option) => !option.sport || option.sport === sport
-    )
-  }
-
-  if (
-    detail?.time_options &&
-    typeof detail.time_options === 'object'
-  ) {
-    return [detail.time_options]
-  }
-
-  if (Array.isArray(facility.time_options)) {
-    return facility.time_options.filter(
-      (option) => !option.sport || option.sport === sport
-    )
-  }
-
-  if (
-    facility.time_options &&
-    typeof facility.time_options === 'object'
-  ) {
-    return [facility.time_options]
-  }
-
-  return []
 }
 
 // 고정 예약 회차 목록 반환
@@ -101,22 +75,32 @@ function formatOperatingHours(hours) {
 
 // 이용시간 규정 안내
 function getSlotMessage(facility, detail) {
-  if (facility.slot_status === 'rule_conflict') {
+  if (
+    facility.slot_status === 'rule_conflict' ||
+    detail?.slot_status === 'rule_conflict'
+  ) {
     return '적용 기간이 겹치는 규정이 있습니다. 공식 안내를 확인해 주세요.'
   }
 
+  const unavailableStatuses = [
+    'no_slots',
+    'rule_missing',
+    'rule_not_in_effect',
+  ]
+
   if (
-    [
-      'no_slots',
-      'rule_missing',
-      'rule_not_in_effect',
-    ].includes(facility.slot_status)
+    unavailableStatuses.includes(
+      facility.slot_status
+    ) ||
+    unavailableStatuses.includes(
+      detail?.slot_status
+    )
   ) {
     return '선택한 날짜에 적용되는 예약 회차 정보가 없습니다.'
   }
 
   if (detail) {
-    return '선택한 날짜에 확인된 이용시간 규정이 없습니다.'
+    return '선택한 날짜에 확인된 이용시간 규정이 없습니다. 공식 안내를 확인해 주세요.'
   }
 
   return '예약 회차 정보 확인이 필요합니다.'
@@ -136,6 +120,7 @@ function FacilityList({
   facilityDetails = {},
   detailLoading = {},
   detailErrors = {},
+  onRetryDetail,
 }) {
   const alternativeDistricts = Array.isArray(alternatives)
     ? alternatives
@@ -143,28 +128,77 @@ function FacilityList({
       ? alternatives.districts
       : []
 
+  // 휴장 또는 이용시간 규정 충돌 시설 확인
   const hasBlockedSelection = facilities.some(
     (facility) => {
       const id = facility.id ?? facility.facility_id
 
       return (
         selectedIds.includes(id) &&
-        (
-          facility.closure?.is_closed === true ||
-          facilityDetails[id]?.closure?.is_closed === true ||
-          facility.slot_status === 'rule_conflict' ||
-          facilityDetails[id]?.slot_status === 'rule_conflict'
+        isBlockedFacility(
+          facility,
+          facilityDetails[id]
         )
       )
     }
   )
 
+  // 상세정보 조회 중인 시설 확인
   const hasPendingDetails = selectedIds.some(
     (id) => Boolean(detailLoading[id])
   )
 
+  // 상세정보 조회 실패 시설 확인
   const hasDetailErrors = selectedIds.some(
     (id) => Boolean(detailErrors[id])
+  )
+
+  // 상세정보가 아직 없는 시설 확인
+  const hasMissingDetails = selectedIds.some(
+    (id) => !facilityDetails[id]
+  )
+
+  // 이용 가능한 시간 정책이 없는 시설 확인
+  const hasMissingTimeOptions = facilities.some(
+    (facility) => {
+      const id = facility.id ?? facility.facility_id
+
+      if (
+        !selectedIds.includes(id) ||
+        detailLoading[id] ||
+        detailErrors[id] ||
+        !facilityDetails[id]
+      ) {
+        return false
+      }
+
+      const detail = facilityDetails[id]
+
+      const sport =
+        facility.sport ||
+        detail?.sport ||
+        facility.sports?.[0] ||
+        detail?.sports?.[0]
+
+      const timeOptions = getTimeOptions(
+        detail,
+        facility,
+        sport
+      )
+
+      const hasFlexibleOption = timeOptions.some(
+        (option) =>
+          option.selection === 'flexible'
+      )
+
+      const hasFixedSlots =
+        getFixedSlots(timeOptions).length > 0
+
+      return (
+        !hasFlexibleOption &&
+        !hasFixedSlots
+      )
+    }
   )
 
   return (
@@ -242,6 +276,7 @@ function FacilityList({
                 facility.sports?.[0] ||
                 detail?.sports?.[0]
 
+              // 상세정보와 검색 결과의 시간 정책 통합
               const timeOptions = getTimeOptions(
                 detail,
                 facility,
@@ -260,12 +295,25 @@ function FacilityList({
               const selectedTime =
                 facilityTimes[facilityId] || ''
 
-              const [selectedStart = '', selectedEnd = ''] =
-                selectedTime.split('|')
+              const [
+                selectedStart = '',
+                selectedEnd = '',
+              ] = selectedTime.split('|')
+
+              // 백엔드 테스트용 가상 시설
+              const isVirtualFacility =
+                facilityId === 'F001'
+
+              // 개발용 Mock 데이터
+              const isMockData =
+                !isVirtualFacility &&
+                (
+                  facility.isTestData === true ||
+                  detail?.isTestData === true
+                )
 
               const isTestData =
-                facility.isTestData === true ||
-                facilityId === 'F001'
+                isVirtualFacility || isMockData
 
               const bookingUrl =
                 detail?.booking_url ??
@@ -291,8 +339,10 @@ function FacilityList({
                 facility.slot_status === 'rule_conflict' ||
                 detail?.slot_status === 'rule_conflict'
 
-              const blocked =
-                isClosed || hasRuleConflict
+              const blocked = isBlockedFacility(
+                facility,
+                detail
+              )
 
               const operatingHours =
                 detail?.operating_hours ??
@@ -333,7 +383,9 @@ function FacilityList({
 
                   <h3>
                     {detail?.name ||
+                      detail?.facility_name ||
                       facility.name ||
+                      facility.facility_name ||
                       '시설명 확인 필요'}
                   </h3>
 
@@ -343,7 +395,8 @@ function FacilityList({
                       '주소 확인 필요'}
                   </p>
 
-                  {isTestData && (
+                  {/* 백엔드 테스트용 가상 시설 안내 */}
+                  {isVirtualFacility && (
                     <div
                       className="review-box"
                       style={{ marginTop: '12px' }}
@@ -355,6 +408,24 @@ function FacilityList({
                       <p>
                         실제 부산 공공체육시설이 아닙니다.
                         표시된 정보는 기능 검증용입니다.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* 개발용 Mock 데이터 안내 */}
+                  {isMockData && (
+                    <div
+                      className="review-box"
+                      style={{ marginTop: '12px' }}
+                    >
+                      <strong>
+                        개발용 Mock 데이터
+                      </strong>
+
+                      <p>
+                        실제 시설 정보를 바탕으로 구성한
+                        기능 검증용 데이터입니다.
+                        실제 이용시간 및 요금과 다를 수 있습니다.
                       </p>
                     </div>
                   )}
@@ -477,11 +548,36 @@ function FacilityList({
                           시설 이용시간을 불러오는 중입니다.
                         </p>
                       ) : detailError ? (
-                        <p
-                          className="error-message"
-                          role="alert"
-                        >
-                          {detailError}
+                        <>
+                          <p
+                            className="error-message"
+                            role="alert"
+                          >
+                            {detailError}
+                          </p>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onRetryDetail(facilityId)
+                            }
+                            disabled={
+                              isLoading ||
+                              typeof onRetryDetail !==
+                                'function'
+                            }
+                          >
+                            상세정보 다시 불러오기
+                          </button>
+
+                          <small>
+                            시설 선택을 해제하지 않고
+                            상세정보를 다시 불러올 수 있습니다.
+                          </small>
+                        </>
+                      ) : !detail ? (
+                        <p role="status">
+                          시설 상세정보 확인이 필요합니다.
                         </p>
                       ) : flexibleOptions.length > 0 ? (
                         <>
@@ -534,14 +630,20 @@ function FacilityList({
                                 className="facility-detail-info"
                               >
                                 {option.open_time &&
-                                  option.close_time && (
-                                    <p>
-                                      이용 가능 시간:{' '}
-                                      {option.open_time}
-                                      {' ~ '}
-                                      {option.close_time}
-                                    </p>
-                                  )}
+                                option.close_time ? (
+                                  <p>
+                                    이용 가능 시간:{' '}
+                                    {option.open_time}
+                                    {' ~ '}
+                                    {option.close_time}
+                                  </p>
+                                ) : (
+                                  <p>
+                                    운영시간 범위가 확인되지
+                                    않았습니다. 공식 안내를
+                                    확인해 주세요.
+                                  </p>
+                                )}
 
                                 {Array.isArray(
                                   option.allowed_minutes
@@ -660,12 +762,20 @@ function FacilityList({
                           </small>
                         </>
                       ) : (
-                        <p className="error-message">
-                          {getSlotMessage(
-                            facility,
-                            detail
-                          )}
-                        </p>
+                        <>
+                          <p className="error-message">
+                            {getSlotMessage(
+                              facility,
+                              detail
+                            )}
+                          </p>
+
+                          <small>
+                            이용시간 규정을 확인할 수 없어
+                            비교가 제한됩니다.
+                            비교 대상에서 제외해 주세요.
+                          </small>
+                        </>
                       )}
                     </div>
                   )}
@@ -679,10 +789,15 @@ function FacilityList({
                     >
                       공식 예약 사이트 이동 ↗
                     </a>
-                  ) : isTestData ? (
+                  ) : isVirtualFacility ? (
                     <p>
                       테스트용 시설로 공식 예약
                       링크가 없습니다.
+                    </p>
+                  ) : isMockData ? (
+                    <p>
+                      개발용 Mock 모드에서는 공식 예약
+                      링크를 제공하지 않습니다.
                     </p>
                   ) : (
                     <p>
@@ -693,6 +808,21 @@ function FacilityList({
               )
             })}
           </div>
+
+          {hasDetailErrors && (
+            <p className="error-message" role="alert">
+              상세정보 조회에 실패한 시설이 있습니다.
+              해당 시설의 상세정보를 다시 불러오거나
+              비교 대상에서 제외해 주세요.
+            </p>
+          )}
+
+          {hasMissingTimeOptions && (
+            <p className="error-message" role="alert">
+              이용시간 규정이 확인되지 않은 시설이 있습니다.
+              해당 시설을 비교 대상에서 제외해 주세요.
+            </p>
+          )}
 
           {error && (
             <p className="error-message" role="alert">
@@ -709,6 +839,8 @@ function FacilityList({
               selectedIds.length === 0 ||
               hasPendingDetails ||
               hasDetailErrors ||
+              hasMissingDetails ||
+              hasMissingTimeOptions ||
               hasBlockedSelection
             }
           >

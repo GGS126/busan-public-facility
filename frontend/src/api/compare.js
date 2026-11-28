@@ -6,77 +6,58 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 const REQUEST_TIMEOUT = 10000
 const NATURAL_LANGUAGE_TIMEOUT = 45000
 
-function formatFieldErrors(fields) {
-  if (!fields || typeof fields !== 'object') return ''
-
-  if (Array.isArray(fields)) {
+// API 필드 오류 정규화
+function normalizeAPIFields(fields, detail) {
+  if (Array.isArray(fields) && fields.length > 0) {
     return fields
-      .map((item) => {
-        if (!item || typeof item !== 'object') return ''
-
-        const field =
-          typeof item.field === 'string' ? item.field : ''
-
-        const message =
-          typeof item.message === 'string'
-            ? item.message
-            : '입력값을 확인해 주세요.'
-
-        return field ? `${field}: ${message}` : message
-      })
-      .filter(Boolean)
-      .join('\n')
   }
 
-  return Object.entries(fields)
-    .flatMap(([field, errors]) => {
-      const values = Array.isArray(errors) ? errors : [errors]
+  if (
+    fields &&
+    typeof fields === 'object' &&
+    !Array.isArray(fields) &&
+    Object.keys(fields).length > 0
+  ) {
+    return fields
+  }
 
-      return values.map((value) => {
-        const message =
-          typeof value === 'string'
-            ? value
-            : value &&
-                typeof value === 'object' &&
-                typeof value.message === 'string'
-              ? value.message
-              : JSON.stringify(value)
+  if (Array.isArray(detail)) {
+    const validationFields = detail
+      .filter(
+        (item) =>
+          item &&
+          typeof item === 'object'
+      )
+      .map((item) => ({
+        field: Array.isArray(item.loc)
+          ? item.loc
+              .filter((part) => part !== 'body')
+              .join('.')
+          : '',
+        code: item.type || 'validation_error',
+        message:
+          typeof item.msg === 'string'
+            ? item.msg
+            : '입력값을 확인해 주세요.',
+      }))
 
-        return `${field}: ${message}`
-      })
-    })
-    .join('\n')
+    return validationFields.length
+      ? validationFields
+      : null
+  }
+
+  return null
 }
 
-function formatValidationErrors(detail) {
-  if (!Array.isArray(detail)) return ''
-
-  return detail
-    .map((item) => {
-      if (!item || typeof item !== 'object') return ''
-
-      const field = Array.isArray(item.loc)
-        ? item.loc
-            .filter((part) => part !== 'body')
-            .join('.')
-        : ''
-
-      const message =
-        typeof item.msg === 'string'
-          ? item.msg
-          : '입력값을 확인해 주세요.'
-
-      return field ? `${field}: ${message}` : message
-    })
-    .filter(Boolean)
-    .join('\n')
-}
-
+// API 오류 생성
 function createAPIError(response, data) {
   const errorInfo = data?.error
   const errorCode = errorInfo?.code || null
-  const fieldErrors = formatFieldErrors(errorInfo?.fields)
-  const validationErrors = formatValidationErrors(data?.detail)
+
+  const fields = normalizeAPIFields(
+    errorInfo?.fields,
+    data?.detail
+  )
 
   let message
 
@@ -91,11 +72,7 @@ function createAPIError(response, data) {
     errorCode === 'validation_error' &&
     (response.status === 400 || response.status === 422)
   ) {
-    message =
-      typeof errorInfo?.message === 'string' &&
-      errorInfo.message.trim()
-        ? errorInfo.message
-        : '입력한 이용조건을 확인해 주세요.'
+    message = '입력한 이용조건을 확인해 주세요.'
   } else if (
     typeof errorInfo?.message === 'string' &&
     errorInfo.message.trim()
@@ -110,18 +87,12 @@ function createAPIError(response, data) {
     message = `요청을 처리할 수 없습니다. (${response.status})`
   }
 
-  const details = [fieldErrors, validationErrors]
-    .filter(Boolean)
-    .join('\n')
-
-  if (details) {
-    message += `\n${details}`
-  }
-
+  // 필드별 오류를 상단 메시지에 중복 추가하지 않음
   const error = new Error(message)
+
   error.status = response.status
   error.code = errorCode
-  error.fields = errorInfo?.fields || null
+  error.fields = fields
 
   return error
 }
@@ -195,6 +166,77 @@ async function requestAPI(path, options = {}) {
   }
 }
 
+// Mock 시설 이용시간 정책 공통 처리
+function getMockTimeOptions(facility) {
+  // 기존 사상구 고정 시간대 유지
+  if (facility.district === '사상구') {
+    const slots = [
+      '08:00|10:00',
+      '10:00|12:00',
+      '13:00|15:00',
+      '15:00|17:00',
+    ].map((slot) => {
+      const [start_time, end_time] = slot.split('|')
+
+      return {
+        start_time,
+        end_time,
+      }
+    })
+
+    return {
+      selection: 'fixed_slot',
+      slots,
+    }
+  }
+
+  const timeOptions = facility.time_options
+
+  if (
+    Array.isArray(timeOptions) &&
+    timeOptions.length > 0
+  ) {
+    return timeOptions
+  }
+
+  if (
+    timeOptions &&
+    typeof timeOptions === 'object' &&
+    !Array.isArray(timeOptions) &&
+    Object.keys(timeOptions).length > 0
+  ) {
+    return timeOptions
+  }
+
+  // 운영시간 정보가 없는 Mock 시설은 자유시간 방식 사용
+  return {
+    selection: 'flexible',
+    open_time: null,
+    close_time: null,
+  }
+}
+
+// 개발용 Mock 시설 상세정보
+function createMockFacilityDetail(facility, date) {
+  return {
+    ...facility,
+    facility_id:
+      facility.facility_id || facility.id,
+    facility_name:
+      facility.facility_name || facility.name,
+    date,
+    booking_url:
+      facility.booking_url ||
+      facility.bookingUrl ||
+      null,
+    time_options: getMockTimeOptions(facility),
+    sources: Array.isArray(facility.sources)
+      ? facility.sources
+      : [],
+    isTestData: true,
+  }
+}
+
 // 개발용 Mock 비교 결과
 function createMockResult(facilityId) {
   const names = {
@@ -225,6 +267,7 @@ function createMockResult(facilityId) {
         },
       ],
     },
+    cancel_refund: null,
     terms: null,
     checklist: [],
     checklist_review_items: [],
@@ -297,6 +340,28 @@ export async function getFacilityDetail(facilityId, date) {
     )
   }
 
+  // Mock 모드에서는 실제 백엔드에 요청하지 않음
+  if (USE_MOCK_API) {
+    const facility = facilities.find(
+      (item) =>
+        (item.facility_id || item.id) === facilityId
+    )
+
+    if (!facility) {
+      const error = new Error(
+        '요청한 체육시설을 찾을 수 없습니다.'
+      )
+
+      error.status = 404
+      error.code = 'facility_not_found'
+      error.fields = null
+
+      throw error
+    }
+
+    return createMockFacilityDetail(facility, date)
+  }
+
   const path =
     `/api/facilities/${encodeURIComponent(facilityId)}` +
     `?date=${encodeURIComponent(date)}`
@@ -337,7 +402,7 @@ export async function parseNaturalLanguage(sentence) {
   })
 }
 
-// 실제 시설 검색 API
+// 시설 검색 API
 export async function searchFacilities(conditions) {
   if (USE_MOCK_API) {
     const districts = Array.isArray(conditions.districts)
@@ -355,39 +420,30 @@ export async function searchFacilities(conditions) {
           districts.includes(facility.district)
       )
       .map((facility) => {
-        if (facility.district !== '사상구') {
-          return facility
+        const timeOptions = getMockTimeOptions(facility)
+
+        const result = {
+          ...facility,
+          id: facility.facility_id || facility.id,
+          time_options: timeOptions,
+          isTestData: true,
         }
 
-        const slots = [
-          '08:00|10:00',
-          '10:00|12:00',
-          '13:00|15:00',
-          '15:00|17:00',
-        ].map((slot) => {
-          const [start_time, end_time] = slot.split('|')
-
-          return {
-            start_time,
-            end_time,
-          }
-        })
+        if (facility.district !== '사상구') {
+          return result
+        }
 
         const requested =
           conditions.start_time && conditions.end_time
 
-        const matches = slots.some(
+        const matches = timeOptions.slots.some(
           (slot) =>
             slot.start_time === conditions.start_time &&
             slot.end_time === conditions.end_time
         )
 
         return {
-          ...facility,
-          time_options: {
-            selection: 'fixed_slot',
-            slots,
-          },
+          ...result,
           time_check: {
             status: requested
               ? matches

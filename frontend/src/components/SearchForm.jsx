@@ -8,22 +8,10 @@ const timeOptions = Array.from({ length: 48 }, (_, index) => {
 
 // 취소 및 미이용 환불 사유
 const cancellationOptions = [
-  {
-    code: 'none',
-    label: '선택 안 함',
-  },
-  {
-    code: 'user_cancel',
-    label: '사용자 취소',
-  },
-  {
-    code: 'rain_same_day',
-    label: '당일 우천',
-  },
-  {
-    code: 'rain_unused',
-    label: '우천으로 미이용',
-  },
+  { code: 'none', label: '선택 안 함' },
+  { code: 'user_cancel', label: '사용자 취소' },
+  { code: 'rain_same_day', label: '당일 우천' },
+  { code: 'rain_unused', label: '우천으로 미이용' },
   {
     code: 'force_majeure_or_city_event',
     label: '천재지변·부산시 행사',
@@ -94,16 +82,14 @@ function SearchForm({
 
   // 백엔드 필드명과 프론트엔드 필드명 매칭
   function getFieldError(...names) {
-    for (const name of names) {
-      if (
-        typeof fieldErrors[name] === 'string' &&
-        fieldErrors[name]
-      ) {
-        return fieldErrors[name]
-      }
-    }
+    const messages = names
+      .map((name) => fieldErrors[name])
+      .filter(
+        (message) =>
+          typeof message === 'string' && message
+      )
 
-    return ''
+    return [...new Set(messages)].join(' / ')
   }
 
   function fieldErrorMessage(id, ...names) {
@@ -157,6 +143,10 @@ function SearchForm({
     discountType === 'multiple' &&
     selectedDiscounts.length > 1
 
+  const singleDiscount =
+    discountType !== 'none' &&
+    discountType !== 'multiple'
+
   const userCancellation =
     cancellationReason === 'user_cancel'
 
@@ -164,6 +154,40 @@ function SearchForm({
     cancellationReason === 'rain_same_day' ||
     cancellationReason === 'rain_unused' ||
     cancellationReason === 'force_majeure_or_city_event'
+
+  // 감면 유형 및 전체 감면 조건 오류
+  const discountTypeErrors = [
+    'discount_types',
+    'discounts',
+    'discount_type',
+    ...(
+      selectedDiscounts.length === 0
+        ? ['count', 'holder']
+        : []
+    ),
+    ...selectedDiscounts.flatMap((code, index) => [
+      `discounts.${index}.type`,
+      `discounts.${code}.type`,
+    ]),
+  ]
+
+  // 단일 감면 대상 인원 오류
+  const singleCountErrors = [
+    'discounts.0.count',
+    `discounts.${discountType}.count`,
+    'count',
+    'eligibleCount',
+    'eligible_count',
+  ]
+
+  // 단일 감면 대표자 오류
+  const singleHolderErrors = [
+    'discounts.0.holder',
+    `discounts.${discountType}.holder`,
+    'holder',
+    'representativeEligible',
+    'representative_eligible',
+  ]
 
   const cancellationError = getFieldError(
     'cancellation',
@@ -420,49 +444,29 @@ function SearchForm({
         </div>
 
         <div className="field">
-          <label htmlFor="discount">
+          <label htmlFor="discount-type">
             감면 유형
           </label>
 
           <select
-            id="discount"
+            id="discount-type"
             value={discountType}
             disabled={unavailable}
             aria-invalid={Boolean(
-              getFieldError(
-                'discount_types',
-                'discounts',
-                'discount_type'
-              )
+              getFieldError(...discountTypeErrors)
             )}
             aria-describedby={
-              getFieldError(
-                'discount_types',
-                'discounts',
-                'discount_type'
-              )
-                ? 'discount-error'
+              getFieldError(...discountTypeErrors)
+                ? 'discount-type-error'
                 : undefined
             }
-            onChange={(e) => {
-              const value = e.target.value
-
-              setDiscountType(value)
-
-              if (value !== 'multiple') {
-                setEligibleCount(
-                  value === 'none' ? '0' : '1'
-                )
-
-                setRepresentativeEligible(false)
-              }
-
-              clearResult()
-            }}
+            onChange={(e) =>
+              update(setDiscountType, e.target.value)
+            }
           >
-            <option value="none">감면 없음</option>
+            <option value="none">해당 없음</option>
 
-            {selectedDiscounts.length > 1 && (
+            {multipleDiscounts && (
               <option value="multiple">
                 {selectedDiscounts
                   .map(getDiscountLabel)
@@ -483,112 +487,99 @@ function SearchForm({
           </select>
 
           {fieldErrorMessage(
-            'discount',
-            'discount_types',
-            'discounts',
-            'discount_type'
+            'discount-type',
+            ...discountTypeErrors
+          )}
+
+          {multipleDiscounts && (
+            <small>
+              자연어 입력에서 여러 감면 유형이 선택되었습니다.
+              유형별 감면 대상 인원과 대표자 여부를
+              입력해 주세요.
+            </small>
           )}
         </div>
 
-        {discountType !== 'none' &&
-          discountType !== 'multiple' && (
-            <>
-              <div className="field">
-                <label htmlFor="eligible">
-                  감면 대상 인원
-                </label>
+        {/* 단일 감면 조건 입력 */}
+        {singleDiscount && (
+          <>
+            <div className="field">
+              <label htmlFor="eligible-count">
+                감면 대상 인원
+              </label>
 
-                <input
-                  id="eligible"
-                  type="number"
-                  min="1"
-                  step="1"
-                  max={people}
-                  value={eligibleCount}
-                  aria-invalid={Boolean(
-                    getFieldError(
-                      'count',
-                      'eligibleCount',
-                      'eligible_count'
-                    )
-                  )}
-                  aria-describedby={
-                    getFieldError(
-                      'count',
-                      'eligibleCount',
-                      'eligible_count'
-                    )
-                      ? 'eligible-error'
-                      : undefined
-                  }
-                  onChange={(e) =>
-                    update(
-                      setEligibleCount,
-                      e.target.value
-                    )
-                  }
-                />
-
-                {fieldErrorMessage(
-                  'eligible',
-                  'count',
-                  'eligibleCount',
-                  'eligible_count'
+              <input
+                id="eligible-count"
+                type="number"
+                min="1"
+                step="1"
+                max={people}
+                value={eligibleCount}
+                aria-invalid={Boolean(
+                  getFieldError(...singleCountErrors)
                 )}
-              </div>
+                aria-describedby={
+                  getFieldError(...singleCountErrors)
+                    ? 'eligible-count-error'
+                    : undefined
+                }
+                onChange={(e) =>
+                  update(
+                    setEligibleCount,
+                    e.target.value
+                  )
+                }
+              />
 
-              <div className="field">
-                <label htmlFor="representative-eligible">
-                  예약 대표자 감면 대상 여부
-                </label>
+              {fieldErrorMessage(
+                'eligible-count',
+                ...singleCountErrors
+              )}
+            </div>
 
-                <select
-                  id="representative-eligible"
-                  value={
-                    representativeEligible
-                      ? 'yes'
-                      : 'no'
-                  }
-                  aria-invalid={Boolean(
-                    getFieldError(
-                      'holder',
-                      'representativeEligible',
-                      'representative_eligible'
-                    )
-                  )}
-                  aria-describedby={
-                    getFieldError(
-                      'holder',
-                      'representativeEligible',
-                      'representative_eligible'
-                    )
-                      ? 'representative-eligible-error'
-                      : undefined
-                  }
-                  onChange={(e) =>
-                    update(
-                      setRepresentativeEligible,
-                      e.target.value === 'yes'
-                    )
-                  }
-                >
-                  <option value="no">아니요</option>
+            <div className="field">
+              <label htmlFor="representative-eligible">
+                예약 대표자 감면 대상 여부
+              </label>
 
-                  <option value="yes">
-                    예 (대표자를 감면 대상 인원에 포함)
-                  </option>
-                </select>
-
-                {fieldErrorMessage(
-                  'representative-eligible',
-                  'holder',
-                  'representativeEligible',
-                  'representative_eligible'
+              <select
+                id="representative-eligible"
+                value={
+                  representativeEligible
+                    ? 'yes'
+                    : 'no'
+                }
+                aria-invalid={Boolean(
+                  getFieldError(...singleHolderErrors)
                 )}
-              </div>
-            </>
-          )}
+                aria-describedby={
+                  getFieldError(...singleHolderErrors)
+                    ? 'representative-eligible-error'
+                    : undefined
+                }
+                onChange={(e) =>
+                  update(
+                    setRepresentativeEligible,
+                    e.target.value === 'yes'
+                  )
+                }
+              >
+                <option value="no">아니요</option>
 
+                <option value="yes">
+                  예 (대표자를 감면 대상 인원에 포함)
+                </option>
+              </select>
+
+              {fieldErrorMessage(
+                'representative-eligible',
+                ...singleHolderErrors
+              )}
+            </div>
+          </>
+        )}
+
+        {/* 복수 감면 조건 입력 */}
         {multipleDiscounts &&
           selectedDiscounts.map((code, index) => {
             const detail = discountDetails[code] ?? {
@@ -602,13 +593,13 @@ function SearchForm({
             const countErrors = [
               `discounts.${index}.count`,
               `discounts.${code}.count`,
-              'count',
+              ...(index === 0 ? ['count'] : []),
             ]
 
             const holderErrors = [
               `discounts.${index}.holder`,
               `discounts.${code}.holder`,
-              'holder',
+              ...(index === 0 ? ['holder'] : []),
             ]
 
             return (
@@ -690,6 +681,20 @@ function SearchForm({
               </div>
             )
           })}
+
+        {multipleDiscounts && (
+          <div className="field">
+            <small>
+              감면 대상 인원의 합계는 전체 이용 인원을
+              초과할 수 없습니다.
+            </small>
+
+            <small>
+              예약 대표자는 하나의 감면 유형에만
+              포함할 수 있습니다.
+            </small>
+          </div>
+        )}
 
         <div className="field">
           <label htmlFor="optional-lighting-minutes">

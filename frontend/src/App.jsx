@@ -6,6 +6,12 @@ import {
   getFacilityDetail,
 } from './api/compare'
 
+import {
+  toMinutes,
+  isBlockedFacility,
+  isValidFacilityTime,
+} from './data/facilityTimeOptions'
+
 import Header from './components/Header'
 import HeroBanner from './components/HeroBanner'
 import SearchForm from './components/SearchForm'
@@ -14,7 +20,7 @@ import FacilityList from './components/FacilityList'
 import FeeResult from './components/FeeResult'
 import './App.css'
 
-// 자연어 입력 및 지역 유효성 검증에 사용하는 부산 전체 행정구역
+// 부산 전체 행정구역
 const BUSAN_DISTRICTS = [
   '중구',
   '서구',
@@ -126,145 +132,6 @@ function validateFacilityDetail(data, facilityId) {
   return data
 }
 
-// HH:MM 형식을 분 단위로 변환
-function toMinutes(time) {
-  if (
-    typeof time !== 'string' ||
-    !/^\d{2}:\d{2}$/.test(time)
-  ) {
-    return null
-  }
-
-  const [hour, minute] = time.split(':').map(Number)
-
-  if (
-    hour > 24 ||
-    minute > 59 ||
-    (hour === 24 && minute !== 0)
-  ) {
-    return null
-  }
-
-  return hour * 60 + minute
-}
-
-// 검색 API와 상세조회 API의 시간 규정 통합
-function getTimeOptions(detail, facility, sport) {
-  if (Array.isArray(detail?.time_options)) {
-    return detail.time_options.filter(
-      (option) =>
-        !option.sport || option.sport === sport
-    )
-  }
-
-  if (
-    detail?.time_options &&
-    typeof detail.time_options === 'object'
-  ) {
-    return [detail.time_options]
-  }
-
-  if (Array.isArray(facility?.time_options)) {
-    return facility.time_options.filter(
-      (option) =>
-        !option.sport || option.sport === sport
-    )
-  }
-
-  if (
-    facility?.time_options &&
-    typeof facility.time_options === 'object'
-  ) {
-    return [facility.time_options]
-  }
-
-  return []
-}
-
-// 휴장 및 이용시간 규정 충돌 확인
-function isBlockedFacility(facility, detail) {
-  return (
-    facility?.closure?.is_closed === true ||
-    detail?.closure?.is_closed === true ||
-    facility?.slot_status === 'rule_conflict' ||
-    detail?.slot_status === 'rule_conflict'
-  )
-}
-
-// 시설별 이용시간 유효성 검증
-function isValidFacilityTime(
-  detail,
-  facility,
-  sport,
-  start,
-  end
-) {
-  const startMinutes = toMinutes(start)
-  const endMinutes = toMinutes(end)
-
-  if (
-    startMinutes === null ||
-    endMinutes === null ||
-    endMinutes <= startMinutes
-  ) {
-    return false
-  }
-
-  if (isBlockedFacility(facility, detail)) {
-    return false
-  }
-
-  return getTimeOptions(
-    detail,
-    facility,
-    sport
-  ).some((option) => {
-    if (option.selection === 'fixed_slot') {
-      return (
-        Array.isArray(option.slots) &&
-        option.slots.some(
-          (slot) =>
-            slot.start_time === start &&
-            slot.end_time === end
-        )
-      )
-    }
-
-    if (option.selection !== 'flexible') {
-      return false
-    }
-
-    const open = toMinutes(option.open_time)
-    const close = toMinutes(option.close_time)
-    const duration = endMinutes - startMinutes
-
-    if (
-      open === null ||
-      close === null ||
-      startMinutes < open ||
-      endMinutes > close
-    ) {
-      return false
-    }
-
-    if (
-      Number.isInteger(option.max_minutes) &&
-      duration > option.max_minutes
-    ) {
-      return false
-    }
-
-    if (
-      Array.isArray(option.allowed_minutes) &&
-      option.allowed_minutes.length > 0
-    ) {
-      return option.allowed_minutes.includes(duration)
-    }
-
-    return true
-  })
-}
-
 // 백엔드 필드별 오류 메시지 정리
 function normalizeFieldErrors(fields) {
   if (!fields || typeof fields !== 'object') {
@@ -274,27 +141,28 @@ function normalizeFieldErrors(fields) {
   const result = {}
 
   function add(field, message, code) {
-    if (
-      code !== 'invalid_cancellation' &&
-      (typeof field !== 'string' || !field.trim())
-    ) {
-      return
-    }
-
-    const normalized = (field || '')
-      .replace(/\[(\d+)\]/g, '.$1')
+    const normalized =
+      typeof field === 'string'
+        ? field.replace(/\[(\d+)\]/g, '.$1')
+        : ''
 
     const parts = normalized.split('.')
     const discountIndex = parts.indexOf('discounts')
 
-    // 취소 조건 오류는 취소 입력 영역에 표시
-    const key =
+    let key
+
+    if (
       code === 'invalid_cancellation' ||
       parts.includes('cancellation')
-        ? 'cancellation'
-        : discountIndex !== -1
-          ? parts.slice(discountIndex).join('.')
-          : parts[parts.length - 1]
+    ) {
+      key = 'cancellation'
+    } else if (discountIndex !== -1) {
+      key = parts.slice(discountIndex).join('.')
+    } else if (code === 'invalid_discount') {
+      key = 'discounts'
+    } else {
+      key = parts[parts.length - 1] || '_general'
+    }
 
     const text =
       typeof message === 'string'
@@ -313,7 +181,12 @@ function normalizeFieldErrors(fields) {
     fields.forEach((item) => {
       if (item && typeof item === 'object') {
         add(
-          item.field || item.loc?.join('.'),
+          item.field ||
+            (
+              Array.isArray(item.loc)
+                ? item.loc.join('.')
+                : ''
+            ),
           item.message || item.msg,
           item.code || item.type
         )
@@ -335,6 +208,73 @@ function normalizeFieldErrors(fields) {
   }
 
   return result
+}
+
+// 입력란에 연결할 수 없는 오류만 상단 메시지에 추가
+function getAPIErrorMessage(
+  err,
+  normalizedErrors,
+  fallback,
+  discountTypes = []
+) {
+  const visibleFields = new Set([
+    'sport',
+    'district',
+    'districts',
+    'date',
+    'start_time',
+    'startTime',
+    'end_time',
+    'endTime',
+    'headcount',
+    'people',
+    'discount_types',
+    'discounts',
+    'discount_type',
+    'optional_lighting_minutes',
+    'optionalLightingMinutes',
+    'cancellation',
+    'cancel_date',
+    'cancellation.cancel_date',
+    'cancellation.reason',
+  ])
+
+  if (discountTypes.length > 0) {
+    visibleFields.add('count')
+    visibleFields.add('holder')
+  }
+
+  if (discountTypes.length === 1) {
+    visibleFields.add('eligibleCount')
+    visibleFields.add('eligible_count')
+    visibleFields.add('representativeEligible')
+    visibleFields.add('representative_eligible')
+  }
+
+  discountTypes.forEach((code, index) => {
+    visibleFields.add(`discounts.${index}.count`)
+    visibleFields.add(`discounts.${index}.holder`)
+    visibleFields.add(`discounts.${code}.count`)
+    visibleFields.add(`discounts.${code}.holder`)
+  })
+
+  const remainingMessages = [
+    ...new Set(
+      Object.entries(normalizedErrors)
+        .filter(([key]) => !visibleFields.has(key))
+        .map(([, message]) => message)
+        .filter(Boolean)
+    ),
+  ]
+
+  const message = err.message || fallback
+
+  return [
+    ...new Set([
+      message,
+      ...remainingMessages,
+    ]),
+  ].join('\n')
 }
 
 function App() {
@@ -618,6 +558,9 @@ function App() {
       const updated = { ...previous }
 
       delete updated.cancellation
+      delete updated.cancel_date
+      delete updated['cancellation.cancel_date']
+      delete updated['cancellation.reason']
 
       return updated
     })
@@ -627,7 +570,6 @@ function App() {
   function handleCancellationReasonChange(value) {
     setCancellationReason(value)
 
-    // 사용자 취소 이외의 사유는 취소일을 받지 않음
     if (value !== 'user_cancel') {
       setCancelDate('')
     }
@@ -687,7 +629,7 @@ function App() {
       return '이용 날짜를 선택해 주세요.'
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (!isValidDate(date)) {
       return '이용 날짜를 올바르게 입력해 주세요.'
     }
 
@@ -804,7 +746,10 @@ function App() {
       return ''
     }
 
-    // 복수 감면 유형은 각각 입력한 인원을 검증
+    let totalDiscountCount = 0
+    let holderCount = 0
+
+    // 복수 감면 유형별 입력값 검증
     for (const code of discountTypes) {
       const detail = discountDetails[code]
 
@@ -822,6 +767,22 @@ function App() {
       ) {
         return `${label} 감면 대상 인원을 올바르게 입력해 주세요.`
       }
+
+      totalDiscountCount += Number(detail.count)
+
+      if (detail.holder === true) {
+        holderCount += 1
+      }
+    }
+
+    // 감면 대상 인원 합계 검증
+    if (totalDiscountCount > Number(people)) {
+      return '감면 대상 인원의 합계는 전체 이용 인원을 초과할 수 없습니다.'
+    }
+
+    // 예약 대표자는 하나의 감면 유형에만 포함 가능
+    if (holderCount > 1) {
+      return '예약 대표자는 하나의 감면 유형에만 포함할 수 있습니다.'
     }
 
     return ''
@@ -964,17 +925,118 @@ function App() {
         return
       }
 
-      setFieldErrors(
+      const normalizedErrors =
         normalizeFieldErrors(err.fields)
-      )
+
+      setFieldErrors(normalizedErrors)
 
       setError(
-        err.message ||
-          '시설 검색 중 오류가 발생했습니다.'
+        getAPIErrorMessage(
+          err,
+          normalizedErrors,
+          '시설 검색 중 오류가 발생했습니다.',
+          discountTypes
+        )
       )
     } finally {
       if (requestId === searchRequest.current) {
         setSearching(false)
+      }
+    }
+  }
+
+  // 시설 상세정보 조회 공통 처리
+  async function loadFacilityDetail(id, facility) {
+    const requestId = searchRequest.current
+    const detailRequestId = Symbol(id)
+
+    detailRequests.current[id] =
+      detailRequestId
+
+    function isCurrentRequest() {
+      return (
+        requestId === searchRequest.current &&
+        detailRequests.current[id] ===
+          detailRequestId
+      )
+    }
+
+    setDetailLoading((previous) => ({
+      ...previous,
+      [id]: true,
+    }))
+
+    setDetailErrors((previous) => ({
+      ...previous,
+      [id]: '',
+    }))
+
+    // 재조회 시 이전 상세정보 제거
+    setFacilityDetails((previous) => {
+      const updated = { ...previous }
+
+      delete updated[id]
+
+      return updated
+    })
+
+    setFacilityTimes((previous) => {
+      const updated = { ...previous }
+
+      delete updated[id]
+
+      return updated
+    })
+
+    try {
+      const detail = validateFacilityDetail(
+        await getFacilityDetail(id, date),
+        id
+      )
+
+      if (!isCurrentRequest()) {
+        return
+      }
+
+      setFacilityDetails((previous) => ({
+        ...previous,
+        [id]: detail,
+      }))
+
+      // 희망 이용시간이 시설 규정과 일치하면 자동 선택
+      if (
+        startTime &&
+        endTime &&
+        isValidFacilityTime(
+          detail,
+          facility,
+          sport,
+          startTime,
+          endTime
+        )
+      ) {
+        setFacilityTimes((previous) => ({
+          ...previous,
+          [id]: `${startTime}|${endTime}`,
+        }))
+      }
+    } catch (err) {
+      if (!isCurrentRequest()) {
+        return
+      }
+
+      setDetailErrors((previous) => ({
+        ...previous,
+        [id]:
+          err.message ||
+          '시설 상세정보를 불러오지 못했습니다.',
+      }))
+    } finally {
+      if (isCurrentRequest()) {
+        setDetailLoading((previous) => ({
+          ...previous,
+          [id]: false,
+        }))
       }
     }
   }
@@ -1044,86 +1106,53 @@ function App() {
       return
     }
 
-    const requestId = searchRequest.current
-    const detailRequestId = Symbol(id)
+    setSelectedIds((previous) =>
+      previous.includes(id)
+        ? previous
+        : [...previous, id]
+    )
 
-    detailRequests.current[id] =
-      detailRequestId
+    await loadFacilityDetail(id, facility)
+  }
 
-    function isCurrentRequest() {
-      return (
-        requestId === searchRequest.current &&
-        detailRequests.current[id] ===
-          detailRequestId
-      )
+  // 시설 상세정보 조회 재시도
+  async function retryFacilityDetail(id) {
+    if (
+      !selectedIds.includes(id) ||
+      detailLoading[id]
+    ) {
+      return
     }
 
-    setSelectedIds((previous) => [
-      ...previous,
-      id,
-    ])
+    const facility = searchResults.find(
+      (item) => item.id === id
+    )
 
-    setDetailLoading((previous) => ({
-      ...previous,
-      [id]: true,
-    }))
-
-    setDetailErrors((previous) => ({
-      ...previous,
-      [id]: '',
-    }))
-
-    try {
-      const detail = validateFacilityDetail(
-        await getFacilityDetail(id, date),
-        id
+    if (!facility) {
+      setCompareError(
+        '선택한 시설을 찾을 수 없습니다.'
       )
 
-      if (!isCurrentRequest()) {
-        return
-      }
-
-      setFacilityDetails((previous) => ({
-        ...previous,
-        [id]: detail,
-      }))
-
-      // 희망 이용시간이 시설 규정과 일치하면 자동 선택
-      if (
-        startTime &&
-        endTime &&
-        isValidFacilityTime(
-          detail,
-          facility,
-          sport,
-          startTime,
-          endTime
-        )
-      ) {
-        setFacilityTimes((previous) => ({
-          ...previous,
-          [id]: `${startTime}|${endTime}`,
-        }))
-      }
-    } catch (err) {
-      if (!isCurrentRequest()) {
-        return
-      }
-
-      setDetailErrors((previous) => ({
-        ...previous,
-        [id]:
-          err.message ||
-          '시설 상세정보를 불러오지 못했습니다.',
-      }))
-    } finally {
-      if (isCurrentRequest()) {
-        setDetailLoading((previous) => ({
-          ...previous,
-          [id]: false,
-        }))
-      }
+      return
     }
+
+    if (
+      isBlockedFacility(
+        facility,
+        facilityDetails[id]
+      )
+    ) {
+      setCompareError(
+        '휴장 또는 이용시간 규정 충돌로 비교할 수 없는 시설입니다.'
+      )
+
+      return
+    }
+
+    resetComparison()
+
+    // 기존 시설 선택을 유지하면서 상세정보만 재조회
+    await loadFacilityDetail(id, facility)
   }
 
   // 시설별 이용시간 변경
@@ -1293,7 +1322,14 @@ function App() {
       validateDiscountConditions()
 
     if (discountMessage) {
-      setCompareError(discountMessage)
+      setFieldErrors({
+        discounts: discountMessage,
+      })
+
+      setCompareError(
+        '감면 입력 조건을 확인해 주세요.'
+      )
+
       return
     }
 
@@ -1306,7 +1342,9 @@ function App() {
         cancellation: cancellationMessage,
       })
 
-      setCompareError(cancellationMessage)
+      setCompareError(
+        '취소 및 미이용 환불 조건을 확인해 주세요.'
+      )
 
       return
     }
@@ -1499,13 +1537,18 @@ function App() {
         return
       }
 
-      setFieldErrors(
+      const normalizedErrors =
         normalizeFieldErrors(err.fields)
-      )
+
+      setFieldErrors(normalizedErrors)
 
       setCompareError(
-        err.message ||
-          '시설 비교 중 오류가 발생했습니다.'
+        getAPIErrorMessage(
+          err,
+          normalizedErrors,
+          '시설 비교 중 오류가 발생했습니다.',
+          discountTypes
+        )
       )
     } finally {
       if (
@@ -1644,6 +1687,7 @@ function App() {
           facilityDetails={facilityDetails}
           detailLoading={detailLoading}
           detailErrors={detailErrors}
+          onRetryDetail={retryFacilityDetail}
         />
 
         <FeeResult
