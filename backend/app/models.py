@@ -46,6 +46,8 @@ PaymentMethod = Literal["prepay", "onsite"]
 # 금액 항목의 결제 방식. unverified: 공식 자료에서 결제 시점·장소를 확인하지 못함
 ItemPayment = Literal["prepay", "onsite", "unverified"]
 DiscountBasis = Literal["whole_fee", "per_eligible_person", "holder_whole_fee"]
+# 환불 사유. user_cancel만 취소 시점(이용일 며칠 전)으로 환불률이 갈린다.
+RefundReason = Literal["user_cancel", "rain_same_day", "rain_unused", "force_majeure_or_city_event"]
 
 
 def to_minutes(value: str) -> int:
@@ -74,6 +76,26 @@ class DiscountSelection(BaseModel):
     holder: bool = False
 
 
+class Cancellation(BaseModel):
+    """예약을 취소하거나 이용하지 못했을 때의 예상 환불을 묻는 입력.
+
+    사용자 취소는 취소일로 환불률이 정해지므로 취소일이 필요하다. 우천·불가항력은 사유로 환불률이 정해지고,
+    실제로 그 사유가 인정되는지는 시설이 판단하므로 취소일을 받지 않고 금액도 확정하지 않는다.
+    """
+
+    reason: RefundReason = "user_cancel"
+    cancel_date: IsoDate | None = None
+
+    @model_validator(mode="after")
+    def cancel_date_matches_reason(self) -> "Cancellation":
+        """이용일과 비교하는 검증은 Conditions.cancel_date_before_use에 있다."""
+        if self.reason == "user_cancel" and self.cancel_date is None:
+            raise PydanticCustomError("invalid_cancellation", "사용자 취소는 취소일을 입력해야 합니다.")
+        if self.reason != "user_cancel" and self.cancel_date is not None:
+            raise PydanticCustomError("invalid_cancellation", "우천·불가항력 환불은 취소일을 받지 않습니다.")
+        return self
+
+
 class Conditions(BaseModel):
     sport: SportCode
     districts: list[str] = []
@@ -85,6 +107,8 @@ class Conditions(BaseModel):
     discounts: list[DiscountSelection] = []
     # 지정 회차 중 사용자가 조명을 켤 시간. 필수 조명은 이용 시간으로 자동 계산한다.
     optional_lighting_minutes: int = Field(default=0, ge=0)
+    # 있으면 이 조건으로 예약한 뒤 취소했을 때의 예상 환불도 계산한다.
+    cancellation: Cancellation | None = None
     source: Literal["direct", "llm"]
 
     @field_validator("end_time")
@@ -112,6 +136,13 @@ class Conditions(BaseModel):
             raise PydanticCustomError("invalid_discount", "감면 대상 인원이 전체 이용 인원보다 많습니다.")
         return self
 
+    @model_validator(mode="after")
+    def cancel_date_before_use(self) -> "Conditions":
+        cancel_date = self.cancellation.cancel_date if self.cancellation else None
+        if cancel_date is not None and cancel_date > self.date:
+            raise PydanticCustomError("invalid_cancellation", "취소일은 이용일보다 늦을 수 없습니다.")
+        return self
+
     @property
     def discount_selections(self) -> list[tuple[str, int | None, bool | None]]:
         """(유형, 대상 인원, 대표자 여부). discount_types로 받은 감면은 인원과 대표자 여부를 모른다."""
@@ -127,6 +158,14 @@ class RequestConditions(Conditions):
     @classmethod
     def not_in_past(cls, value: CalendarDate) -> CalendarDate:
         validate_not_past(value, datetime.now(KST).date())
+        return value
+
+    @field_validator("cancellation")
+    @classmethod
+    def cancel_not_in_past(cls, value: Cancellation | None) -> Cancellation | None:
+        # 이미 지난 날 취소했다고 가정하면 지금은 받을 수 없는 환불을 안내하게 된다.
+        if value is not None and value.cancel_date is not None and value.cancel_date < datetime.now(KST).date():
+            raise PydanticCustomError("invalid_cancellation", "지난 날짜에 취소한 경우는 계산할 수 없습니다.")
         return value
 
 
@@ -213,6 +252,30 @@ class DiscountRule(EffectivePeriod):
         if self.fixed_amount is not None and self.basis != "whole_fee":
             raise ValueError("fixed_amount는 basis가 whole_fee일 때만 입력할 수 있습니다.")
         return self
+
+
+class RefundRule(EffectivePeriod):
+    """환불 규정 하나. 사용자 취소는 이용일 며칠 전에 취소했는지(0은 당일)의 범위로 환불률이 정해진다.
+
+    days_before_min·max가 None이면 그쪽 범위 제한이 없다. 공식 자료로 확인하지 못한 규정은 계산에 쓰지 않는다.
+    """
+
+    rule_id: str
+    reason: RefundReason
+    days_before_min: int | None = Field(default=None, ge=0)
+    days_before_max: int | None = Field(default=None, ge=0)
+    rate_percent: int | None = Field(default=None, ge=0, le=100)
+    confirmed: bool
+    # False면 그 시점에는 일반 취소를 받지 않는다(예: 당일 취소 불가). 환불액을 확정하지 않는다.
+    cancel_allowed: bool = True
+    # 신청 방법·환급 시기 안내(terms.refund_notes와 같은 문구)
+    note: str
+    source_id: str
+
+    def covers(self, days_before: int) -> bool:
+        return (self.days_before_min is None or days_before >= self.days_before_min) and (
+            self.days_before_max is None or days_before <= self.days_before_max
+        )
 
 
 class Terms(BaseModel):
@@ -353,6 +416,8 @@ class FacilityRules(BaseModel):
     holiday_calendar: HolidayCalendar | None = None
     fee_rules: list[FeeRule] = []
     discount_rules: list[DiscountRule] = []
+    # 비어 있으면 취소 환불을 계산하지 않고 확인 필요로 안내한다.
+    refund_rules: list[RefundRule] = []
     # 비어 있으면 이용시간 제한을 확인하지 않는다.
     time_policies: list[TimePolicy] = []
     terms: Terms = Terms()
@@ -528,8 +593,14 @@ class ReviewItem(BaseModel):
         "duration_not_allowed",
         "outside_hours",
         "facility_closed",
+        # 금액 계산에 필요한 결제액·끝전 처리 등이 확인되지 않음
+        "amount_unverified",
+        # 우천·불가항력처럼 시설이 사유를 확인해야 환불이 정해짐
+        "facility_check_required",
+        # 그 시점에는 일반 취소를 받지 않음(예: 당일 취소 불가)
+        "cancel_not_allowed",
     ]
-    target: Literal["base", "lighting", "discount", "checklist", "time"]
+    target: Literal["base", "lighting", "discount", "checklist", "time", "refund"]
     reason: str
     source_id: str | None
 
@@ -550,6 +621,29 @@ class FeeResult(BaseModel):
     review_items: list[ReviewItem]
 
 
+class CancelRefund(BaseModel):
+    """취소·미이용 시 예상 환불. fee.expected_refund(감면 환급)와는 별개다.
+
+    환불 대상은 온라인으로 먼저 낸 금액(fee.online_prepay)이다. 현장 결제·결제 방식 미확인 금액이나 감면이
+    섞이면 실제로 돌려받는 범위를 확인할 수 없어 금액을 내지 않는다. 우천·불가항력(시설 확인 필요)과 일반 취소를
+    받지 않는 시점도 금액을 내지 않고 환불률과 신청 방법(note)만 안내한다.
+    """
+
+    status: Literal["calculated", "needs_review"]
+    reason: RefundReason
+    # 이용일 며칠 전 취소인지. 사용자 취소일 때만 값이 있다.
+    days_before: int | None
+    rate_percent: int | None
+    refund_amount: int | None
+    # 환불 후에도 내는 금액(온라인 선결제액 − 환불액)
+    cost_after_refund: int | None
+    # 적용한 환불 규정의 신청 방법·환급 시기
+    note: str | None
+    # 적용한 환불 규정의 출처. 규정을 고르지 못했으면 None이고, 안내할 출처는 review_items에 있다.
+    source_id: str | None
+    review_items: list[ReviewItem]
+
+
 class CompareResult(BaseModel):
     facility_id: str
     facility_name: str
@@ -558,6 +652,8 @@ class CompareResult(BaseModel):
     checklist: list[str]
     checklist_review_items: list[ReviewItem]
     sources: list[Source]
+    # conditions.cancellation을 보낸 경우에만 값이 있다.
+    cancel_refund: CancelRefund | None = None
 
 
 class CompareResponse(BaseModel):
