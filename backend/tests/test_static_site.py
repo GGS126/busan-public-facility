@@ -23,11 +23,19 @@ def test_static_root_and_assets_keep_api_routes(tmp_path, monkeypatch):
     def health():
         return {"status": "ok"}
 
+    @app.post("/api/facilities/search")
+    def search():
+        return {"results": []}
+
     mount_frontend(app)
     with TestClient(app) as client:
         assert client.get("/").text == "<html>frontend</html>"
         assert client.get("/assets/app.js").status_code == 200
         assert client.get("/api/health").json() == {"status": "ok"}
+        wrong_method = client.get("/api/facilities/search")
+        assert wrong_method.status_code == 405
+        assert "POST" in wrong_method.headers["allow"]
+        assert client.post("/api/health").status_code == 405
         for path in ("/api/unknown", "/missing.js", "/.env", "/backend/.env", "/database/seed.json"):
             assert client.get(path).status_code == 404
 
