@@ -10,6 +10,8 @@
 
 ## 실행
 
+처음 설치·실행하거나 Windows에서 가상환경 경로가 헷갈리면 [공통 실행 및 검사 안내](../docs/공통%20실행%20및%20검사%20안내.md)를 참고하세요. 저장소 루트의 `.venv`를 사용하는 통일된 절차와 `.env.example`을 제공합니다. 이 문서의 `backend/.venv` 방식과는 Python 실행 경로만 다르므로 한 가지 방식을 선택해 사용합니다.
+
 Python 3.13에서 확인했습니다. 아래 명령은 `backend` 폴더에서 실행합니다.
 
 ```bash
@@ -56,12 +58,19 @@ Gemini 호출은 서버 프로세스마다 최근 60초 동안 15회(재시도 �
 검색 요청은 `{"conditions":{"sport":"tennis","districts":[],"date":"2026-11-30","source":"direct"}}` 형태입니다.
 지역 목록을 비우면 부산 전체를 검색합니다. 시작·종료 시간을 함께 보내면 고정 회차와 대조합니다.
 SQLite가 있으면 자연어 추출도 같은 종목·지역·감면 선택지를 사용합니다.
-실제 시설의 `POST /api/compare`는 SQLite에서 기본요금과 필수 조명료를 조회합니다.
-감면 또는 평일 공휴일 여부에 따라 요금이 달라지는 조건은 공식 안내를 확인할 수 있도록 합계를 비워 둡니다.
-샘플 시설과 샘플 선택지 API(`/api/options`)도 기존과 같이 사용할 수 있습니다.
+실제 시설의 `POST /api/compare`는 SQLite 규정을 공통 규칙 엔진으로 계산합니다. 기본요금·필수/선택 조명·감면과 공휴일을 규정에 따라 처리하며, 필요한 규정이 없거나 충돌하면 합계를 확정하지 않습니다.
+`/api/options`와 `/api/facilities/options`는 같은 서비스 선택지를 반환합니다. 가상 데이터는 `RULE_DATA_SOURCE=sample`로 명시한 경우에만 사용합니다. 시설 검색은 SQLite를 조회하므로 실제 전체 흐름 검증에는 `sqlite` 모드를 사용합니다.
 백엔드 없이 화면을 확인할 때는 프론트 환경변수 `VITE_USE_MOCK_API=true`를 설정하고 직접 입력을 사용합니다.
 
 ## 테스트
+
+CI와 동일한 DB 생성·감사·백엔드 테스트 전체를 실행하려면 저장소 루트에서 다음을 실행합니다. Gemini 키나 별도 서버 실행은 필요하지 않습니다.
+
+```powershell
+./.venv/Scripts/python scripts/check_backend.py
+```
+
+`database/test_*.py`가 있으면 추가 DB 테스트도 함께 검사합니다. 백엔드 테스트만 실행할 때는 이 문서의 `backend` 가상환경 기준으로 아래 명령을 사용합니다.
 
 ```bash
 .venv/Scripts/python -m pytest
