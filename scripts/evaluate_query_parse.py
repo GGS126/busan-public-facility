@@ -37,13 +37,36 @@ def evaluate(case, result):
         matches[field] = wanted == found
     status_match = result.get("status") == expected["status"]
     missing_match = set(result.get("missing_fields", [])) == set(expected["missing_fields"])
+    privacy_match = (expected.get("block_reason") != "personal_information"
+                     or "개인정보를 빼고" in result.get("message", ""))
     return {"id": case["id"], "status": result.get("status"),
             "status_match": status_match, "missing_fields_match": missing_match,
-            "field_matches": matches, "passed": status_match and missing_match and all(matches.values())}
+            "privacy_block_match": privacy_match,
+            "field_matches": matches,
+            "passed": status_match and missing_match and privacy_match and all(matches.values())}
 
 
 def percentile(values, fraction):
     return sorted(values)[max(0, math.ceil(len(values) * fraction) - 1)] if values else None
+
+
+def api_result(response):
+    if response.status_code != 200:
+        return {}
+    try:
+        result = response.json()
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def stop_after_response(case, result, http_status, row):
+    return (
+        http_status != 200 or result.get("status") not in {"ok", "need_more", "llm_failed"}
+        or (result.get("status") == "llm_failed" and not (
+            case["expected"].get("block_reason") == "personal_information" and row["privacy_block_match"]
+        ))
+    )
 
 
 def main():
@@ -70,7 +93,6 @@ def main():
     from app.models import KST
     from app.query_parser import parse_query
 
-    today = datetime.now(KST).date()
     fixtures = json.loads((ROOT / "backend" / "evaluation" / "query_cases.json").read_text(encoding="utf-8"))
     cases = fixtures[:args.limit]
     rows = []
@@ -78,11 +100,15 @@ def main():
         for index, original in enumerate(cases):
             if args.live and index:
                 sleep(args.pause)
+            # Recompute after each pause: a run can cross midnight in Korea.
+            today = datetime.now(KST).date()
             case = materialize(original, today)
             started = perf_counter()
+            http_status = None
             if args.live:
                 response = client.post("/api/query/parse", json={"query": case["query"]})
-                result = response.json() if response.status_code == 200 else {}
+                http_status = response.status_code
+                result = api_result(response)
             else:
                 calls = []
                 def extract(query, day):
@@ -92,6 +118,9 @@ def main():
                     return case["raw"]
                 result = parse_query(case["query"], today=today, extract=extract, catalog=service.available_options)
             row = evaluate(case, result)
+            row["reference_date_kst"] = today.isoformat()
+            if args.live:
+                row["http_status"] = http_status
             if not args.live:
                 row["provider_calls"] = len(calls)
                 if "raw" not in case:
@@ -100,7 +129,7 @@ def main():
             rows.append(row)
             print(f'{row["id"]}: {"PASS" if row["passed"] else "FAIL"} ({row["elapsed_ms"]} ms)')
             # Do not keep issuing requests when credentials/quota/service are unavailable.
-            if args.live and result.get("status") == "llm_failed" and case["expected"]["status"] != "llm_failed":
+            if args.live and stop_after_response(case, result, http_status, row):
                 print("Stopped after an API failure; remaining fixtures were not run.")
                 break
 

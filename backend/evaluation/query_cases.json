@@ -449,6 +449,7 @@
     "id": "phone",
     "query": "내일 테니스 문의 010-0000-0000",
     "expected": {
+      "block_reason": "personal_information",
       "status": "llm_failed",
       "conditions": {},
       "missing_fields": []
@@ -458,6 +459,7 @@
     "id": "email",
     "query": "내일 테니스 test@example.invalid",
     "expected": {
+      "block_reason": "personal_information",
       "status": "llm_failed",
       "conditions": {},
       "missing_fields": []

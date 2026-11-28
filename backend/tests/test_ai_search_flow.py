@@ -1,19 +1,29 @@
 """Extracted conditions must survive real SQLite search/compare; no model calls."""
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
 from test_sqlite_rules import build_database
 
-from app import main
+from app import main, models
 from app.models import KST
 from app.options import build_options
+
+TODAY = datetime(2026, 11, 9, tzinfo=KST)
+USE_DATE = "2026-11-16"  # Non-holiday Monday within the seeded winter rules.
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return TODAY.astimezone(tz) if tz else TODAY.replace(tzinfo=None)
+
+    monkeypatch.setattr(main, "datetime", FixedDateTime)
+    monkeypatch.setattr(models, "datetime", FixedDateTime)
     path = build_database(tmp_path)
     data = main.load_service_data("sqlite", path)
     monkeypatch.setattr(main, "DB_PATH", path)
@@ -26,9 +36,7 @@ def client(tmp_path, monkeypatch):
 
 
 def conditions(**changes):
-    today = datetime.now(KST).date()
-    monday = today + timedelta(days=7 - today.weekday())
-    return {"sport": "tennis", "districts": ["사상구"], "date": monday.isoformat(),
+    return {"sport": "tennis", "districts": ["사상구"], "date": USE_DATE,
             "start_time": "08:00", "end_time": "10:00", "headcount": 4, "discount_types": [], **changes}
 
 

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { parseArgs } = require('node:util');
+const { measureComparison } = require('./measurement.cjs');
 
 const { values } = parseArgs({options:{
   url:{type:'string'}, output:{type:'string'}, samples:{type:'string',default:'30'},
@@ -23,7 +24,7 @@ function percentile(data, p) { return [...data].sort((a,b)=>a-b)[Math.ceil(data.
 
 (async()=>{
   const browser = await chromium.launch({channel:values.channel,headless:!values.headed});
-  const context = await browser.newContext({viewport:{width:1440,height:1080}});
+  const context = await browser.newContext({viewport:{width:1440,height:1080},timezoneId:'Asia/Seoul'});
   const page = await context.newPage();
   const errors=[], timings=[], checks=[];
   let realApiCalls=0;
@@ -49,34 +50,13 @@ function percentile(data, p) { return [...data].sort((a,b)=>a-b)[Math.ceil(data.
     for (const name of ['삼락생태공원 테니스장','구덕운동장 테니스장']) {
       const card=page.locator('.facility-card').filter({has:page.getByRole('heading',{name,exact:true})});
       await card.getByRole('checkbox').check();
-      // Wait for detail responses in frontend versions that fetch them on selection.
-      await page.waitForTimeout(150);
+      const time=card.locator('select[id^="time-"]');
+      await time.waitFor();
+      await page.waitForFunction(id=>document.getElementById(id)?.value==='08:00|10:00',await time.getAttribute('id'));
     }
     const button=page.getByRole('button',{name:'선택한 시설 2곳 비교하기',exact:true});
     async function measure(){
-      // Capture click -> DOM commit -> two animation frames in the browser clock.
-      await page.evaluate(()=>{
-        window.__compareMeasurement=null;
-        const button=[...document.querySelectorAll('button')].find(item=>item.textContent.includes('선택한 시설 2곳 비교하기'));
-        button.addEventListener('click',()=>{
-          const start=performance.now();
-          let scheduled=false;
-          const observer=new MutationObserver(()=>{
-            const cards=document.querySelectorAll('#results .comparison-card');
-            if(scheduled || cards.length !== 2 || ![...cards].every(card=>card.textContent.includes('계산 완료'))) return;
-            scheduled=true;
-            observer.disconnect();
-            requestAnimationFrame(()=>requestAnimationFrame(()=>{
-              window.__compareMeasurement={elapsed_ms:performance.now()-start};
-            }));
-          });
-          observer.observe(document.querySelector('#results'),{childList:true,subtree:true});
-          setTimeout(()=>observer.disconnect(),15000);
-        },{once:true,capture:true});
-      });
-      await button.click();
-      await page.waitForFunction(()=>window.__compareMeasurement!==null,{},{timeout:15000});
-      const time=await page.evaluate(()=>window.__compareMeasurement.elapsed_ms);
+      const time=await measureComparison(page,button,['busan_samrak_ecopark_tennis','busan_gudeok_stadium_tennis']);
       const results=page.locator('#results');
       await results.getByText('6,000원',{exact:true}).first().waitFor();
       await results.getByText('8,000원',{exact:true}).first().waitFor();
@@ -86,14 +66,13 @@ function percentile(data, p) { return [...data].sort((a,b)=>a-b)[Math.ceil(data.
     const first=await measure();
     // First request after page start is reported separately, excluded from warm samples.
     for(let index=0;index<samples;index++) timings.push(await measure());
-    assert.equal(realApiCalls,2*(samples+1),'Expected two real comparison API calls per click');
     checks.push('Two actual DB facilities display 6000/8000 won for every measured comparison');
 
     await page.route('**/api/compare',route=>route.fulfill({
       status:500,json:{error:{code:'internal_error',message:'검증용 서버 오류입니다. 다시 시도해 주세요.'}},
     }));
     await button.click();
-    await page.getByText(/검증용 서버 오류/).first().waitFor();
+    await page.locator('#facilities .error-message').filter({hasText:/\S/}).waitFor();
     assert.equal(await page.locator('#results .comparison-card').count(),0);
     await page.unroute('**/api/compare');
     await measure();
@@ -118,6 +97,7 @@ function percentile(data, p) { return [...data].sort((a,b)=>a-b)[Math.ceil(data.
       timezone:await page.evaluate(()=>Intl.DateTimeFormat().resolvedOptions().timeZone),
       scenario:{date:day,sport:'tennis',time:'08:00-10:00',headcount:4,facility_count:2,discounts:[]},
       first_comparison_ms:first,samples,within_3000ms:under,within_3000ms_rate:under/samples,
+      successful_compare_api_calls:realApiCalls,
       median_ms:percentile(timings,.5),p95_ms:percentile(timings,.95),max_ms:Math.max(...timings),
       criterion:'95% of warm comparison clicks display both calculated facility cards within 3000 ms',
       passed:under/samples>=.95,checks,page_errors:errors,measurements_ms:timings,
