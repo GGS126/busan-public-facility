@@ -6,6 +6,40 @@ const timeOptions = Array.from({ length: 48 }, (_, index) => {
   return `${hour}:${minute}`
 })
 
+// 취소 및 미이용 환불 사유
+const cancellationOptions = [
+  {
+    code: 'none',
+    label: '선택 안 함',
+  },
+  {
+    code: 'user_cancel',
+    label: '사용자 취소',
+  },
+  {
+    code: 'rain_same_day',
+    label: '당일 우천',
+  },
+  {
+    code: 'rain_unused',
+    label: '우천으로 미이용',
+  },
+  {
+    code: 'force_majeure_or_city_event',
+    label: '천재지변·부산시 행사',
+  },
+]
+
+// 오늘 날짜 반환
+function getToday() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
 function withSelectedTime(time) {
   if (!time || time === '24:00' || timeOptions.includes(time)) {
     return timeOptions
@@ -39,6 +73,10 @@ function SearchForm({
   setDiscountDetails,
   optionalLightingMinutes,
   setOptionalLightingMinutes,
+  cancellationReason,
+  setCancellationReason,
+  cancelDate,
+  setCancelDate,
   onSearch,
   loading,
   error,
@@ -118,6 +156,21 @@ function SearchForm({
   const multipleDiscounts =
     discountType === 'multiple' &&
     selectedDiscounts.length > 1
+
+  const userCancellation =
+    cancellationReason === 'user_cancel'
+
+  const requiresFacilityCheck =
+    cancellationReason === 'rain_same_day' ||
+    cancellationReason === 'rain_unused' ||
+    cancellationReason === 'force_majeure_or_city_event'
+
+  const cancellationError = getFieldError(
+    'cancellation',
+    'cancel_date',
+    'cancellation.cancel_date',
+    'cancellation.reason'
+  )
 
   return (
     <section className="search-card" id="search">
@@ -682,6 +735,117 @@ function SearchForm({
             시설별 조명 가능 시간은 다를 수 있습니다.
           </small>
         </div>
+      </div>
+
+      {/* 취소 및 미이용 환불 조건 입력 */}
+      <div className="cancellation-section">
+        <h3>취소·미이용 예상 환불 (선택)</h3>
+
+        <p className="cancellation-description">
+          예약 후 취소하거나 이용하지 못하는 경우의
+          예상 환불 조건을 비교할 수 있습니다.
+        </p>
+
+        <div className="search-fields">
+          <div className="field">
+            <label htmlFor="cancellation-reason">
+              취소 및 미이용 사유
+            </label>
+
+            <select
+              id="cancellation-reason"
+              value={cancellationReason}
+              disabled={unavailable}
+              aria-invalid={Boolean(cancellationError)}
+              aria-describedby={
+                cancellationError
+                  ? 'cancellation-error'
+                  : undefined
+              }
+              onChange={(e) =>
+                setCancellationReason(e.target.value)
+              }
+            >
+              {cancellationOptions.map((item) => (
+                <option
+                  key={item.code}
+                  value={item.code}
+                >
+                  {item.label}
+                </option>
+              ))}
+            </select>
+
+            <small>
+              예상 환불 비교가 필요하지 않으면
+              선택 안 함을 유지하세요.
+            </small>
+          </div>
+
+          {/* 사용자 취소인 경우에만 취소일 표시 */}
+          {userCancellation && (
+            <div className="field">
+              <label htmlFor="cancel-date">
+                예상 취소일
+              </label>
+
+              <input
+                id="cancel-date"
+                type="date"
+                min={getToday()}
+                max={date || undefined}
+                value={cancelDate}
+                disabled={
+                  unavailable ||
+                  !date ||
+                  date < getToday()
+                }
+                required
+                aria-invalid={Boolean(cancellationError)}
+                aria-describedby={
+                  cancellationError
+                    ? 'cancel-date-help cancellation-error'
+                    : 'cancel-date-help'
+                }
+                onChange={(e) =>
+                  setCancelDate(e.target.value)
+                }
+              />
+
+              <small id="cancel-date-help">
+                {!date
+                  ? '이용 날짜를 먼저 선택해 주세요.'
+                  : '오늘부터 이용 날짜까지 선택할 수 있습니다.'}
+              </small>
+            </div>
+          )}
+        </div>
+
+        {/* 우천 및 불가항력은 시설 확인 필요 */}
+        {requiresFacilityCheck && (
+          <div className="cancellation-notice">
+            우천·천재지변·부산시 행사 등에 따른 환불은
+            시설에서 실제 사유를 확인한 후 결정됩니다.
+            환불 규정과 신청 방법을 확인해 주세요.
+          </div>
+        )}
+
+        {cancellationError && (
+          <p
+            id="cancellation-error"
+            className="error-message"
+            role="alert"
+          >
+            {cancellationError}
+          </p>
+        )}
+
+        {cancellationReason !== 'none' && (
+          <small className="cancellation-help">
+            본 기능은 예상 환불 조건을 안내하며,
+            실제 예약 취소 또는 환불 신청을 진행하지 않습니다.
+          </small>
+        )}
       </div>
 
       {error && (

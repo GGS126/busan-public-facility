@@ -44,6 +44,16 @@ function helper(name) {
   return app.slice(start, end);
 }
 
+// App.jsx 취소 사유 상수 추출
+const cancellationReasons = app.match(
+  /const CANCELLATION_REASONS\s*=\s*\[[\s\S]*?\]/
+);
+
+assert.ok(
+  cancellationReasons,
+  'Missing CANCELLATION_REASONS'
+);
+
 // 테스트 환경 구성
 function fixture(settings = {}) {
   const state = {
@@ -52,6 +62,9 @@ function fixture(settings = {}) {
     loading: false,
     scrolls: 0,
     fieldErrors: {},
+    cancellationReason:
+      settings.cancellationReason ?? 'none',
+    cancelDate: settings.cancelDate ?? '',
   };
 
   const pending = [];
@@ -71,7 +84,12 @@ function fixture(settings = {}) {
 
     const sport = 'tennis';
     const districts = [];
-    const date = '2026-12-01';
+
+    // 실행 날짜에 영향을 받지 않는 테스트 기준 날짜
+    const date = settings.date ?? '2026-12-01';
+
+    const getToday = () =>
+      settings.today ?? '2026-11-28';
 
     const people = settings.people ?? '1';
 
@@ -89,6 +107,14 @@ function fixture(settings = {}) {
 
     const optionalLightingMinutes =
       settings.optionalLightingMinutes ?? '0';
+
+    let cancellationReason =
+      settings.cancellationReason ?? 'none';
+
+    let cancelDate =
+      settings.cancelDate ?? '';
+
+    ${cancellationReasons[0]}
 
     const source = 'direct';
 
@@ -171,7 +197,20 @@ function fixture(settings = {}) {
     };
 
     const setFieldErrors = value => {
-      state.fieldErrors = value;
+      state.fieldErrors =
+        typeof value === 'function'
+          ? value(state.fieldErrors)
+          : value;
+    };
+
+    const setCancellationReason = value => {
+      cancellationReason = value;
+      state.cancellationReason = value;
+    };
+
+    const setCancelDate = value => {
+      cancelDate = value;
+      state.cancelDate = value;
     };
 
     const setTimeout = fn => {
@@ -196,6 +235,7 @@ function fixture(settings = {}) {
       });
 
     ${[
+      'isValidDate',
       'toMinutes',
       'getTimeOptions',
       'isBlockedFacility',
@@ -210,6 +250,11 @@ function fixture(settings = {}) {
       'handleTimeChange',
       'buildDiscounts',
       'validateDiscountConditions',
+      'clearCancellationErrors',
+      'handleCancellationReasonChange',
+      'handleCancelDateChange',
+      'validateCancellationConditions',
+      'buildCancellation',
       'handleCompare',
     ].map(handler).join('\n')}
 
@@ -217,6 +262,8 @@ function fixture(settings = {}) {
       clearResult,
       toggleFacility,
       handleTimeChange,
+      handleCancellationReasonChange,
+      handleCancelDateChange,
       handleCompare,
     };
     `
@@ -578,5 +625,352 @@ test(
     );
 
     assert.equal(f.state.loading, false);
+  }
+);
+
+// 14. 취소 조건을 선택하지 않은 경우 필드 생략
+test(
+  'cancellation is omitted when no cancellation reason is selected',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'none',
+      cancelDate: '',
+    });
+
+    const request = f.handleCompare();
+
+    assert.equal(f.pending.length, 1);
+
+    const conditions =
+      f.pending[0].request.conditions;
+
+    assert.equal(
+      Object.hasOwn(conditions, 'cancellation'),
+      false
+    );
+
+    f.pending[0].resolve(response('valid'));
+
+    await request;
+  }
+);
+
+// 15. 사용자 취소 사유 및 취소일 전달
+test(
+  'user cancellation sends reason and cancellation date',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'user_cancel',
+      cancelDate: '2026-11-29',
+    });
+
+    const request = f.handleCompare();
+
+    assert.equal(f.pending.length, 1);
+
+    assert.deepEqual(
+      f.pending[0].request.conditions.cancellation,
+      {
+        reason: 'user_cancel',
+        cancel_date: '2026-11-29',
+      }
+    );
+
+    f.pending[0].resolve(response('valid'));
+
+    await request;
+  }
+);
+
+// 16~18. 우천 및 불가항력 사유는 취소일 없이 전달
+for (const reason of [
+  'rain_same_day',
+  'rain_unused',
+  'force_majeure_or_city_event',
+]) {
+  test(
+    `${reason} sends cancellation reason without a cancellation date`,
+    async () => {
+      const f = fixture({
+        cancellationReason: reason,
+        cancelDate: '',
+      });
+
+      const request = f.handleCompare();
+
+      assert.equal(f.pending.length, 1);
+
+      const cancellation =
+        f.pending[0].request.conditions.cancellation;
+
+      assert.deepEqual(
+        cancellation,
+        { reason }
+      );
+
+      assert.equal(
+        Object.hasOwn(cancellation, 'cancel_date'),
+        false
+      );
+
+      f.pending[0].resolve(response('valid'));
+
+      await request;
+    }
+  );
+}
+
+// 19. 사용자 취소일 미입력 차단
+test(
+  'user cancellation requires a cancellation date',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'user_cancel',
+      cancelDate: '',
+    });
+
+    await f.handleCompare();
+
+    assert.equal(f.pending.length, 0);
+
+    assert.match(
+      f.state.error,
+      /취소일을 입력/
+    );
+
+    assert.match(
+      f.state.fieldErrors.cancellation,
+      /취소일을 입력/
+    );
+
+    assert.deepEqual(f.state.results, []);
+    assert.equal(f.state.loading, false);
+  }
+);
+
+// 20. 과거 취소일 입력 차단
+test(
+  'cancellation date cannot be earlier than today',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'user_cancel',
+      cancelDate: '2026-11-27',
+    });
+
+    await f.handleCompare();
+
+    assert.equal(f.pending.length, 0);
+
+    assert.match(
+      f.state.error,
+      /지난 날짜/
+    );
+
+    assert.match(
+      f.state.fieldErrors.cancellation,
+      /지난 날짜/
+    );
+
+    assert.deepEqual(f.state.results, []);
+    assert.equal(f.state.loading, false);
+  }
+);
+
+// 21. 이용일 이후 취소일 입력 차단
+test(
+  'cancellation date cannot be later than the usage date',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'user_cancel',
+      cancelDate: '2026-12-02',
+    });
+
+    await f.handleCompare();
+
+    assert.equal(f.pending.length, 0);
+
+    assert.match(
+      f.state.error,
+      /취소일은 이용일보다 늦을 수 없습니다/
+    );
+
+    assert.match(
+      f.state.fieldErrors.cancellation,
+      /취소일은 이용일보다 늦을 수 없습니다/
+    );
+
+    assert.deepEqual(f.state.results, []);
+    assert.equal(f.state.loading, false);
+  }
+);
+
+// 22. 취소 사유 변경 시 이전 비교 응답 무효화
+test(
+  'changing cancellation reason invalidates old comparison and clears cancellation date',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'user_cancel',
+      cancelDate: '2026-11-29',
+    });
+
+    const first = f.handleCompare();
+
+    assert.equal(f.pending.length, 1);
+
+    f.handleCancellationReasonChange(
+      'rain_unused'
+    );
+
+    assert.equal(
+      f.state.cancellationReason,
+      'rain_unused'
+    );
+
+    assert.equal(f.state.cancelDate, '');
+    assert.equal(f.state.loading, false);
+
+    f.pending[0].resolve(response('old'));
+
+    await first;
+
+    assert.deepEqual(f.state.results, []);
+    assert.equal(f.state.loading, false);
+    assert.equal(f.timers.length, 0);
+
+    // 변경된 취소 사유로 다시 비교
+    const second = f.handleCompare();
+
+    assert.equal(f.pending.length, 2);
+
+    assert.deepEqual(
+      f.pending[1].request.conditions.cancellation,
+      {
+        reason: 'rain_unused',
+      }
+    );
+
+    f.pending[1].resolve(response('new'));
+
+    await second;
+
+    assert.equal(
+      f.state.results[0].facility_id,
+      'new'
+    );
+  }
+);
+
+// 23. 취소일 변경 시 이전 비교 응답 무효화
+test(
+  'changing cancellation date invalidates old comparison',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'user_cancel',
+      cancelDate: '2026-11-29',
+    });
+
+    const first = f.handleCompare();
+
+    assert.equal(f.pending.length, 1);
+
+    f.handleCancelDateChange(
+      '2026-11-30'
+    );
+
+    assert.equal(
+      f.state.cancelDate,
+      '2026-11-30'
+    );
+
+    assert.equal(f.state.loading, false);
+
+    f.pending[0].resolve(response('old'));
+
+    await first;
+
+    assert.deepEqual(f.state.results, []);
+    assert.equal(f.state.loading, false);
+    assert.equal(f.timers.length, 0);
+
+    // 변경된 취소일로 다시 비교
+    const second = f.handleCompare();
+
+    assert.equal(f.pending.length, 2);
+
+    assert.deepEqual(
+      f.pending[1].request.conditions.cancellation,
+      {
+        reason: 'user_cancel',
+        cancel_date: '2026-11-30',
+      }
+    );
+
+    f.pending[1].resolve(response('new'));
+
+    await second;
+
+    assert.equal(
+      f.state.results[0].facility_id,
+      'new'
+    );
+  }
+);
+
+// 24. 백엔드 취소 조건 오류를 입력 영역에 전달
+test(
+  'invalid cancellation API error is mapped to the cancellation field',
+  async () => {
+    const f = fixture({
+      cancellationReason: 'user_cancel',
+      cancelDate: '2026-11-29',
+    });
+
+    const request = f.handleCompare();
+
+    assert.equal(f.pending.length, 1);
+
+    const error = new Error(
+      '입력한 이용조건을 확인해 주세요.'
+    );
+
+    error.status = 400;
+    error.code = 'validation_error';
+
+    error.fields = [
+      {
+        field: 'conditions.cancellation',
+        code: 'invalid_cancellation',
+        message: '취소 조건을 확인해 주세요.',
+      },
+    ];
+
+    f.pending[0].reject(error);
+
+    await request;
+
+    assert.equal(
+      f.state.fieldErrors.cancellation,
+      '취소 조건을 확인해 주세요.'
+    );
+
+    assert.match(
+      f.state.error,
+      /입력한 이용조건/
+    );
+
+    assert.deepEqual(f.state.results, []);
+    assert.equal(f.state.loading, false);
+
+    // 취소일을 수정하면 취소 관련 오류 초기화
+    f.handleCancelDateChange(
+      '2026-11-30'
+    );
+
+    assert.equal(
+      f.state.fieldErrors.cancellation,
+      undefined
+    );
+
+    assert.equal(f.state.error, '');
   }
 );

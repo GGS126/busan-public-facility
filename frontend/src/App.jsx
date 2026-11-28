@@ -34,6 +34,14 @@ const BUSAN_DISTRICTS = [
   '기장군',
 ]
 
+// 취소 및 미이용 환불 사유
+const CANCELLATION_REASONS = [
+  'user_cancel',
+  'rain_same_day',
+  'rain_unused',
+  'force_majeure_or_city_event',
+]
+
 // 오늘 날짜 반환
 function getToday() {
   const now = new Date()
@@ -42,6 +50,23 @@ function getToday() {
   const day = String(now.getDate()).padStart(2, '0')
 
   return `${year}-${month}-${day}`
+}
+
+// 날짜 형식 및 실제 날짜 유효성 확인
+function isValidDate(value) {
+  if (
+    typeof value !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(value)
+  ) {
+    return false
+  }
+
+  const parsed = new Date(`${value}T00:00:00Z`)
+
+  return (
+    !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === value
+  )
 }
 
 // 이용조건 선택지 응답 검증
@@ -248,22 +273,28 @@ function normalizeFieldErrors(fields) {
 
   const result = {}
 
-  function add(field, message) {
-    if (typeof field !== 'string' || !field.trim()) {
+  function add(field, message, code) {
+    if (
+      code !== 'invalid_cancellation' &&
+      (typeof field !== 'string' || !field.trim())
+    ) {
       return
     }
 
-    const normalized = field
+    const normalized = (field || '')
       .replace(/\[(\d+)\]/g, '.$1')
 
     const parts = normalized.split('.')
     const discountIndex = parts.indexOf('discounts')
 
-    // 감면 유형별 오류 경로 유지
+    // 취소 조건 오류는 취소 입력 영역에 표시
     const key =
-      discountIndex !== -1
-        ? parts.slice(discountIndex).join('.')
-        : parts[parts.length - 1]
+      code === 'invalid_cancellation' ||
+      parts.includes('cancellation')
+        ? 'cancellation'
+        : discountIndex !== -1
+          ? parts.slice(discountIndex).join('.')
+          : parts[parts.length - 1]
 
     const text =
       typeof message === 'string'
@@ -283,7 +314,8 @@ function normalizeFieldErrors(fields) {
       if (item && typeof item === 'object') {
         add(
           item.field || item.loc?.join('.'),
-          item.message || item.msg
+          item.message || item.msg,
+          item.code || item.type
         )
       }
     })
@@ -295,7 +327,8 @@ function normalizeFieldErrors(fields) {
           : [messages]
 
         values.forEach(
-          (message) => add(field, message)
+          (message) =>
+            add(field, message, message?.code)
         )
       }
     )
@@ -343,6 +376,13 @@ function App() {
     optionalLightingMinutes,
     setOptionalLightingMinutes,
   ] = useState('0')
+
+  // 취소 및 미이용 환불 조건
+  const [cancellationReason, setCancellationReason] =
+    useState('none')
+
+  const [cancelDate, setCancelDate] =
+    useState('')
 
   const [source, setSource] = useState('direct')
 
@@ -556,6 +596,57 @@ function App() {
     setDiscountDetails({})
   }
 
+  // 이용일 변경 시 기존 취소일의 유효성 확인
+  function handleDateChange(value) {
+    setDate(value)
+
+    if (
+      cancelDate &&
+      (
+        !value ||
+        cancelDate > value ||
+        cancelDate < getToday()
+      )
+    ) {
+      setCancelDate('')
+    }
+  }
+
+  // 취소 조건 관련 오류만 초기화
+  function clearCancellationErrors() {
+    setFieldErrors((previous) => {
+      const updated = { ...previous }
+
+      delete updated.cancellation
+
+      return updated
+    })
+  }
+
+  // 취소 사유 변경
+  function handleCancellationReasonChange(value) {
+    setCancellationReason(value)
+
+    // 사용자 취소 이외의 사유는 취소일을 받지 않음
+    if (value !== 'user_cancel') {
+      setCancelDate('')
+    }
+
+    clearCancellationErrors()
+
+    // 검색 결과와 선택 시설은 유지
+    resetComparison()
+  }
+
+  // 취소일 변경
+  function handleCancelDateChange(value) {
+    setCancelDate(value)
+    clearCancellationErrors()
+
+    // 검색 결과와 선택 시설은 유지
+    resetComparison()
+  }
+
   // 공통 이용조건 검증
   function validateConditions() {
     if (optionsLoading || optionsError) {
@@ -736,6 +827,61 @@ function App() {
     return ''
   }
 
+  // 취소 및 미이용 환불 조건 검증
+  function validateCancellationConditions() {
+    if (cancellationReason === 'none') {
+      return ''
+    }
+
+    if (
+      !CANCELLATION_REASONS.includes(
+        cancellationReason
+      )
+    ) {
+      return '취소 및 미이용 사유를 올바르게 선택해 주세요.'
+    }
+
+    if (cancellationReason === 'user_cancel') {
+      if (!cancelDate) {
+        return '사용자 취소는 취소일을 입력해야 합니다.'
+      }
+
+      if (!isValidDate(cancelDate)) {
+        return '취소일을 올바르게 입력해 주세요.'
+      }
+
+      if (cancelDate < getToday()) {
+        return '지난 날짜에 취소한 경우는 계산할 수 없습니다.'
+      }
+
+      if (cancelDate > date) {
+        return '취소일은 이용일보다 늦을 수 없습니다.'
+      }
+    } else if (cancelDate) {
+      return '우천·불가항력 환불은 취소일을 받지 않습니다.'
+    }
+
+    return ''
+  }
+
+  // 취소 조건을 API 요청 형식으로 변환
+  function buildCancellation() {
+    if (cancellationReason === 'none') {
+      return null
+    }
+
+    if (cancellationReason === 'user_cancel') {
+      return {
+        reason: cancellationReason,
+        cancel_date: cancelDate,
+      }
+    }
+
+    return {
+      reason: cancellationReason,
+    }
+  }
+
   // 실제 시설 검색 API 호출
   async function handleSearch() {
     const message = validateConditions()
@@ -757,6 +903,7 @@ function App() {
         sport,
         districts,
         date,
+
         ...(startTime && endTime
           ? {
               start_time: startTime,
@@ -1095,6 +1242,10 @@ function App() {
 
     setOptionalLightingMinutes('0')
 
+    // 새로운 자연어 조건 적용 시 이전 취소 조건 초기화
+    setCancellationReason('none')
+    setCancelDate('')
+
     requestAnimationFrame(() => {
       document
         .getElementById('search')
@@ -1146,8 +1297,25 @@ function App() {
       return
     }
 
+    // 취소 및 미이용 환불 조건 검증
+    const cancellationMessage =
+      validateCancellationConditions()
+
+    if (cancellationMessage) {
+      setFieldErrors({
+        cancellation: cancellationMessage,
+      })
+
+      setCompareError(cancellationMessage)
+
+      return
+    }
+
     // 검증된 감면 정보를 API 요청에 사용
     const discounts = buildDiscounts()
+
+    // 검증된 취소 조건을 API 요청에 사용
+    const cancellation = buildCancellation()
 
     const missingTime = selectedIds.some(
       (id) => {
@@ -1268,6 +1436,11 @@ function App() {
 
               optional_lighting_minutes:
                 Number(optionalLightingMinutes),
+
+              // 취소 조건을 선택한 경우에만 전달
+              ...(cancellation
+                ? { cancellation }
+                : {}),
 
               source,
             },
@@ -1395,7 +1568,7 @@ function App() {
           selectedDistricts={districts}
 
           date={date}
-          setDate={setDate}
+          setDate={handleDateChange}
 
           startTime={startTime}
           setStartTime={setStartTime}
@@ -1430,6 +1603,20 @@ function App() {
 
           setOptionalLightingMinutes={
             setOptionalLightingMinutes
+          }
+
+          cancellationReason={
+            cancellationReason
+          }
+
+          setCancellationReason={
+            handleCancellationReasonChange
+          }
+
+          cancelDate={cancelDate}
+
+          setCancelDate={
+            handleCancelDateChange
           }
 
           onSearch={handleSearch}
