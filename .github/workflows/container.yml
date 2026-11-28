@@ -1,0 +1,45 @@
+name: Container
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - render.yaml
+      - backend/**
+      - database/**
+      - frontend/**
+      - scripts/start_service.py
+      - scripts/check_deployment.py
+      - .github/workflows/container.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build image
+        run: docker build -t facility-check .
+      - name: Start without API keys
+        run: docker run --detach --name facility-check -p 127.0.0.1:8000:8000 facility-check
+      - name: Check frontend and API
+        run: python scripts/check_deployment.py http://127.0.0.1:8000
+      - name: Container logs
+        if: always()
+        run: docker logs facility-check || true
+      - name: Stop container
+        if: always()
+        run: docker rm --force facility-check || true

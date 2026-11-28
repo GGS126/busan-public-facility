@@ -23,6 +23,7 @@ from app.models import (
 from app.options import build_options
 from app.query_parser import parse_query
 from app.repository import SQLITE_PATH, load_rule_data, load_sqlite_rule_data
+from app.static_site import mount_frontend
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,12 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     return error_response(500, "internal_error", "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
 
 
+@app.get("/api/health")
+def health() -> dict:
+    # Loading the application already validates the database. Do not call Gemini here.
+    return {"status": "ok", "facility_count": len(facilities)}
+
+
 @app.get("/api/options", response_model=OptionsResponse)
 def options() -> OptionsResponse:
     return available_options
@@ -169,6 +176,12 @@ def search_facilities(request: FacilitySearchRequest):
 @app.post("/api/query/parse", response_model=QueryParseResponse, response_model_exclude_unset=True)
 def parse_natural_language(request: QueryParseRequest) -> dict:
     return parse_with_options(request, available_options)
+
+
+@app.get("/api/facilities/search", include_in_schema=False)
+def reject_search_get():
+    # Reserve "search": otherwise the later GET /facilities/{facility_id} captures it.
+    raise HTTPException(status_code=405, headers={"Allow": "POST"})
 
 
 gemini_slots = BoundedSemaphore(4)
@@ -314,3 +327,8 @@ def facility(
             [{"type": "past_date", "loc": ("query", "date"), "msg": "지난 날짜는 선택할 수 없습니다."}]
         )
     return facility_detail(rules, day or today)
+
+
+# Production only: the start script supplies a built frontend directory.
+# API-only development and tests leave FRONTEND_DIST_PATH unset.
+mount_frontend(app)
